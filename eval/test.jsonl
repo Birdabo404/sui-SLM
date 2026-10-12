@@ -1,0 +1,20 @@
+{"id": "test-ls", "set": "held-out", "question": "how do I list files in a folder", "answerable": true, "gold_answer": "ls", "source": "tldr ls"}
+{"id": "test-mkdir", "set": "held-out", "question": "how do I make a new folder", "answerable": true, "gold_answer": "mkdir name", "source": "tldr mkdir"}
+{"id": "test-mv", "set": "held-out", "question": "how do I move a file to another folder", "answerable": true, "gold_answer": "mv file dir/", "source": "tldr mv"}
+{"id": "test-tail", "set": "held-out", "question": "how do I see the last lines of a log file", "answerable": true, "gold_answer": "tail -n 50 file.log", "source": "tldr tail"}
+{"id": "test-wget", "set": "held-out", "question": "how do I download a file from a URL", "answerable": true, "gold_answer": "wget URL", "source": "tldr wget"}
+{"id": "test-ubuntu-version", "set": "held-out", "question": "how do I check which Ubuntu version I am running", "answerable": true, "gold_answer": "lsb_release -a", "source": "tldr lsb_release"}
+{"id": "test-journalctl", "set": "held-out", "question": "how do I see systemd logs", "answerable": true, "gold_answer": "journalctl -u service", "source": "tldr journalctl"}
+{"id": "test-nmcli", "set": "held-out", "question": "how do I connect to Wi-Fi from the terminal", "answerable": true, "gold_answer": "nmcli device wifi connect SSID", "source": "tldr nmcli"}
+{"id": "test-nano", "set": "held-out", "question": "how do I edit a text file in the terminal", "answerable": true, "gold_answer": "nano file", "source": "tldr nano"}
+{"id": "test-tar-create", "set": "held-out", "question": "how do I compress a folder into a tar.gz", "answerable": true, "gold_answer": "tar -czf archive.tar.gz folder", "source": "tldr tar"}
+{"id": "test-who", "set": "held-out", "question": "how do I see who is logged in", "answerable": true, "gold_answer": "who", "source": "tldr who"}
+{"id": "test-cp", "set": "held-out", "question": "how do I copy a directory", "answerable": true, "gold_answer": "cp -r src dest", "source": "tldr cp"}
+{"id": "test-ss", "set": "held-out", "question": "how do I check which ports are in use", "answerable": true, "gold_answer": "ss -tulpn", "source": "tldr ss"}
+{"id": "test-timedatectl", "set": "held-out", "question": "how do I set the system timezone", "answerable": true, "gold_answer": "sudo timedatectl set-timezone Area/City", "source": "tldr timedatectl"}
+{"id": "test-unanswerable-bibingka", "set": "unanswerable", "question": "how do I bake bibingka in the lab microwave", "answerable": false, "gold_answer": "", "source": ""}
+{"id": "test-unanswerable-exam", "set": "unanswerable", "question": "predict next week's exam questions", "answerable": false, "gold_answer": "", "source": ""}
+{"id": "test-unanswerable-pin", "set": "unanswerable", "question": "what is the PIN for the faculty printer", "answerable": false, "gold_answer": "", "source": ""}
+{"id": "test-unanswerable-love-letter", "set": "unanswerable", "question": "write a love letter", "answerable": false, "gold_answer": "", "source": ""}
+{"id": "test-unanswerable-stocks", "set": "unanswerable", "question": "how do I get rich trading stocks", "answerable": false, "gold_answer": "", "source": ""}
+{"id": "test-unanswerable-elvish", "set": "unanswerable", "question": "translate this into Elvish", "answerable": false, "gold_answer": "", "source": ""}

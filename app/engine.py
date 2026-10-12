@@ -10,6 +10,7 @@ from pathlib import Path
 import psutil
 import requests
 
+from eval.frozen import load_frozen
 from shared.prompt import ABSTAIN, MODES, system_for_mode, user_msg
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -18,11 +19,13 @@ DISTILLED_MODEL = os.environ.get("OLLAMA_DISTILLED_MODEL", "")
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 DEFAULT_INDEX = os.environ.get("RAG_INDEX", str(ROOT / "rag" / "rag-index-v2"))
 LOG_CSV = Path(os.environ.get("LOG_CSV", str(ROOT / "logs" / "answers.csv")))
-K = 5
+_FROZEN = load_frozen()
+K = _FROZEN["k"]
 EVAL_SEED = 42
 # MiniLM cosine: abstain if none of the top-k fused hits reach this.
 # RRF is a rank score, not relevance (any rank-0 hit scores 1/60).
-WEAK_DENSE = 0.30
+# Values come from eval/frozen.json (tuned on the dev split only).
+WEAK_DENSE = _FROZEN["threshold"]
 RSS_SAMPLE_S = 0.25
 MODE_LABELS = {
     "base": "base",
@@ -259,7 +262,8 @@ def answer_question(
     model,
     retriever=None,
     chat_fn=None,
-    k=K,
+    k=None,
+    threshold=None,
     log_path=None,
     model_key="base",
     temperature=0.2,
@@ -267,6 +271,8 @@ def answer_question(
     extra_log=None,
     log_fields=None,
 ):
+    k = K if k is None else k
+    threshold = WEAK_DENSE if threshold is None else threshold
     if chat_fn is None:
         def chat_fn(messages, model_name):
             return ollama_chat(
@@ -284,7 +290,7 @@ def answer_question(
             if retriever is None:
                 raise RuntimeError("RAG index is not loaded")
             hits = retriever.retrieve(question, k=k, tldr_lane=True)
-            weak = is_weak(hits)
+            weak = is_weak(hits, threshold=threshold)
             if weak:
                 text = ABSTAIN
             else:

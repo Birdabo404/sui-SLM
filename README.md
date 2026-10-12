@@ -33,22 +33,24 @@ Pick the model and the mode separately in the sidebar.
 
 That covers the five thesis configs: base, base+CoT, base+RAG, base+RAG+CoT, distilled+RAG+CoT.
 
-RAG uses hybrid MiniLM+BM25 with the tldr lane. If none of the top-k fused chunks has MiniLM cosine of at least 0.30, the app says it does not know. Each answer logs model, mode, latency, app RSS, Ollama RSS, total RSS, and system used memory to `logs/answers.csv`. If `logs/answers.csv` already exists with a different header, it is renamed to `answers.<timestamp>.csv` first.
-
-Eval also prints an abstain-threshold sweep (precision/recall on answerable vs unanswerable questions). Pass `--no-sweep` to skip it.
+RAG uses hybrid MiniLM+BM25 with the tldr lane. If none of the top-k fused chunks has MiniLM cosine of at least the frozen threshold (0.30 in `eval/frozen.json`), the app says it does not know. Each answer logs model, mode, latency, app RSS, Ollama RSS, total RSS, and system used memory to `logs/answers.csv`. If `logs/answers.csv` already exists with a different header, it is renamed to `answers.<timestamp>.csv` first.
 
 The app does not call the internet. The embedding model must already be in the Hugging Face cache (install.sh downloads it).
 
 ## Eval
 
-JSONL questions need `id`, `question`, `answerable`, `gold_answer`, `source`. Temperature is 0 and the seed is 42.
+`--split` is required: `dev` or `test`. JSONL fields are `id`, `question`, `answerable`, `gold_answer`, `source`. Optional `set` labels the row as `tuning`, `unanswerable`, or `held-out`. Temperature is 0 and the seed is 42.
+
+- `eval/dev.jsonl`: the 24 ranking-tuning questions (`set=tuning`) plus unanswerable questions (`set=unanswerable`). Threshold and top-k are swept here only.
+- `eval/test.jsonl`: held-out questions. Do not sweep or retune on this split.
+- `eval/frozen.json`: the frozen MiniLM cosine threshold and top-k. Every eval CSV row records `split`, `threshold`, and `k`.
 
 ```
-python eval/run_eval.py --questions eval/questions.example.jsonl --out logs/eval.csv
-python eval/run_eval.py --questions eval/questions.jsonl --distilled your-student:latest
+python eval/run_eval.py --split dev --out logs/eval-dev.csv
+python eval/run_eval.py --split test --no-sweep --out logs/eval-test.csv --distilled your-student:latest
 ```
 
-One CSV row per question per config, with the answer, cited sources, latency, RAM, and git commit. The distilled config is skipped until `--distilled` or `OLLAMA_DISTILLED_MODEL` is set.
+`--split test` without `--no-sweep` exits with an error. The distilled config is skipped until `--distilled` or `OLLAMA_DISTILLED_MODEL` is set.
 
 ## Folder layout
 

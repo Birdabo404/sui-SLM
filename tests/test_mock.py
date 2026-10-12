@@ -32,7 +32,16 @@ from app.engine import (
     ollama_chat,
     uses_rag,
 )
-from eval.run_eval import EVAL_FIELDS, load_questions, run_eval, sweep_abstain_thresholds
+from eval.frozen import load_frozen
+from eval.run_eval import (
+    EVAL_FIELDS,
+    SWEEP_REFUSED_ON_TEST,
+    as_bool,
+    load_questions,
+    refuse_sweep_on_test,
+    run_eval,
+    sweep_abstain,
+)
 
 
 class PromptTests(unittest.TestCase):
@@ -449,6 +458,7 @@ class EvalTests(unittest.TestCase):
             distilled_model="",
             retriever=FakeRetriever(hits),
             chat_fn=chat,
+            split="dev",
             sweep=False,
         )
         self.assertEqual(skipped, ["distilled+RAG+CoT"])
@@ -462,6 +472,9 @@ class EvalTests(unittest.TestCase):
         self.assertTrue(all(r["model"] == "qwen3.5:2b" for r in rows))
         self.assertTrue(all(r["git_commit"] for r in rows))
         self.assertTrue(all(r["question_id"] in ("q1", "q2") for r in rows))
+        self.assertTrue(all(r["split"] == "dev" for r in rows))
+        self.assertTrue(all(r["threshold"] == "0.30" for r in rows))
+        self.assertTrue(all(r["k"] == "5" for r in rows))
         rag_rows = [r for r in rows if r["mode"] in ("rag", "full")]
         self.assertTrue(all("ls (tldr common)" in r["cited_sources"] for r in rag_rows))
         self.assertTrue(all("app_rss_mb" in r and r["app_rss_mb"] for r in rows))
@@ -477,6 +490,7 @@ class EvalTests(unittest.TestCase):
             distilled_model="student:latest",
             retriever=FakeRetriever(hits),
             chat_fn=lambda messages, model: model,
+            split="dev",
             sweep=False,
         )
         self.assertEqual(skipped, [])
@@ -495,19 +509,146 @@ class EvalTests(unittest.TestCase):
                     return [{"dense": 0.10}]
                 return [{"dense": 0.12}, {"dense": 0.55}]
 
-        rows = sweep_abstain_thresholds(
+        rows = sweep_abstain(
             load_questions(self.questions),
             Retriever(),
+            ks=(5,),
             thresholds=(0.20, 0.30, 0.60),
+            split="dev",
         )
         by_t = {r["threshold"]: r for r in rows}
-        self.assertEqual(by_t[0.30]["abstain_on_answerable"], 0)
-        self.assertEqual(by_t[0.30]["abstain_on_unanswerable"], 1)
-        self.assertEqual(by_t[0.30]["abstain_precision"], "1.000")
-        self.assertEqual(by_t[0.30]["abstain_recall"], "1.000")
-        self.assertEqual(by_t[0.60]["abstain_on_answerable"], 1)
-        self.assertEqual(by_t[0.20]["abstain_on_unanswerable"], 1)
-        self.assertEqual(by_t[0.20]["abstain_on_answerable"], 0)
+        self.assertEqual(by_t["0.30"]["abstain_on_answerable"], 0)
+        self.assertEqual(by_t["0.30"]["abstain_on_unanswerable"], 1)
+        self.assertEqual(by_t["0.30"]["abstain_precision"], "1.000")
+        self.assertEqual(by_t["0.30"]["abstain_recall"], "1.000")
+        self.assertEqual(by_t["0.30"]["split"], "dev")
+        self.assertEqual(by_t["0.30"]["k"], 5)
+        self.assertEqual(by_t["0.60"]["abstain_on_answerable"], 1)
+        self.assertEqual(by_t["0.20"]["abstain_on_unanswerable"], 1)
+        self.assertEqual(by_t["0.20"]["abstain_on_answerable"], 0)
+
+    def test_topk_sweep_uses_max_cosine_in_prefix(self):
+        class Retriever:
+            def retrieve(self, question, k=5, tldr_lane=True):
+                return [{"dense": 0.12}, {"dense": 0.55}][:k]
+
+        rows = sweep_abstain(
+            [{"id": "q", "question": "q", "answerable": True,
+              "gold_answer": "x", "source": "x"}],
+            Retriever(),
+            ks=(1, 2),
+            thresholds=(0.30,),
+            split="dev",
+        )
+        by_k = {r["k"]: r for r in rows}
+        self.assertEqual(by_k[1]["abstain_on_answerable"], 1)
+        self.assertEqual(by_k[2]["abstain_on_answerable"], 0)
+
+    def test_sweep_refused_on_test_split(self):
+        with self.assertRaises(SystemExit) as cm:
+            refuse_sweep_on_test("test", sweep=True)
+        self.assertEqual(str(cm.exception), SWEEP_REFUSED_ON_TEST)
+        self.assertEqual(refuse_sweep_on_test("test", sweep=False), "test")
+        self.assertEqual(refuse_sweep_on_test("dev", sweep=True), "dev")
+        with self.assertRaises(SystemExit) as cm:
+            run_eval(
+                self.questions,
+                self.out,
+                distilled_model="student:latest",
+                retriever=FakeRetriever([{"dense": 0.55}]),
+                chat_fn=lambda messages, model: "x",
+                split="test",
+                sweep=True,
+            )
+        self.assertIn("held out", str(cm.exception))
+        self.assertFalse(self.out.exists())
+
+    def test_cli_refuses_sweep_on_test_split(self):
+        r = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "eval" / "run_eval.py"),
+                "--split", "test",
+                "--questions", str(self.questions),
+                "--out", str(self.out),
+            ],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("held out", (r.stderr + r.stdout))
+        self.assertFalse(self.out.exists())
+
+    def test_eval_records_split_threshold_k_from_frozen_file(self):
+        frozen = self.dir / "frozen.json"
+        frozen.write_text('{"threshold": 0.42, "k": 8}\n', encoding="utf-8")
+        n, skipped, sweep_rows = run_eval(
+            self.questions,
+            self.out,
+            distilled_model="student:latest",
+            retriever=FakeRetriever([{
+                "id": "ls#0", "title": "ls (tldr common)", "text": "ls -l",
+                "source": "tldr", "path": "tldr/common/ls.md", "dense": 0.55,
+            }]),
+            chat_fn=lambda messages, model: "x",
+            split="test",
+            sweep=False,
+            frozen_path=frozen,
+        )
+        self.assertEqual(n, 10)
+        self.assertEqual(skipped, [])
+        self.assertEqual(sweep_rows, [])
+        with open(self.out, newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+        self.assertEqual(list(rows[0].keys()), EVAL_FIELDS)
+        self.assertTrue(all(r["split"] == "test" for r in rows))
+        self.assertTrue(all(r["threshold"] == "0.42" for r in rows))
+        self.assertTrue(all(r["k"] == "8" for r in rows))
+
+    def test_dev_and_test_question_files(self):
+        dev = load_questions(ROOT / "eval" / "dev.jsonl")
+        test = load_questions(ROOT / "eval" / "test.jsonl")
+        tuning = [r for r in dev if r.get("set") == "tuning"]
+        unans = [r for r in dev if r.get("set") == "unanswerable"]
+        self.assertEqual(len(tuning), 24)
+        self.assertGreaterEqual(len(unans), 1)
+        self.assertTrue(all(as_bool(r["answerable"]) for r in tuning))
+        self.assertTrue(all(not as_bool(r["answerable"]) for r in unans))
+        self.assertTrue(all(not as_bool(r["answerable"]) for r in test if r.get("set") == "unanswerable"))
+        overlap = {r["question"] for r in dev} & {r["question"] for r in test}
+        self.assertEqual(overlap, set())
+
+    def test_load_frozen_file(self):
+        frozen = load_frozen()
+        self.assertEqual(frozen["threshold"], 0.30)
+        self.assertEqual(frozen["k"], 5)
+
+    def test_sweep_file_records_split_threshold_k(self):
+        hits = [{
+            "id": "ls#0", "title": "ls (tldr common)", "text": "ls -l",
+            "source": "tldr", "path": "tldr/common/ls.md", "dense": 0.55,
+        }]
+        n, skipped, sweep_rows = run_eval(
+            self.questions,
+            self.out,
+            configs=[("base", "rag")],
+            retriever=FakeRetriever(hits),
+            chat_fn=lambda messages, model: "x",
+            split="dev",
+            sweep=True,
+        )
+        self.assertEqual(n, 2)
+        self.assertEqual(skipped, [])
+        self.assertTrue(sweep_rows)
+        sweep_path = self.out.with_suffix(".sweep.csv")
+        with open(sweep_path, newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+        self.assertEqual(len(rows), len(sweep_rows))
+        self.assertTrue(all(r["split"] == "dev" for r in rows))
+        self.assertTrue(all(r["threshold"] for r in rows))
+        self.assertTrue(all(r["k"] for r in rows))
+        self.assertTrue(any(r["k"] == "5" and r["threshold"] == "0.30" for r in rows))
 
 
 class SnapshotResolveTests(unittest.TestCase):

@@ -2,8 +2,13 @@
 """Run the five thesis configs over a JSONL question file. Temperature 0, fixed seed.
 
 JSONL fields: id, question, answerable, gold_answer, source
-  python eval/run_eval.py --questions eval/questions.example.jsonl --out logs/eval.csv
-  python eval/run_eval.py --questions eval/questions.jsonl --distilled student:latest
+Optional field: set (tuning | unanswerable | held-out)
+
+  python eval/run_eval.py --split dev --out logs/eval-dev.csv
+  python eval/run_eval.py --split test --no-sweep --out logs/eval-test.csv --distilled student:latest
+
+The threshold/top-k sweep is allowed on --split dev only. --split test is held out
+and refuses unless you pass --no-sweep. Frozen threshold and k live in eval/frozen.json.
 """
 import argparse
 import csv
@@ -26,7 +31,6 @@ from app.engine import (
     DISTILLED_MODEL,
     EVAL_SEED,
     THESIS_CONFIGS,
-    WEAK_DENSE,
     answer_question,
     config_id,
     git_commit,
@@ -35,14 +39,23 @@ from app.engine import (
     model_name_for,
     uses_rag,
 )
+from eval.frozen import PATH as FROZEN_PATH
+from eval.frozen import load_frozen
 
 EVAL_FIELDS = [
-    "ts", "git_commit", "config", "model", "mode",
+    "ts", "git_commit", "split", "threshold", "k", "config", "model", "mode",
     "question_id", "question", "answerable", "gold_answer", "gold_source",
     "answer", "cited_sources", "n_chunks", "weak_retrieval",
     "latency_s", "app_rss_mb", "ollama_rss_mb", "total_mb", "system_used_mb",
 ]
 SWEEP_THRESHOLDS = (0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50)
+SWEEP_KS = (3, 5, 8, 10)
+SPLITS = ("dev", "test")
+SWEEP_REFUSED_ON_TEST = (
+    "Threshold/top-k sweep is only allowed on --split dev. "
+    "The test split is held out. Pass --no-sweep to score the test set "
+    "with the frozen threshold and k."
+)
 
 
 def as_bool(v):
@@ -51,47 +64,86 @@ def as_bool(v):
     return str(v).strip().lower() in ("1", "true", "yes")
 
 
-def sweep_abstain_thresholds(questions, retriever, k=5, thresholds=SWEEP_THRESHOLDS):
-    """Abstain precision/recall vs gold answerable labels. Retrieval only, no Ollama."""
+def format_threshold(value):
+    return f"{float(value):.2f}"
+
+
+def questions_path_for_split(split, questions=None):
+    if questions:
+        return str(questions)
+    return str(ROOT / "eval" / f"{split}.jsonl")
+
+
+def refuse_sweep_on_test(split, sweep):
+    split = (split or "").strip().lower()
+    if split not in SPLITS:
+        raise SystemExit(f"--split must be dev or test, not {split!r}")
+    if sweep and split == "test":
+        raise SystemExit(SWEEP_REFUSED_ON_TEST)
+    return split
+
+
+def sweep_abstain(
+    questions,
+    retriever,
+    ks=None,
+    thresholds=None,
+    split="dev",
+    frozen_threshold=None,
+    frozen_k=None,
+):
+    """Abstain precision/recall vs gold labels. Retrieval only, no Ollama.
+
+    Sweeps both MiniLM cosine threshold and top-k. Call only on the dev split.
+    """
+    ks = tuple(SWEEP_KS if ks is None else ks)
+    thresholds = tuple(SWEEP_THRESHOLDS if thresholds is None else thresholds)
+    frozen = load_frozen()
+    frozen_threshold = frozen["threshold"] if frozen_threshold is None else frozen_threshold
+    frozen_k = frozen["k"] if frozen_k is None else frozen_k
+    max_k = max(ks)
     scored = []
     for q in questions:
-        hits = retriever.retrieve(q["question"], k=k, tldr_lane=True)
+        hits = retriever.retrieve(q["question"], k=max_k, tldr_lane=True)
         scored.append((as_bool(q["answerable"]), hits))
     rows = []
     n_ans = sum(1 for a, _ in scored if a)
     n_un = sum(1 for a, _ in scored if not a)
-    for t in thresholds:
-        tp = fp = fn = 0
-        for answerable, hits in scored:
-            abstain = is_weak(hits, threshold=t)
-            if abstain and not answerable:
-                tp += 1
-            elif abstain and answerable:
-                fp += 1
-            elif (not abstain) and (not answerable):
-                fn += 1
-        prec = (tp / (tp + fp)) if (tp + fp) else None
-        rec = (tp / (tp + fn)) if (tp + fn) else None
-        rows.append({
-            "threshold": t,
-            "default": int(t == WEAK_DENSE),
-            "n_answerable": n_ans,
-            "n_unanswerable": n_un,
-            "abstain_on_answerable": fp,
-            "abstain_on_unanswerable": tp,
-            "missed_unanswerable": fn,
-            "abstain_precision": "" if prec is None else f"{prec:.3f}",
-            "abstain_recall": "" if rec is None else f"{rec:.3f}",
-        })
+    for k in ks:
+        for t in thresholds:
+            tp = fp = fn = 0
+            for answerable, hits in scored:
+                abstain = is_weak(hits[:k], threshold=t)
+                if abstain and not answerable:
+                    tp += 1
+                elif abstain and answerable:
+                    fp += 1
+                elif (not abstain) and (not answerable):
+                    fn += 1
+            prec = (tp / (tp + fp)) if (tp + fp) else None
+            rec = (tp / (tp + fn)) if (tp + fn) else None
+            rows.append({
+                "split": split,
+                "k": int(k),
+                "threshold": format_threshold(t),
+                "default": int(t == frozen_threshold and k == frozen_k),
+                "n_answerable": n_ans,
+                "n_unanswerable": n_un,
+                "abstain_on_answerable": fp,
+                "abstain_on_unanswerable": tp,
+                "missed_unanswerable": fn,
+                "abstain_precision": "" if prec is None else f"{prec:.3f}",
+                "abstain_recall": "" if rec is None else f"{rec:.3f}",
+            })
     return rows
 
 
 def print_sweep(rows):
-    print("threshold  default  abstain_prec  abstain_rec  abstain_ans  abstain_unans")
+    print("split  k  threshold  default  abstain_prec  abstain_rec  abstain_ans  abstain_unans")
     for r in rows:
         mark = "*" if r["default"] else " "
         print(
-            f"{r['threshold']:.2f}{mark:^8}"
+            f"{r['split']:<5} {r['k']:<2} {r['threshold']:>9}{mark:^8}"
             f"{r['abstain_precision']:>12}  {r['abstain_recall']:>11}  "
             f"{r['abstain_on_answerable']:>4}/{r['n_answerable']:<4}  "
             f"{r['abstain_on_unanswerable']:>4}/{r['n_unanswerable']}"
@@ -131,15 +183,24 @@ def run_eval(
     chat_fn=None,
     seed=EVAL_SEED,
     temperature=0,
-    k=5,
+    k=None,
+    threshold=None,
+    split=None,
     sweep=True,
+    frozen_path=None,
 ):
+    split = refuse_sweep_on_test(split, sweep)
+    frozen = load_frozen(frozen_path)
+    threshold = frozen["threshold"] if threshold is None else threshold
+    k = frozen["k"] if k is None else k
     base_model = BASE_MODEL if base_model is None else base_model
     distilled_model = DISTILLED_MODEL if distilled_model is None else distilled_model
     index_dir = DEFAULT_INDEX if index_dir is None else index_dir
     configs = list(THESIS_CONFIGS if configs is None else configs)
     questions = load_questions(questions_path)
     commit = git_commit()
+    threshold_s = format_threshold(threshold)
+    k_i = int(k)
 
     need_rag = any(uses_rag(mode) for _, mode in configs)
     if need_rag and retriever is None:
@@ -160,6 +221,9 @@ def run_eval(
         for q in questions:
             extra = {
                 "git_commit": commit,
+                "split": split,
+                "threshold": threshold_s,
+                "k": k_i,
                 "question_id": q["id"],
                 "answerable": q["answerable"],
                 "gold_answer": q["gold_answer"],
@@ -171,7 +235,8 @@ def run_eval(
                 model,
                 retriever=rag,
                 chat_fn=chat_fn,
-                k=k,
+                k=k_i,
+                threshold=threshold,
                 log_path=out_path,
                 model_key=model_key,
                 temperature=temperature,
@@ -181,10 +246,19 @@ def run_eval(
             )
             n += 1
             print(f"{cid}\t{q['id']}\t{n}")
-    print(f"wrote {n} rows -> {out_path}  git {commit or '?'}")
+    print(
+        f"wrote {n} rows -> {out_path}  git {commit or '?'}  "
+        f"split={split} threshold={threshold_s} k={k_i}"
+    )
     sweep_rows = []
     if sweep and retriever is not None:
-        sweep_rows = sweep_abstain_thresholds(questions, retriever, k=k)
+        sweep_rows = sweep_abstain(
+            questions,
+            retriever,
+            split=split,
+            frozen_threshold=threshold,
+            frozen_k=k_i,
+        )
         print_sweep(sweep_rows)
         sweep_path = Path(out_path).with_suffix(".sweep.csv")
         sweep_path.parent.mkdir(parents=True, exist_ok=True)
@@ -193,26 +267,52 @@ def run_eval(
             if sweep_rows:
                 w.writeheader()
                 w.writerows(sweep_rows)
-        print(f"wrote threshold sweep -> {sweep_path}")
+        print(f"wrote threshold/top-k sweep -> {sweep_path}")
     return n, skipped, sweep_rows
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--questions", required=True)
-    ap.add_argument("--out", default=str(ROOT / "logs" / "eval.csv"))
+    ap.add_argument(
+        "--split",
+        choices=SPLITS,
+        required=True,
+        help="dev = 24 tuning questions plus unanswerable (sweep allowed); "
+             "test = held-out set (sweep refused)",
+    )
+    ap.add_argument(
+        "--questions",
+        default="",
+        help="JSONL path (default: eval/<split>.jsonl)",
+    )
+    ap.add_argument("--out", default="")
     ap.add_argument("--index", default=DEFAULT_INDEX)
     ap.add_argument("--base-model", default=BASE_MODEL)
     ap.add_argument("--distilled", default=DISTILLED_MODEL, help="Ollama name of the distilled model")
     ap.add_argument("--seed", type=int, default=EVAL_SEED)
     ap.add_argument("--temperature", type=float, default=0)
-    ap.add_argument("-k", type=int, default=5)
+    ap.add_argument("-k", type=int, default=None, help="override frozen k (recorded on every row)")
+    ap.add_argument(
+        "--threshold",
+        type=float,
+        default=None,
+        help="override frozen MiniLM cosine threshold (recorded on every row)",
+    )
+    ap.add_argument(
+        "--frozen",
+        default=str(FROZEN_PATH),
+        help="JSON file with frozen threshold and k",
+    )
     ap.add_argument(
         "--configs",
         default="",
         help="comma-separated config ids (default: all five thesis configs)",
     )
-    ap.add_argument("--no-sweep", action="store_true", help="skip the abstain threshold sweep")
+    ap.add_argument(
+        "--no-sweep",
+        action="store_true",
+        help="skip the abstain threshold/top-k sweep (required for --split test)",
+    )
     a = ap.parse_args()
     configs = THESIS_CONFIGS
     if a.configs.strip():
@@ -229,9 +329,10 @@ def main():
             if cid not in by_id:
                 raise SystemExit(f"unknown config {cid}; known: {', '.join(by_id)}")
             configs.append(by_id[cid])
+    out = a.out.strip() or str(ROOT / "logs" / f"eval-{a.split}.csv")
     run_eval(
-        a.questions,
-        a.out,
+        questions_path_for_split(a.split, a.questions.strip() or None),
+        out,
         configs=configs,
         base_model=a.base_model,
         distilled_model=a.distilled,
@@ -239,7 +340,10 @@ def main():
         seed=a.seed,
         temperature=a.temperature,
         k=a.k,
+        threshold=a.threshold,
+        split=a.split,
         sweep=not a.no_sweep,
+        frozen_path=a.frozen,
     )
 
 
