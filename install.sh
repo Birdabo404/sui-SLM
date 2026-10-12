@@ -42,10 +42,10 @@ cat <<'EOF'
 
 Setup is done.
 
-Fetch the corpus (needs the network, once). After fetch_corpus.sh, set SNAP to the snapshot it printed:
+Fetch the corpus (needs the network, once). The man-page and GNOME scripts use the newest snapshot-* folder:
   bash corpus/fetch_corpus.sh
-  SNAP=corpus/snapshot-YYYY-MM-DD bash corpus/fetch_command_manpages.sh
-  SNAP=corpus/snapshot-YYYY-MM-DD bash corpus/fetch_gnome_user_docs.sh
+  bash corpus/fetch_command_manpages.sh
+  bash corpus/fetch_gnome_user_docs.sh
 
 Build the index (CPU, several minutes on the T14). Default sources already skip Arch Wiki and include Ubuntu Server docs:
   . .venv/bin/activate

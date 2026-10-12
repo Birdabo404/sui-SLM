@@ -8,7 +8,9 @@
 set -euo pipefail
 command -v dpkg-deb >/dev/null || { echo "Missing dpkg-deb (sudo apt install dpkg)"; exit 1; }
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SUITE="${SUITE:-resolute}"; SNAP="${SNAP:-$SCRIPT_DIR/snapshot-2026-10-11}"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/resolve_snap.sh"
+SUITE="${SUITE:-resolute}"
 OUT="$SNAP/gnome-user-docs"; DL="$SNAP/downloads"; LIC="$SNAP/licenses"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 curl -fsSL --retry 3 "http://archive.ubuntu.com/ubuntu/dists/$SUITE/main/binary-amd64/Packages.xz" \

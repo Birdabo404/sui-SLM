@@ -1,0 +1,2 @@
+{"id": "tar-extract", "question": "how do I extract a tar.gz file", "answerable": true, "gold_answer": "tar -xzf archive.tar.gz", "source": "tldr tar"}
+{"id": "unanswerable", "question": "how do I time travel from the lab PC", "answerable": false, "gold_answer": "", "source": ""}

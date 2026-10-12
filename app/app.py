@@ -16,12 +16,15 @@ import requests
 import streamlit as st
 
 from app.engine import (
+    BASE_MODEL,
     DEFAULT_INDEX,
-    DEFAULT_MODEL,
+    DISTILLED_MODEL,
     MODE_LABELS,
     OLLAMA_HOST,
     answer_question,
+    config_id,
     index_ok,
+    model_name_for,
     uses_rag,
 )
 
@@ -41,14 +44,21 @@ def main():
 
     with st.sidebar:
         st.header("Settings")
-        model = st.text_input(
-            "Ollama model",
-            value=DEFAULT_MODEL,
-            help="Default is qwen3.5:2b. Point this at a distilled GGUF once it is registered with Ollama.",
+        model_key = st.radio("Model", ["base", "distilled"], index=0)
+        base_model = st.text_input("Base model", value=BASE_MODEL)
+        distilled_model = st.text_input(
+            "Distilled model",
+            value=DISTILLED_MODEL,
+            help="Ollama model name for the distilled GGUF. Leave empty until it is registered.",
         )
-        mode_label = st.radio("Ablation mode", list(MODE_LABELS.values()), index=3)
+        mode_label = st.radio("Mode", list(MODE_LABELS.values()), index=3)
         mode = next(k for k, v in MODE_LABELS.items() if v == mode_label)
         index_dir = st.text_input("RAG index", value=DEFAULT_INDEX)
+        st.caption(f"Config: {config_id(model_key, mode)}")
+
+    model = model_name_for(model_key, base_model=base_model, distilled_model=distilled_model)
+    if model_key == "distilled" and not model:
+        st.warning("Set the distilled model name (an Ollama model) before using that config.")
 
     retriever = None
     if uses_rag(mode):
@@ -78,17 +88,25 @@ def main():
         st.markdown(question)
 
     with st.chat_message("assistant"):
-        if uses_rag(mode) and retriever is None:
+        if model_key == "distilled" and not model:
+            text = "The distilled model name is empty."
+            hits, weak, stats = [], False, ""
+        elif uses_rag(mode) and retriever is None:
             text = "The RAG index is missing, so I cannot answer in this mode."
             hits, weak, stats = [], False, ""
         else:
             try:
-                result = answer_question(question, mode, model, retriever=retriever)
+                result = answer_question(
+                    question, mode, model, retriever=retriever, model_key=model_key
+                )
                 text = result["text"]
                 hits = result["hits"]
                 weak = result["weak"]
                 stats = (
-                    f"{result['latency_s']:.2f} s, peak RSS {result['rss_mb']:.0f} MB"
+                    f"{result['latency_s']:.2f} s, "
+                    f"app {result['app_rss_mb']:.0f} MB, "
+                    f"ollama {result['ollama_rss_mb']:.0f} MB, "
+                    f"total {result['total_mb']:.0f} MB"
                     + (" (weak retrieval, abstained)" if weak else "")
                 )
             except requests.RequestException as e:

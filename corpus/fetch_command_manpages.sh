@@ -6,12 +6,13 @@
 # Pulls the exact Ubuntu packages for the lab release, keeps only man1/man5/man8 + copyright.
 # Additive: writes command-manpages/ and MANIFEST-command-manpages.csv; touches nothing else.
 # Run from anywhere:  bash corpus/fetch_command_manpages.sh
-# SNAP defaults to corpus/snapshot-2026-10-11 next to this script; set SNAP= after a fresh fetch.
+# SNAP defaults to the newest corpus/snapshot-* folder; set SNAP= to override.
 set -euo pipefail
 command -v dpkg-deb >/dev/null || { echo "Missing dpkg-deb (sudo apt install dpkg)"; exit 1; }
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/resolve_snap.sh"
 SUITE="${SUITE:-resolute}"     # Ubuntu 26.04, same release as ubuntu-docs 26.04.1
-SNAP="${SNAP:-$SCRIPT_DIR/snapshot-2026-10-11}"
 PKGS="rust-coreutils gnu-coreutils sudo-rs sudo grep findutils tar gzip sed gawk mawk util-linux mount bsdutils bsdextrautils procps psmisc openssh-client openssh-server apt dpkg iproute2 iputils-ping net-tools bash passwd adduser systemd less nano git-man curl wget rsync zip unzip man-db file diffutils ufw network-manager cron hostname e2fsprogs"
 OUT="$SNAP/command-manpages"; DL="$SNAP/downloads/command-debs"; LIC="$SNAP/licenses/command-manpages"
 mkdir -p "$OUT" "$DL" "$LIC"

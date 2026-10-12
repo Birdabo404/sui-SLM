@@ -16,6 +16,8 @@ That creates `.venv`, installs Python packages, checks for Ollama, and pulls `qw
 
 Ollama is not installed by the script. Install it first from https://ollama.com/download/linux if `ollama` is missing.
 
+Fetch scripts: after `bash corpus/fetch_corpus.sh`, the man-page and GNOME scripts pick the newest `corpus/snapshot-*` folder. Set `SNAP=` to override.
+
 ## Run
 
 ```
@@ -24,11 +26,27 @@ ollama serve
 streamlit run app/app.py
 ```
 
-Default model is `qwen3.5:2b` at `http://127.0.0.1:11434`. Change the name in the sidebar (or set `OLLAMA_MODEL`) when you swap in a distilled GGUF registered with Ollama.
+Pick the model and the mode separately in the sidebar.
 
-Sidebar ablation modes: base, CoT only, RAG only, full. Full uses hybrid MiniLM+BM25 retrieval with the tldr lane. Weak hits return "I don't know". Each answer logs latency and peak RSS to `logs/answers.csv`.
+- Model: `base` (`qwen3.5:2b`) or `distilled` (Ollama name, empty until you register the GGUF).
+- Mode: base, CoT, RAG, RAG+CoT.
+
+That covers the five thesis configs: base, base+CoT, base+RAG, base+RAG+CoT, distilled+RAG+CoT.
+
+RAG uses hybrid MiniLM+BM25 with the tldr lane. Weak hits return "I don't know". Each answer logs model, mode, latency, app RSS, Ollama RSS, total RSS, and system used memory to `logs/answers.csv`.
 
 The app does not call the internet. The embedding model must already be in the Hugging Face cache (install.sh downloads it).
+
+## Eval
+
+JSONL questions need `id`, `question`, `answerable`, `gold_answer`, `source`. Temperature is 0 and the seed is 42.
+
+```
+python eval/run_eval.py --questions eval/questions.example.jsonl --out logs/eval.csv
+python eval/run_eval.py --questions eval/questions.jsonl --distilled your-student:latest
+```
+
+One CSV row per question per config, with the answer, cited sources, latency, RAM, and git commit. The distilled config is skipped until `--distilled` or `OLLAMA_DISTILLED_MODEL` is set.
 
 ## Folder layout
 
@@ -37,6 +55,7 @@ app/          Streamlit chat UI
 corpus/       Fetch scripts for the doc snapshot
 rag/          Index builder, hybrid query, spot checks
 kd/           Teacher Q&A kit for distillation
+eval/         Ablation eval runner
 shared/       System prompt used by the app and kd/build_sft.py
 ```
 
