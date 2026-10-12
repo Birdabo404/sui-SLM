@@ -10,7 +10,7 @@ from pathlib import Path
 import psutil
 import requests
 
-from eval.frozen import load_frozen
+from shared.frozen import format_threshold, load_frozen
 from shared.prompt import ABSTAIN, MODES, system_for_mode, user_msg
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -24,7 +24,9 @@ K = _FROZEN["k"]
 EVAL_SEED = 42
 # MiniLM cosine: abstain if none of the top-k fused hits reach this.
 # RRF is a rank score, not relevance (any rank-0 hit scores 1/60).
-# Values come from eval/frozen.json (tuned on the dev split only).
+# 0.30 and k=5 in shared/frozen.json are provisional defaults, not a
+# tuned result. Replace them after --split dev on the real index and
+# commit the sweep CSV.
 WEAK_DENSE = _FROZEN["threshold"]
 RSS_SAMPLE_S = 0.25
 MODE_LABELS = {
@@ -51,7 +53,7 @@ THESIS_CONFIGS = (
 CSV_FIELDS = [
     "ts", "git_commit", "config", "model", "mode", "latency_s",
     "app_rss_mb", "ollama_rss_mb", "total_mb", "system_used_mb",
-    "n_chunks", "weak_retrieval", "question",
+    "n_chunks", "weak_retrieval", "threshold", "k", "question",
 ]
 
 
@@ -313,6 +315,8 @@ def answer_question(
         "system_used_mb": f"{ram['system_used_mb']:.1f}",
         "n_chunks": len(hits),
         "weak_retrieval": int(weak) if uses_rag(mode) else "",
+        "threshold": format_threshold(threshold),
+        "k": int(k),
         "question": question.replace("\n", " "),
         "cited_sources": format_cited_sources(hits),
         "answer": text,

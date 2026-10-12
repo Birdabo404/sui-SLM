@@ -33,7 +33,7 @@ Pick the model and the mode separately in the sidebar.
 
 That covers the five thesis configs: base, base+CoT, base+RAG, base+RAG+CoT, distilled+RAG+CoT.
 
-RAG uses hybrid MiniLM+BM25 with the tldr lane. If none of the top-k fused chunks has MiniLM cosine of at least the frozen threshold (0.30 in `eval/frozen.json`), the app says it does not know. Each answer logs model, mode, latency, app RSS, Ollama RSS, total RSS, and system used memory to `logs/answers.csv`. If `logs/answers.csv` already exists with a different header, it is renamed to `answers.<timestamp>.csv` first.
+RAG uses hybrid MiniLM+BM25 with the tldr lane. If none of the top-k fused chunks has MiniLM cosine of at least the threshold in `shared/frozen.json`, the app says it does not know. 0.30 and k=5 there are provisional defaults, not a tuned result. After `--split dev` on the real index, replace those values and commit the sweep CSV. Each answer logs model, mode, latency, app RSS, Ollama RSS, total RSS, system used memory, threshold, and k to `logs/answers.csv`. If `logs/answers.csv` already exists with a different header, it is renamed to `answers.<timestamp>.csv` first.
 
 The app does not call the internet. The embedding model must already be in the Hugging Face cache (install.sh downloads it).
 
@@ -42,15 +42,15 @@ The app does not call the internet. The embedding model must already be in the H
 `--split` is required: `dev` or `test`. JSONL fields are `id`, `question`, `answerable`, `gold_answer`, `source`. Optional `set` labels the row as `tuning`, `unanswerable`, or `held-out`. Temperature is 0 and the seed is 42.
 
 - `eval/dev.jsonl`: the 24 ranking-tuning questions (`set=tuning`) plus unanswerable questions (`set=unanswerable`). Threshold and top-k are swept here only.
-- `eval/test.jsonl`: held-out questions. Do not sweep or retune on this split.
-- `eval/frozen.json`: the frozen MiniLM cosine threshold and top-k. Every eval CSV row records `split`, `threshold`, and `k`.
+- `eval/test.jsonl`: placeholder example of the JSONL format, not the thesis test set. The real set is 150-200 held-out questions written by the student. Do not report results from this placeholder.
+- `shared/frozen.json`: MiniLM cosine threshold and top-k. Provisional defaults (0.30 and 5) until replaced after `--split dev` on the real index. Every eval CSV row records `split`, `threshold`, and `k`.
 
 ```
 python eval/run_eval.py --split dev --out logs/eval-dev.csv
-python eval/run_eval.py --split test --no-sweep --out logs/eval-test.csv --distilled your-student:latest
+python eval/run_eval.py --split test --no-sweep --questions eval/your-heldout.jsonl --out logs/eval-test.csv --distilled your-student:latest
 ```
 
-`--split test` without `--no-sweep` exits with an error. The distilled config is skipped until `--distilled` or `OLLAMA_DISTILLED_MODEL` is set.
+`--split test` without `--no-sweep` exits with an error. `--split test` also rejects `--threshold`, `-k`, and `--frozen`. The distilled config is skipped until `--distilled` or `OLLAMA_DISTILLED_MODEL` is set.
 
 ## Folder layout
 
@@ -60,7 +60,7 @@ corpus/       Fetch scripts for the doc snapshot
 rag/          Index builder, hybrid query, spot checks
 kd/           Teacher Q&A kit for distillation
 eval/         Ablation eval runner
-shared/       System prompt used by the app and kd/build_sft.py
+shared/       System prompt and provisional threshold/k (app + kd/build_sft.py)
 ```
 
 ## Corpus licenses

@@ -1,12 +1,17 @@
-"""Frozen retrieval settings used by eval and the chat app.
+"""Provisional retrieval settings used by eval and the chat app.
 
-Tune threshold and k on --split dev only, then write the chosen values here.
-The test split must use this file as-is.
+threshold 0.30 and k=5 are starting defaults, not a tuned result.
+Run --split dev on the real index, pick values from the sweep CSV,
+write them here, and commit that CSV. Do not retune on the test split.
 """
 import json
 from pathlib import Path
 
 PATH = Path(__file__).resolve().parent / "frozen.json"
+
+
+def format_threshold(value):
+    return f"{float(value):.2f}"
 
 
 def load_frozen(path=None):

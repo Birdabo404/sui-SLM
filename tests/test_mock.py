@@ -32,13 +32,15 @@ from app.engine import (
     ollama_chat,
     uses_rag,
 )
-from eval.frozen import load_frozen
+from shared.frozen import load_frozen
 from eval.run_eval import (
     EVAL_FIELDS,
+    OVERRIDE_REFUSED_ON_TEST,
     SWEEP_REFUSED_ON_TEST,
     as_bool,
     load_questions,
     refuse_sweep_on_test,
+    refuse_test_overrides,
     run_eval,
     sweep_abstain,
 )
@@ -373,6 +375,8 @@ class MockRunTests(unittest.TestCase):
         self.assertGreaterEqual(float(rows[0]["total_mb"]), float(rows[0]["app_rss_mb"]))
         self.assertGreater(float(rows[0]["system_used_mb"]), 0)
         self.assertTrue(rows[0]["git_commit"])
+        self.assertEqual(rows[0]["threshold"], "0.30")
+        self.assertEqual(rows[0]["k"], "5")
 
     def test_csv_rotates_on_header_mismatch(self):
         with open(self.log, "w", encoding="utf-8") as f:
@@ -563,6 +567,61 @@ class EvalTests(unittest.TestCase):
         self.assertIn("held out", str(cm.exception))
         self.assertFalse(self.out.exists())
 
+    def test_test_split_refuses_threshold_k_frozen_overrides(self):
+        hits = FakeRetriever([{
+            "id": "ls#0", "title": "ls (tldr common)", "text": "ls -l",
+            "source": "tldr", "path": "tldr/common/ls.md", "dense": 0.55,
+        }])
+        frozen = self.dir / "frozen.json"
+        frozen.write_text('{"threshold": 0.42, "k": 8}\n', encoding="utf-8")
+        cases = [
+            {"k": 8},
+            {"threshold": 0.42},
+            {"frozen_path": frozen},
+        ]
+        for kwargs in cases:
+            with self.subTest(**kwargs):
+                with self.assertRaises(SystemExit) as cm:
+                    run_eval(
+                        self.questions,
+                        self.out,
+                        distilled_model="student:latest",
+                        retriever=hits,
+                        chat_fn=lambda messages, model: "x",
+                        split="test",
+                        sweep=False,
+                        **kwargs,
+                    )
+                self.assertEqual(str(cm.exception), OVERRIDE_REFUSED_ON_TEST)
+        self.assertFalse(self.out.exists())
+        extras = [
+            ["-k", "8"],
+            ["--threshold", "0.42"],
+            ["--frozen", str(frozen)],
+        ]
+        for extra in extras:
+            with self.subTest(cli=extra):
+                r = subprocess.run(
+                    [
+                        sys.executable,
+                        str(ROOT / "eval" / "run_eval.py"),
+                        "--split", "test",
+                        "--no-sweep",
+                        "--questions", str(self.questions),
+                        "--out", str(self.out),
+                        *extra,
+                    ],
+                    cwd=str(ROOT),
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertNotEqual(r.returncode, 0)
+                self.assertIn("cannot be overridden", (r.stderr + r.stdout))
+        refuse_test_overrides("dev", k=8, threshold=0.42, frozen_path=frozen)
+        with self.assertRaises(SystemExit) as cm:
+            refuse_test_overrides("test", k=8)
+        self.assertEqual(str(cm.exception), OVERRIDE_REFUSED_ON_TEST)
+
     def test_cli_refuses_sweep_on_test_split(self):
         r = subprocess.run(
             [
@@ -592,7 +651,7 @@ class EvalTests(unittest.TestCase):
                 "source": "tldr", "path": "tldr/common/ls.md", "dense": 0.55,
             }]),
             chat_fn=lambda messages, model: "x",
-            split="test",
+            split="dev",
             sweep=False,
             frozen_path=frozen,
         )
@@ -602,7 +661,7 @@ class EvalTests(unittest.TestCase):
         with open(self.out, newline="", encoding="utf-8") as f:
             rows = list(csv.DictReader(f))
         self.assertEqual(list(rows[0].keys()), EVAL_FIELDS)
-        self.assertTrue(all(r["split"] == "test" for r in rows))
+        self.assertTrue(all(r["split"] == "dev" for r in rows))
         self.assertTrue(all(r["threshold"] == "0.42" for r in rows))
         self.assertTrue(all(r["k"] == "8" for r in rows))
 
@@ -618,6 +677,10 @@ class EvalTests(unittest.TestCase):
         self.assertTrue(all(not as_bool(r["answerable"]) for r in test if r.get("set") == "unanswerable"))
         overlap = {r["question"] for r in dev} & {r["question"] for r in test}
         self.assertEqual(overlap, set())
+        first = (ROOT / "eval" / "test.jsonl").read_text(encoding="utf-8").splitlines()[0]
+        self.assertTrue(first.startswith("#"))
+        self.assertIn("NOT the thesis test set", first)
+        self.assertTrue(all(r.get("placeholder") is True for r in test))
 
     def test_load_frozen_file(self):
         frozen = load_frozen()

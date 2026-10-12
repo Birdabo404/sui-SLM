@@ -5,10 +5,12 @@ JSONL fields: id, question, answerable, gold_answer, source
 Optional field: set (tuning | unanswerable | held-out)
 
   python eval/run_eval.py --split dev --out logs/eval-dev.csv
-  python eval/run_eval.py --split test --no-sweep --out logs/eval-test.csv --distilled student:latest
+  python eval/run_eval.py --split test --no-sweep --questions eval/your-heldout.jsonl --out logs/eval-test.csv --distilled student:latest
 
 The threshold/top-k sweep is allowed on --split dev only. --split test is held out
-and refuses unless you pass --no-sweep. Frozen threshold and k live in eval/frozen.json.
+and refuses unless you pass --no-sweep. --split test also rejects --threshold, -k,
+and --frozen overrides. Threshold and k live in shared/frozen.json (provisional
+defaults until replaced after a real --split dev sweep).
 """
 import argparse
 import csv
@@ -39,8 +41,8 @@ from app.engine import (
     model_name_for,
     uses_rag,
 )
-from eval.frozen import PATH as FROZEN_PATH
-from eval.frozen import load_frozen
+from shared.frozen import PATH as FROZEN_PATH
+from shared.frozen import format_threshold, load_frozen
 
 EVAL_FIELDS = [
     "ts", "git_commit", "split", "threshold", "k", "config", "model", "mode",
@@ -54,7 +56,12 @@ SPLITS = ("dev", "test")
 SWEEP_REFUSED_ON_TEST = (
     "Threshold/top-k sweep is only allowed on --split dev. "
     "The test split is held out. Pass --no-sweep to score the test set "
-    "with the frozen threshold and k."
+    "with the committed threshold and k from shared/frozen.json."
+)
+OVERRIDE_REFUSED_ON_TEST = (
+    "On --split test, --threshold, -k, and --frozen cannot be overridden. "
+    "Use the committed values in shared/frozen.json. Tune on --split dev, "
+    "then write the chosen values into that file and commit the sweep CSV."
 )
 
 
@@ -62,10 +69,6 @@ def as_bool(v):
     if isinstance(v, bool):
         return v
     return str(v).strip().lower() in ("1", "true", "yes")
-
-
-def format_threshold(value):
-    return f"{float(value):.2f}"
 
 
 def questions_path_for_split(split, questions=None):
@@ -81,6 +84,13 @@ def refuse_sweep_on_test(split, sweep):
     if sweep and split == "test":
         raise SystemExit(SWEEP_REFUSED_ON_TEST)
     return split
+
+
+def refuse_test_overrides(split, k=None, threshold=None, frozen_path=None):
+    if (split or "").strip().lower() != "test":
+        return
+    if k is not None or threshold is not None or frozen_path is not None:
+        raise SystemExit(OVERRIDE_REFUSED_ON_TEST)
 
 
 def sweep_abstain(
@@ -155,7 +165,7 @@ def load_questions(path):
     with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            if not line:
+            if not line or line.startswith("#"):
                 continue
             r = json.loads(line)
             for key in ("id", "question", "answerable", "gold_answer", "source"):
@@ -189,6 +199,7 @@ def run_eval(
     sweep=True,
     frozen_path=None,
 ):
+    refuse_test_overrides(split, k=k, threshold=threshold, frozen_path=frozen_path)
     split = refuse_sweep_on_test(split, sweep)
     frozen = load_frozen(frozen_path)
     threshold = frozen["threshold"] if threshold is None else threshold
@@ -278,7 +289,7 @@ def main():
         choices=SPLITS,
         required=True,
         help="dev = 24 tuning questions plus unanswerable (sweep allowed); "
-             "test = held-out set (sweep refused)",
+             "test = held-out set (sweep and threshold/k/--frozen overrides refused)",
     )
     ap.add_argument(
         "--questions",
@@ -291,17 +302,17 @@ def main():
     ap.add_argument("--distilled", default=DISTILLED_MODEL, help="Ollama name of the distilled model")
     ap.add_argument("--seed", type=int, default=EVAL_SEED)
     ap.add_argument("--temperature", type=float, default=0)
-    ap.add_argument("-k", type=int, default=None, help="override frozen k (recorded on every row)")
+    ap.add_argument("-k", type=int, default=None, help="override k; refused on --split test")
     ap.add_argument(
         "--threshold",
         type=float,
         default=None,
-        help="override frozen MiniLM cosine threshold (recorded on every row)",
+        help="override MiniLM cosine threshold; refused on --split test",
     )
     ap.add_argument(
         "--frozen",
-        default=str(FROZEN_PATH),
-        help="JSON file with frozen threshold and k",
+        default=None,
+        help=f"JSON file with threshold and k (default: {FROZEN_PATH}); refused on --split test",
     )
     ap.add_argument(
         "--configs",

@@ -1,5 +1,0 @@
-{
-  "threshold": 0.30,
-  "k": 5,
-  "notes": "Frozen after the dev-split threshold/top-k sweep. Do not retune these on the test split."
-}
