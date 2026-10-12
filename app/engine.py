@@ -14,16 +14,16 @@ from shared.prompt import ABSTAIN, MODES, system_for_mode, user_msg
 
 ROOT = Path(__file__).resolve().parent.parent
 BASE_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.5:2b")
-DEFAULT_MODEL = BASE_MODEL
 DISTILLED_MODEL = os.environ.get("OLLAMA_DISTILLED_MODEL", "")
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 DEFAULT_INDEX = os.environ.get("RAG_INDEX", str(ROOT / "rag" / "rag-index-v2"))
 LOG_CSV = Path(os.environ.get("LOG_CSV", str(ROOT / "logs" / "answers.csv")))
 K = 5
 EVAL_SEED = 42
-# MiniLM cosine of the top fused hit. RRF is a rank score, not relevance
-# (any rank-0 hit scores 1/60).
+# MiniLM cosine: abstain if none of the top-k fused hits reach this.
+# RRF is a rank score, not relevance (any rank-0 hit scores 1/60).
 WEAK_DENSE = 0.30
+RSS_SAMPLE_S = 0.25
 MODE_LABELS = {
     "base": "base",
     "cot": "CoT",
@@ -56,13 +56,14 @@ def uses_rag(mode):
     return mode in ("rag", "full")
 
 
-def is_weak(hits):
+def is_weak(hits, threshold=None):
+    threshold = WEAK_DENSE if threshold is None else threshold
     if not hits:
         return True
-    sim = hits[0].get("dense")
-    if sim is None:
+    sims = [float(h["dense"]) for h in hits if h.get("dense") is not None]
+    if len(sims) == 0:
         return True
-    return float(sim) < WEAK_DENSE
+    return max(sims) < threshold
 
 
 def index_ok(path):
@@ -105,8 +106,12 @@ def git_commit(repo=None):
 
 
 def is_ollama_process(name, cmdline):
-    blob = f"{name or ''} {' '.join(cmdline or [])}".lower()
-    return "ollama" in blob
+    """True for the ollama binary and its runner processes, not a random cmdline substring."""
+    args = list(cmdline or [])
+    exe = Path(args[0]).name.lower() if args else (name or "").lower()
+    if exe in ("ollama", "ollama.exe"):
+        return True
+    return exe.startswith("ollama_")
 
 
 def ollama_rss_bytes():
@@ -198,7 +203,7 @@ class RamSampler:
         self._t.start()
 
     def _run(self):
-        while not self._stop.wait(0.05):
+        while not self._stop.wait(RSS_SAMPLE_S):
             self._sample()
 
     def stop(self):
@@ -214,11 +219,33 @@ class RamSampler:
         }
 
 
+def csv_header(path):
+    path = Path(path)
+    if not path.exists() or path.stat().st_size == 0:
+        return None
+    with open(path, newline="", encoding="utf-8") as f:
+        try:
+            return next(csv.reader(f))
+        except StopIteration:
+            return None
+
+
+def rotate_if_header_mismatch(path, fields):
+    dest = Path(path)
+    existing = csv_header(dest)
+    if existing is None or existing == list(fields):
+        return dest, existing is None
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    rotated = dest.with_name(f"{dest.stem}.{stamp}{dest.suffix}")
+    dest.replace(rotated)
+    return dest, True
+
+
 def log_answer(row, path=None, fields=None):
     dest = Path(path) if path else LOG_CSV
     dest.parent.mkdir(parents=True, exist_ok=True)
     fields = list(fields) if fields else list(CSV_FIELDS)
-    new = not dest.exists()
+    dest, new = rotate_if_header_mismatch(dest, fields)
     with open(dest, "a", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         if new:

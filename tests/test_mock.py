@@ -27,11 +27,12 @@ from app.engine import (
     git_commit,
     is_ollama_process,
     is_weak,
+    log_answer,
     model_name_for,
     ollama_chat,
     uses_rag,
 )
-from eval.run_eval import EVAL_FIELDS, load_questions, run_eval
+from eval.run_eval import EVAL_FIELDS, load_questions, run_eval, sweep_abstain_thresholds
 
 
 class PromptTests(unittest.TestCase):
@@ -109,6 +110,54 @@ class HybridRankingTests(unittest.TestCase):
         self.assertAlmostEqual(sim["a"], 0.9)
         self.assertAlmostEqual(sim["c"], 1.0)
 
+    def test_dense_scores_accepts_numpy_arrays(self):
+        import numpy as np
+
+        class Col:
+            def get(self, ids, include):
+                return {
+                    "ids": np.array(ids),
+                    "embeddings": np.array([[0.0, 1.0]], dtype=np.float32),
+                }
+
+        query_result = {
+            "ids": np.array([["a"]]),
+            "distances": np.array([[0.25]], dtype=np.float32),
+        }
+        sim = dense_scores(Col(), np.array([[1.0, 0.0]]), ["a", "c"], query_result)
+        self.assertAlmostEqual(sim["a"], 0.75, places=5)
+        self.assertAlmostEqual(sim["c"], 0.0, places=5)
+
+    def test_dense_scores_against_chromadb_0_6(self):
+        try:
+            import chromadb
+            from chromadb.config import Settings
+        except ImportError:
+            self.skipTest("chromadb not installed")
+        ver = getattr(chromadb, "__version__", "")
+        if not ver.startswith("0.6"):
+            self.skipTest(f"chromadb {ver} is not 0.6.x")
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        client = chromadb.PersistentClient(
+            path=tmp.name,
+            settings=Settings(anonymized_telemetry=False),
+        )
+        col = client.create_collection("linux_lab", metadata={"hnsw:space": "cosine"})
+        col.add(
+            ids=["a", "c"],
+            embeddings=[[1.0, 0.0], [0.0, 1.0]],
+            documents=["aa", "cc"],
+            metadatas=[{"k": 1}, {"k": 2}],
+        )
+        qemb = [[1.0, 0.0]]
+        r = col.query(query_embeddings=qemb, n_results=1)
+        embs = col.get(ids=["c"], include=["embeddings"]).get("embeddings")
+        self.assertIsNotNone(embs)
+        sim = dense_scores(col, qemb, ["a", "c"], r)
+        self.assertGreater(sim["a"], 0.99)
+        self.assertAlmostEqual(sim["c"], 0.0, places=5)
+
     def test_rrf_matches_original_formula(self):
         lanes = [["a", "b", "c"], ["b", "a"], ["a"]]
         fused = rrf_fuse(lanes)
@@ -119,22 +168,35 @@ class HybridRankingTests(unittest.TestCase):
         self.assertEqual(ranked[0], "a")
 
     def test_weak_threshold(self):
-        # RRF 1/60 is a rank-0 hit in one lane, not a relevance score.
         self.assertTrue(is_weak([]))
         self.assertTrue(is_weak([{"rrf": 1 / 60}]))
         self.assertTrue(is_weak([{"dense": 0.10, "rrf": 1 / 60}]))
         self.assertTrue(is_weak([{"dense": WEAK_DENSE - 0.01, "rrf": 0.05}]))
         self.assertFalse(is_weak([{"dense": WEAK_DENSE, "rrf": 1 / 60}]))
         self.assertFalse(is_weak([{"dense": 0.55, "rrf": 1 / 60}]))
+        # BM25 can rank an exact-token hit first with a low cosine; a later hit may still be strong.
+        self.assertFalse(is_weak([
+            {"dense": 0.12, "rrf": 1 / 60},
+            {"dense": 0.55, "rrf": 1 / 61},
+        ]))
+        self.assertTrue(is_weak([
+            {"dense": 0.12, "rrf": 1 / 60},
+            {"dense": 0.20, "rrf": 1 / 61},
+        ]))
 
 
 class OllamaRamTests(unittest.TestCase):
     def test_is_ollama_process(self):
         self.assertTrue(is_ollama_process("ollama", ["/usr/bin/ollama", "serve"]))
         self.assertTrue(is_ollama_process("ollama", ["/usr/bin/ollama", "runner", "--model", "qwen"]))
-        self.assertTrue(is_ollama_process("ollama_llama_server", ["/tmp/ollama/runners/cpu"]))
+        self.assertTrue(is_ollama_process(
+            "ollama_llama_server",
+            ["/tmp/ollama/runners/cpu/ollama_llama_server"],
+        ))
         self.assertFalse(is_ollama_process("python3", ["streamlit", "run", "app/app.py"]))
         self.assertFalse(is_ollama_process("bash", ["install.sh"]))
+        self.assertFalse(is_ollama_process("python3", ["python3", "/tmp/ollama/notes.py"]))
+        self.assertFalse(is_ollama_process("grep", ["grep", "-n", "ollama"]))
 
     def test_ollama_rss_sums_matching_processes(self):
         class Proc:
@@ -148,6 +210,7 @@ class OllamaRamTests(unittest.TestCase):
         procs = [
             Proc("ollama", ["/usr/bin/ollama", "serve"], 80 * 1024 * 1024),
             Proc("ollama", ["/usr/bin/ollama", "runner"], 1200 * 1024 * 1024),
+            Proc("python3", ["python3", "/tmp/ollama/app.py"], 400 * 1024 * 1024),
             Proc("python3", ["streamlit", "run", "app/app.py"], 400 * 1024 * 1024),
         ]
         with patch("app.engine.psutil.process_iter", return_value=procs):
@@ -302,6 +365,28 @@ class MockRunTests(unittest.TestCase):
         self.assertGreater(float(rows[0]["system_used_mb"]), 0)
         self.assertTrue(rows[0]["git_commit"])
 
+    def test_csv_rotates_on_header_mismatch(self):
+        with open(self.log, "w", encoding="utf-8") as f:
+            f.write("old,columns\n1,2\n")
+        log_answer({"question": "q", "mode": "base", "model": "qwen3.5:2b"}, path=self.log)
+        self.assertTrue(self.log.exists())
+        with open(self.log, newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+        self.assertEqual(list(rows[0].keys()), CSV_FIELDS)
+        self.assertEqual(rows[0]["question"], "q")
+        backups = list(self.log.parent.glob("answers.*.csv"))
+        self.assertEqual(len(backups), 1)
+        with open(backups[0], encoding="utf-8") as f:
+            self.assertEqual(f.readline().strip(), "old,columns")
+
+    def test_csv_appends_when_header_matches(self):
+        log_answer({"question": "one", "mode": "base", "model": "m"}, path=self.log)
+        log_answer({"question": "two", "mode": "cot", "model": "m"}, path=self.log)
+        with open(self.log, newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+        self.assertEqual([r["question"] for r in rows], ["one", "two"])
+        self.assertEqual(list(self.log.parent.glob("answers.*.csv")), [])
+
     def test_build_messages_unknown_mode(self):
         with self.assertRaises(ValueError):
             build_messages("q", [], "nope")
@@ -358,12 +443,13 @@ class EvalTests(unittest.TestCase):
             seen.append(model)
             return "mock"
 
-        n, skipped = run_eval(
+        n, skipped, _sweep = run_eval(
             self.questions,
             self.out,
             distilled_model="",
             retriever=FakeRetriever(hits),
             chat_fn=chat,
+            sweep=False,
         )
         self.assertEqual(skipped, ["distilled+RAG+CoT"])
         self.assertEqual(n, 8)
@@ -385,12 +471,13 @@ class EvalTests(unittest.TestCase):
             "id": "ls#0", "title": "ls (tldr common)", "text": "ls -l",
             "source": "tldr", "path": "tldr/common/ls.md", "rrf": 0.05, "dense": 0.55,
         }]
-        n, skipped = run_eval(
+        n, skipped, _sweep = run_eval(
             self.questions,
             self.out,
             distilled_model="student:latest",
             retriever=FakeRetriever(hits),
             chat_fn=lambda messages, model: model,
+            sweep=False,
         )
         self.assertEqual(skipped, [])
         self.assertEqual(n, 10)
@@ -400,6 +487,27 @@ class EvalTests(unittest.TestCase):
         self.assertEqual(len(distilled), 2)
         self.assertTrue(all(r["model"] == "student:latest" for r in distilled))
         self.assertTrue(all(r["mode"] == "full" for r in distilled))
+
+    def test_threshold_sweep_precision_recall(self):
+        class Retriever:
+            def retrieve(self, question, k=5, tldr_lane=True):
+                if "time travel" in question:
+                    return [{"dense": 0.10}]
+                return [{"dense": 0.12}, {"dense": 0.55}]
+
+        rows = sweep_abstain_thresholds(
+            load_questions(self.questions),
+            Retriever(),
+            thresholds=(0.20, 0.30, 0.60),
+        )
+        by_t = {r["threshold"]: r for r in rows}
+        self.assertEqual(by_t[0.30]["abstain_on_answerable"], 0)
+        self.assertEqual(by_t[0.30]["abstain_on_unanswerable"], 1)
+        self.assertEqual(by_t[0.30]["abstain_precision"], "1.000")
+        self.assertEqual(by_t[0.30]["abstain_recall"], "1.000")
+        self.assertEqual(by_t[0.60]["abstain_on_answerable"], 1)
+        self.assertEqual(by_t[0.20]["abstain_on_unanswerable"], 1)
+        self.assertEqual(by_t[0.20]["abstain_on_answerable"], 0)
 
 
 class SnapshotResolveTests(unittest.TestCase):

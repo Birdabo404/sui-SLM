@@ -42,21 +42,39 @@ def _chroma(path):
     return persistent_client(path)
 
 
+def _first_row(value):
+    if value is None or len(value) == 0:
+        return []
+    row = value[0]
+    if row is None:
+        return []
+    return row
+
+
+def _vec_len(emb):
+    if emb is None:
+        return 0
+    return len(emb)
+
+
 def dense_scores(col, qemb, hit_ids, query_result):
     """MiniLM cosine for fused hits. Chroma cosine distance is 1 - cosine."""
     sim = {}
-    qids = (query_result.get("ids") or [[]])[0] or []
-    dists = (query_result.get("distances") or [[]])[0] or []
+    qids = _first_row(query_result.get("ids"))
+    dists = _first_row(query_result.get("distances"))
     for i, d in zip(qids, dists):
         sim[i] = 1.0 - float(d)
     missing = [i for i in hit_ids if i not in sim]
-    if not missing:
+    if len(missing) == 0:
         return sim
     got = col.get(ids=missing, include=["embeddings"])
     qvec = qemb[0]
-    embs = got.get("embeddings") or []
-    for i, emb in zip(got["ids"], embs):
-        if not emb:
+    embs = got.get("embeddings")
+    got_ids = got.get("ids")
+    if embs is None or got_ids is None:
+        return sim
+    for i, emb in zip(got_ids, embs):
+        if _vec_len(emb) == 0:
             continue
         sim[i] = float(sum(a * b for a, b in zip(qvec, emb)))
     return sim
