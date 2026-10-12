@@ -1,0 +1,7 @@
+rag-index-v2 dense                hit@5 20/24   misses: ['make a script executable', 'stop a frozen program', 'test if the internet connection works', 'run a command as administrator']
+rag-index-v2 dense+dedup          hit@5 20/24   misses: ['make a script executable', 'stop a frozen program', 'test if the internet connection works', 'run a command as administrator']
+rag-index-v2 hybrid               hit@5 17/24   misses: ['how do I extract a tar.gz file', 'install a package from the terminal', 'make a script executable', 'find which folder is using the most space', 'test if the internet connection works', 'list USB drives and partitions', 'run a command as administrator']
+rag-index-v2 hybrid+dedup         hit@5 18/24   misses: ['how do I extract a tar.gz file', 'install a package from the terminal', 'make a script executable', 'find which folder is using the most space', 'test if the internet connection works', 'run a command as administrator']
+rag-index-v2 hybrid+tldr          hit@5 22/24   misses: ['make a script executable', 'test if the internet connection works']
+rag-index-v2 hybrid+tldr+dedup    hit@5 22/24   misses: ['make a script executable', 'test if the internet connection works']
+rag-index-v2 dense+tldr+dedup     hit@5 22/24   misses: ['make a script executable', 'test if the internet connection works']

@@ -1,0 +1,8 @@
+rag-index-v2: dense hit@5 20/24, hybrid hit@5 17/24
+   miss: how do I extract a tar.gz file -> ['gzip(1)', 'gzip(1)', 'unzip (tldr common)']
+   miss: install a package from the terminal -> ['pip (tldr common)', 'Install and manage packages', 'Install and manage packages']
+   miss: make a script executable -> ['gzexe (tldr linux)', 'Welcome to the terminal', 'make (tldr common)']
+   miss: find which folder is using the most space -> ['Check how much disk space is left', 'Where can I find the files I want to back up?', 'File properties']
+   miss: test if the internet connection works -> ['The internet seems slow', 'The internet seems slow', 'The internet seems slow']
+   miss: list USB drives and partitions -> ['Manage volumes and partitions', 'Manage volumes and partitions', 'Manage volumes and partitions']
+   miss: run a command as administrator -> ['Managing your software', 'sudoers.ws(5)', 'Command-line cheat sheet']

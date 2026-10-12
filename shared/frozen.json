@@ -1,0 +1,5 @@
+{
+  "threshold": 0.30,
+  "k": 5,
+  "notes": "Provisional defaults, not a tuned result. After running --split dev on the real index, pick threshold and k from the sweep CSV, write them here, and commit that CSV. Do not retune on the test split."
+}

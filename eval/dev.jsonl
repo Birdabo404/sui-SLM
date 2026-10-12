@@ -1,0 +1,32 @@
+{"id": "tuning-tar", "set": "tuning", "question": "how do I extract a tar.gz file", "answerable": true, "gold_answer": "tar -xzf archive.tar.gz", "source": "tldr tar"}
+{"id": "tuning-ssh", "set": "tuning", "question": "connect to another lab PC over ssh", "answerable": true, "gold_answer": "ssh user@host", "source": "tldr ssh"}
+{"id": "tuning-apt", "set": "tuning", "question": "install a package from the terminal", "answerable": true, "gold_answer": "sudo apt install package", "source": "tldr apt"}
+{"id": "tuning-chmod", "set": "tuning", "question": "make a script executable", "answerable": true, "gold_answer": "chmod +x script", "source": "tldr chmod"}
+{"id": "tuning-chown", "set": "tuning", "question": "change the owner of a folder", "answerable": true, "gold_answer": "chown user:group folder", "source": "tldr chown"}
+{"id": "tuning-df", "set": "tuning", "question": "check how much disk space is left", "answerable": true, "gold_answer": "df -h", "source": "tldr df"}
+{"id": "tuning-du", "set": "tuning", "question": "find which folder is using the most space", "answerable": true, "gold_answer": "du -h --max-depth=1", "source": "tldr du"}
+{"id": "tuning-kill", "set": "tuning", "question": "stop a frozen program", "answerable": true, "gold_answer": "kill PID", "source": "tldr kill"}
+{"id": "tuning-top", "set": "tuning", "question": "see which processes use the most CPU", "answerable": true, "gold_answer": "top", "source": "tldr top"}
+{"id": "tuning-scp", "set": "tuning", "question": "copy a file to another computer on the network", "answerable": true, "gold_answer": "scp file user@host:", "source": "tldr scp"}
+{"id": "tuning-ip", "set": "tuning", "question": "show my IP address", "answerable": true, "gold_answer": "ip addr", "source": "tldr ip"}
+{"id": "tuning-ping", "set": "tuning", "question": "test if the internet connection works", "answerable": true, "gold_answer": "ping -c 3 8.8.8.8", "source": "tldr ping"}
+{"id": "tuning-grep", "set": "tuning", "question": "search for text inside files", "answerable": true, "gold_answer": "grep -r pattern .", "source": "tldr grep"}
+{"id": "tuning-find", "set": "tuning", "question": "find a file by name", "answerable": true, "gold_answer": "find . -name filename", "source": "tldr find"}
+{"id": "tuning-adduser", "set": "tuning", "question": "create a new user account", "answerable": true, "gold_answer": "sudo adduser name", "source": "tldr adduser"}
+{"id": "tuning-passwd", "set": "tuning", "question": "change my password", "answerable": true, "gold_answer": "passwd", "source": "tldr passwd"}
+{"id": "tuning-lsblk", "set": "tuning", "question": "list USB drives and partitions", "answerable": true, "gold_answer": "lsblk", "source": "tldr lsblk"}
+{"id": "tuning-systemctl", "set": "tuning", "question": "restart a service", "answerable": true, "gold_answer": "sudo systemctl restart name", "source": "tldr systemctl"}
+{"id": "tuning-unzip", "set": "tuning", "question": "unzip a zip file", "answerable": true, "gold_answer": "unzip file.zip", "source": "tldr unzip"}
+{"id": "tuning-sudo", "set": "tuning", "question": "run a command as administrator", "answerable": true, "gold_answer": "sudo command", "source": "tldr sudo"}
+{"id": "tuning-ufw", "set": "tuning", "question": "enable the firewall", "answerable": true, "gold_answer": "sudo ufw enable", "source": "tldr ufw"}
+{"id": "tuning-free", "set": "tuning", "question": "see how much RAM is free", "answerable": true, "gold_answer": "free -h", "source": "tldr free"}
+{"id": "tuning-git", "set": "tuning", "question": "clone a git repository", "answerable": true, "gold_answer": "git clone url", "source": "tldr git"}
+{"id": "tuning-cron", "set": "tuning", "question": "schedule a job to run every day", "answerable": true, "gold_answer": "crontab -e", "source": "tldr crontab"}
+{"id": "unanswerable-time-travel", "set": "unanswerable", "question": "how do I time travel from the lab PC", "answerable": false, "gold_answer": "", "source": ""}
+{"id": "unanswerable-dinner", "set": "unanswerable", "question": "what should I cook for dinner tonight", "answerable": false, "gold_answer": "", "source": ""}
+{"id": "unanswerable-headache", "set": "unanswerable", "question": "diagnose this headache without seeing a doctor", "answerable": false, "gold_answer": "", "source": ""}
+{"id": "unanswerable-basketball", "set": "unanswerable", "question": "who won last night's basketball game", "answerable": false, "gold_answer": "", "source": ""}
+{"id": "unanswerable-wifi-password", "set": "unanswerable", "question": "what is the wifi password for the dean's office", "answerable": false, "gold_answer": "", "source": ""}
+{"id": "unanswerable-essay", "set": "unanswerable", "question": "write my English literature essay", "answerable": false, "gold_answer": "", "source": ""}
+{"id": "unanswerable-bitcoin", "set": "unanswerable", "question": "what is the bitcoin price right now", "answerable": false, "gold_answer": "", "source": ""}
+{"id": "unanswerable-moon", "set": "unanswerable", "question": "how do I fly to the moon from campus", "answerable": false, "gold_answer": "", "source": ""}
