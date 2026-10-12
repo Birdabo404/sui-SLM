@@ -33,7 +33,7 @@ Pick the model and the mode separately in the sidebar.
 
 That covers the five thesis configs: base, base+CoT, base+RAG, base+RAG+CoT, distilled+RAG+CoT.
 
-RAG uses hybrid MiniLM+BM25 with the tldr lane. Weak hits return "I don't know". Each answer logs model, mode, latency, app RSS, Ollama RSS, total RSS, and system used memory to `logs/answers.csv`.
+RAG uses hybrid MiniLM+BM25 with the tldr lane. If the top fused chunk has MiniLM cosine below 0.30, the app says it does not know. Each answer logs model, mode, latency, app RSS, Ollama RSS, total RSS, and system used memory to `logs/answers.csv`.
 
 The app does not call the internet. The embedding model must already be in the Hugging Face cache (install.sh downloads it).
 

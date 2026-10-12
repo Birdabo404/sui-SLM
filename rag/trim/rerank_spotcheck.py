@@ -4,7 +4,10 @@
 Also reports whether the expected page was in the candidate pool at all (recall@pool).
   python rag/trim/rerank_spotcheck.py rag/rag-index-trim
 """
-import json, re, sys, time, chromadb
+import json, os, re, sys, time
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+import chromadb
+from chromadb.config import Settings
 from pathlib import Path
 from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer, CrossEncoder
@@ -18,7 +21,7 @@ qemb = model.encode([q for q, _ in QS], normalize_embeddings=True).tolist()
 for idx in sys.argv[1:]:
     rows = [r for r in map(json.loads, open(f"{idx}/chunks.jsonl", encoding="utf-8")) if r["distro"] != "arch"]
     bm25 = BM25Okapi([tok(r["text"]) for r in rows]); byid = {r["id"]: r for r in rows}
-    col = chromadb.PersistentClient(path=f"{idx}/chroma").get_collection("linux_lab")
+    col = chromadb.PersistentClient(path=f"{idx}/chroma", settings=Settings(anonymized_telemetry=False)).get_collection("linux_lab")
     hd = hh = hr = hp = 0; misses = []; t_rr = 0
     for (q, exp), e in zip(QS, qemb):
         pat = re.compile(rf"^(gnu|rust-)?({exp})\b", re.I)

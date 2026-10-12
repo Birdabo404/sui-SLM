@@ -4,7 +4,10 @@
   +tldr  = add a third RRF lane: dense top-20 restricted to tldr pages (task-phrased cheat sheets)
   python rag/trim/lanes_spotcheck.py rag/rag-index-trim
 """
-import json, re, sys, chromadb
+import json, os, re, sys
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+import chromadb
+from chromadb.config import Settings
 from pathlib import Path
 from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer
@@ -21,7 +24,7 @@ def rrf(*lanes):
 for idx in sys.argv[1:]:
     rows = [r for r in map(json.loads, open(f"{idx}/chunks.jsonl", encoding="utf-8")) if r["distro"] != "arch"]
     bm25 = BM25Okapi([tok(r["text"]) for r in rows]); byid = {r["id"]: r for r in rows}
-    col = chromadb.PersistentClient(path=f"{idx}/chroma").get_collection("linux_lab")
+    col = chromadb.PersistentClient(path=f"{idx}/chroma", settings=Settings(anonymized_telemetry=False)).get_collection("linux_lab")
     def top5(ranked, dedup):
         out, seen = [], set()
         for i in ranked:

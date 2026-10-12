@@ -4,8 +4,11 @@ Copies the existing embeddings for every kept chunk (no re-embedding), embeds on
 Server chunks with the same MiniLM model, and leaves rag-index/ and rag-index-trim/ untouched.
   python rag/trim/make_v2_index.py --snap <snapshot> --src rag/rag-index-trim --out rag/rag-index-v2
 """
-import argparse, collections, json, sys, chromadb
+import argparse, collections, json, os, sys
 from pathlib import Path
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+import chromadb
+from chromadb.config import Settings
 HERE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(HERE))
 from build_index import docs, chunk, LICENSE, DISTRO
@@ -24,10 +27,11 @@ for src, path, title, text in docs(snap, ["ubuntu-server-docs"]):
 out.mkdir(parents=True, exist_ok=True)
 with open(out / "chunks.jsonl", "w", encoding="utf-8") as f:
     for r in kept + new: f.write(json.dumps(r, ensure_ascii=False) + "\n")
-src = chromadb.PersistentClient(path=f"{a.src}/chroma").get_collection("linux_lab")
-dc = chromadb.PersistentClient(path=str(out / "chroma"))
-try: dc.delete_collection("linux_lab")
-except Exception: pass
+_chroma = Settings(anonymized_telemetry=False)
+src = chromadb.PersistentClient(path=f"{a.src}/chroma", settings=_chroma).get_collection("linux_lab")
+dc = chromadb.PersistentClient(path=str(out / "chroma"), settings=_chroma)
+if "linux_lab" in [c if isinstance(c, str) else c.name for c in dc.list_collections()]:
+    dc.delete_collection("linux_lab")
 meta = {k: v for k, v in src.metadata.items()}; meta.update(arch_wiki="dropped", ubuntu_server_docs="added")
 dst = dc.create_collection("linux_lab", metadata=meta)
 ids = [r["id"] for r in kept]

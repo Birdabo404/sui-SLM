@@ -20,8 +20,9 @@ fi
 . "$ROOT/.venv/bin/activate"
 
 python -m pip install --upgrade pip
-# CPU torch first so sentence-transformers does not pull a CUDA wheel (8G laptop).
-python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+export ANONYMIZED_TELEMETRY=False
+# CPU torch first so the later -r install does not replace it with a CUDA wheel (8G laptop).
+python -m pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
 python -m pip install -r "$ROOT/requirements.txt"
 
 # Cache MiniLM so the app does not need the network later.

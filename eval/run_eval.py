@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 

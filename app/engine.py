@@ -21,8 +21,9 @@ DEFAULT_INDEX = os.environ.get("RAG_INDEX", str(ROOT / "rag" / "rag-index-v2"))
 LOG_CSV = Path(os.environ.get("LOG_CSV", str(ROOT / "logs" / "answers.csv")))
 K = 5
 EVAL_SEED = 42
-# RRF of a rank-0 hit in a single lane is 1/60. Below 1/75 means it was not in the top 15 of any lane.
-WEAK_RRF = 1.0 / 75
+# MiniLM cosine of the top fused hit. RRF is a rank score, not relevance
+# (any rank-0 hit scores 1/60).
+WEAK_DENSE = 0.30
 MODE_LABELS = {
     "base": "base",
     "cot": "CoT",
@@ -58,7 +59,10 @@ def uses_rag(mode):
 def is_weak(hits):
     if not hits:
         return True
-    return float(hits[0].get("rrf", 0)) < WEAK_RRF
+    sim = hits[0].get("dense")
+    if sim is None:
+        return True
+    return float(sim) < WEAK_DENSE
 
 
 def index_ok(path):
@@ -139,8 +143,6 @@ def build_messages(question, hits, mode):
         user += "\n\nGive a short answer that cites the excerpt you used. Do not write a step list."
     elif mode == "full":
         user = user_msg(question, hits)
-    else:
-        raise ValueError(f"unknown mode: {mode}")
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 

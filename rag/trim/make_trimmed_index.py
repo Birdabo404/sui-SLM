@@ -4,8 +4,11 @@ Ubuntu command-manpages set or the man-pages project (man1/man8), plus a short E
 tools. Re-uses the existing embeddings (no re-embedding), leaves rag-index untouched.
   python rag/trim/make_trimmed_index.py --src rag/rag-index --snap <snapshot> --out rag/rag-index-trim
 """
-import argparse, json, re, chromadb
+import argparse, json, os, re
 from pathlib import Path
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+import chromadb
+from chromadb.config import Settings
 HERE = Path(__file__).resolve().parent.parent
 EXTRAS = {"git", "python", "python3", "pip", "pip3", "vim", "nano", "code", "gcc", "make", "java",
           "javac", "docker", "ufw", "nmcli", "ip", "ss", "ping", "traceroute", "ssh", "scp", "sftp",
@@ -30,10 +33,11 @@ kept = [r for r in rows if keep(r)]
 out = Path(a.out); out.mkdir(parents=True, exist_ok=True)
 with open(out / "chunks.jsonl", "w", encoding="utf-8") as f:
     for r in kept: f.write(json.dumps(r, ensure_ascii=False) + "\n")
-src = chromadb.PersistentClient(path=f"{a.src}/chroma").get_collection("linux_lab")
-dst_c = chromadb.PersistentClient(path=str(out / "chroma"))
-try: dst_c.delete_collection("linux_lab")
-except Exception: pass
+_chroma = Settings(anonymized_telemetry=False)
+src = chromadb.PersistentClient(path=f"{a.src}/chroma", settings=_chroma).get_collection("linux_lab")
+dst_c = chromadb.PersistentClient(path=str(out / "chroma"), settings=_chroma)
+if "linux_lab" in [c if isinstance(c, str) else c.name for c in dst_c.list_collections()]:
+    dst_c.delete_collection("linux_lab")
 dst = dst_c.create_collection("linux_lab", metadata=dict(src.metadata, trimmed_tldr=True))
 ids = [r["id"] for r in kept]
 for s in range(0, len(ids), 2000):

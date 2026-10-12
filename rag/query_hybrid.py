@@ -5,8 +5,11 @@ reciprocal rank fusion. Dense-only misses obvious pages (e.g. 'ssh' query -> Vir
 """
 import argparse
 import json
+import os
 import re
 from pathlib import Path
+
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 
 HERE = Path(__file__).resolve().parent
 TOKEN_RE = re.compile(r"[a-z0-9][a-z0-9_.+-]*")
@@ -31,11 +34,38 @@ def load_rows(index, exclude_distro=None):
     return rows
 
 
+def _chroma(path):
+    try:
+        from rag.chroma_client import persistent_client
+    except ImportError:
+        from chroma_client import persistent_client
+    return persistent_client(path)
+
+
+def dense_scores(col, qemb, hit_ids, query_result):
+    """MiniLM cosine for fused hits. Chroma cosine distance is 1 - cosine."""
+    sim = {}
+    qids = (query_result.get("ids") or [[]])[0] or []
+    dists = (query_result.get("distances") or [[]])[0] or []
+    for i, d in zip(qids, dists):
+        sim[i] = 1.0 - float(d)
+    missing = [i for i in hit_ids if i not in sim]
+    if not missing:
+        return sim
+    got = col.get(ids=missing, include=["embeddings"])
+    qvec = qemb[0]
+    embs = got.get("embeddings") or []
+    for i, emb in zip(got["ids"], embs):
+        if not emb:
+            continue
+        sim[i] = float(sum(a * b for a, b in zip(qvec, emb)))
+    return sim
+
+
 def retrieve(question, index="rag-index", k=5, exclude_distro=None, tldr_lane=False,
              rows=None, bm25=None, col=None, model=None):
-    """Return top-k chunk dicts (plus an 'rrf' score). Same ranking as the original CLI."""
+    """Return top-k chunk dicts with rrf and dense (MiniLM cosine) scores."""
     # Heavy deps stay here so tokenize/rrf_fuse can be imported without MiniLM.
-    import chromadb
     from rank_bm25 import BM25Okapi
     from sentence_transformers import SentenceTransformer
 
@@ -46,7 +76,7 @@ def retrieve(question, index="rag-index", k=5, exclude_distro=None, tldr_lane=Fa
     sc = bm25.get_scores(tokenize(question))
     bm_ids = [rows[i]["id"] for i in sorted(range(len(rows)), key=lambda i: -sc[i])[:50]]
     if col is None:
-        col = chromadb.PersistentClient(path=f"{index}/chroma").get_collection("linux_lab")
+        col = _chroma(f"{index}/chroma").get_collection("linux_lab")
     if model is None:
         model = SentenceTransformer(
             col.metadata.get("embed_model", "sentence-transformers/all-MiniLM-L6-v2"),
@@ -62,12 +92,13 @@ def retrieve(question, index="rag-index", k=5, exclude_distro=None, tldr_lane=Fa
         )
     fused = rrf_fuse(lanes)
     byid = {x["id"]: x for x in rows}
+    ranked_ids = [i for i in sorted(fused, key=lambda i: -fused[i]) if i in byid][:k]
+    sim = dense_scores(col, qemb, ranked_ids, r)
     hits = []
-    for i in sorted(fused, key=lambda i: -fused[i])[:k]:
-        if i not in byid:
-            continue
+    for i in ranked_ids:
         m = dict(byid[i])
         m["rrf"] = fused[i]
+        m["dense"] = sim.get(i)
         hits.append(m)
     return hits
 
@@ -76,7 +107,6 @@ class HybridRetriever:
     """Load chunks, BM25, Chroma, and MiniLM once; reuse for each chat turn."""
 
     def __init__(self, index, exclude_distro=None):
-        import chromadb
         from rank_bm25 import BM25Okapi
         from sentence_transformers import SentenceTransformer
 
@@ -84,7 +114,7 @@ class HybridRetriever:
         self.exclude_distro = exclude_distro
         self.rows = load_rows(index, exclude_distro)
         self.bm25 = BM25Okapi([tokenize(r["text"]) for r in self.rows])
-        self.col = chromadb.PersistentClient(path=f"{index}/chroma").get_collection("linux_lab")
+        self.col = _chroma(f"{index}/chroma").get_collection("linux_lab")
         self.model = SentenceTransformer(
             self.col.metadata.get("embed_model", "sentence-transformers/all-MiniLM-L6-v2"),
             device="cpu",
@@ -120,7 +150,9 @@ def main():
         tldr_lane=a.tldr_lane,
     )
     for m in hits:
-        print(f"--- rrf {m['rrf']:.4f} | {m['source']} | {m['title']} | {m['path']}")
+        dense = m.get("dense")
+        dense_s = f"{dense:.3f}" if dense is not None else "-"
+        print(f"--- rrf {m['rrf']:.4f} | cos {dense_s} | {m['source']} | {m['title']} | {m['path']}")
         print(m["text"][:400].replace("\n", " ") + "...")
 
 

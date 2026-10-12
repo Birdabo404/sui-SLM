@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parent.parent
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 os.environ.setdefault("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "false")
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -31,7 +32,6 @@ from app.engine import (
 
 @st.cache_resource
 def load_retriever(index_dir):
-    # Load MiniLM/Chroma only when a RAG mode is selected (8G mem cap).
     from rag.query_hybrid import HybridRetriever
 
     return HybridRetriever(index_dir)
@@ -62,6 +62,7 @@ def main():
 
     retriever = None
     if uses_rag(mode):
+        # Load MiniLM/Chroma only when a RAG mode is selected (8G mem cap).
         if not index_ok(index_dir):
             st.warning(
                 f"No index at {index_dir}. Fetch the corpus and run rag/build_index.py first."

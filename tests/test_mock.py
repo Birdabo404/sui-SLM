@@ -16,11 +16,11 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 from shared.prompt import ABSTAIN, SYSTEM, system_for_mode, user_msg
-from rag.query_hybrid import rrf_fuse, tokenize
+from rag.query_hybrid import dense_scores, rrf_fuse, tokenize
 from app.engine import (
     CSV_FIELDS,
     THESIS_CONFIGS,
-    WEAK_RRF,
+    WEAK_DENSE,
     answer_question,
     build_messages,
     config_id,
@@ -93,6 +93,22 @@ class HybridRankingTests(unittest.TestCase):
         self.assertEqual(tokenize("Extract a tar.gz with tar -xzf"),
                          ["extract", "a", "tar.gz", "with", "tar", "xzf"])
 
+    def test_dense_scores_from_chroma_distance(self):
+        query_result = {"ids": [["a", "b"]], "distances": [[0.2, 0.7]]}
+        sim = dense_scores(col=None, qemb=[[1.0, 0.0]], hit_ids=["a", "b"], query_result=query_result)
+        self.assertAlmostEqual(sim["a"], 0.8)
+        self.assertAlmostEqual(sim["b"], 0.3)
+
+    def test_dense_scores_fills_missing_from_embeddings(self):
+        class Col:
+            def get(self, ids, include):
+                return {"ids": ids, "embeddings": [[1.0, 0.0]]}
+
+        query_result = {"ids": [["a"]], "distances": [[0.1]]}
+        sim = dense_scores(Col(), [[1.0, 0.0]], ["a", "c"], query_result)
+        self.assertAlmostEqual(sim["a"], 0.9)
+        self.assertAlmostEqual(sim["c"], 1.0)
+
     def test_rrf_matches_original_formula(self):
         lanes = [["a", "b", "c"], ["b", "a"], ["a"]]
         fused = rrf_fuse(lanes)
@@ -103,9 +119,13 @@ class HybridRankingTests(unittest.TestCase):
         self.assertEqual(ranked[0], "a")
 
     def test_weak_threshold(self):
+        # RRF 1/60 is a rank-0 hit in one lane, not a relevance score.
         self.assertTrue(is_weak([]))
-        self.assertTrue(is_weak([{"rrf": WEAK_RRF / 2}]))
-        self.assertFalse(is_weak([{"rrf": 1 / 60}]))
+        self.assertTrue(is_weak([{"rrf": 1 / 60}]))
+        self.assertTrue(is_weak([{"dense": 0.10, "rrf": 1 / 60}]))
+        self.assertTrue(is_weak([{"dense": WEAK_DENSE - 0.01, "rrf": 0.05}]))
+        self.assertFalse(is_weak([{"dense": WEAK_DENSE, "rrf": 1 / 60}]))
+        self.assertFalse(is_weak([{"dense": 0.55, "rrf": 1 / 60}]))
 
 
 class OllamaRamTests(unittest.TestCase):
@@ -193,7 +213,7 @@ class MockRunTests(unittest.TestCase):
     def test_full_weak_retrieval_abstains_without_ollama(self):
         retriever = FakeRetriever([{
             "id": "weak", "title": "unrelated", "text": "nothing",
-            "source": "tldr", "path": "x.md", "rrf": WEAK_RRF / 2,
+            "source": "tldr", "path": "x.md", "rrf": 1 / 60, "dense": 0.10,
         }])
         called = []
 
@@ -219,7 +239,8 @@ class MockRunTests(unittest.TestCase):
     def test_full_strong_retrieval_calls_chat(self):
         hits = [{
             "id": "tar#0", "title": "tar (tldr common)", "text": "tar -xzf archive.tar.gz",
-            "source": "tldr", "path": "tldr/common/tar.md", "rrf": 1 / 60 + 1 / 60 + 1 / 60,
+            "source": "tldr", "path": "tldr/common/tar.md",
+            "rrf": 1 / 60 + 1 / 60 + 1 / 60, "dense": 0.55,
         }]
         retriever = FakeRetriever(hits)
         result = answer_question(
@@ -242,7 +263,7 @@ class MockRunTests(unittest.TestCase):
     def test_rag_only_has_no_step_request_in_system(self):
         hits = [{
             "id": "apt#0", "title": "apt (tldr common)", "text": "sudo apt install",
-            "source": "tldr", "path": "tldr/common/apt.md", "rrf": 0.05,
+            "source": "tldr", "path": "tldr/common/apt.md", "rrf": 0.05, "dense": 0.52,
         }]
         result = answer_question(
             "install a package",
@@ -329,7 +350,7 @@ class EvalTests(unittest.TestCase):
     def test_run_eval_skips_empty_distilled_and_logs_four_configs(self):
         hits = [{
             "id": "ls#0", "title": "ls (tldr common)", "text": "ls -l",
-            "source": "tldr", "path": "tldr/common/ls.md", "rrf": 0.05,
+            "source": "tldr", "path": "tldr/common/ls.md", "rrf": 0.05, "dense": 0.55,
         }]
         seen = []
 
@@ -362,7 +383,7 @@ class EvalTests(unittest.TestCase):
     def test_run_eval_includes_distilled_when_named(self):
         hits = [{
             "id": "ls#0", "title": "ls (tldr common)", "text": "ls -l",
-            "source": "tldr", "path": "tldr/common/ls.md", "rrf": 0.05,
+            "source": "tldr", "path": "tldr/common/ls.md", "rrf": 0.05, "dense": 0.55,
         }]
         n, skipped = run_eval(
             self.questions,
@@ -447,6 +468,12 @@ class ImportTests(unittest.TestCase):
         mod = importlib.import_module("app.app")
         self.assertTrue(hasattr(mod, "main"))
         self.assertTrue(hasattr(mod, "load_retriever"))
+        self.assertEqual(os.environ.get("ANONYMIZED_TELEMETRY"), "False")
+
+    def test_chroma_client_sets_telemetry_env(self):
+        import rag.chroma_client  # noqa: F401
+
+        self.assertEqual(os.environ.get("ANONYMIZED_TELEMETRY"), "False")
 
 
 if __name__ == "__main__":
