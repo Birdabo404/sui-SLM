@@ -1,0 +1,43 @@
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Corpus snapshots and downloads
+corpus/snapshot-*/
+corpus/**/downloads/
+
+# RAG indexes
+rag/rag-index/
+rag/rag-index-trim/
+rag/rag-index-v2/
+**/chroma/
+**/chunks.jsonl
+
+# Model files
+*.gguf
+*.bin
+*.pt
+*.pth
+*.onnx
+*.safetensors
+models/
+blobs/
+
+# KD outputs
+kd/teacher_*.jsonl
+kd/sft_*.jsonl
+kd/seed_chunks.jsonl
+kd/smoke-test*/
+
+# Measurement logs
+logs/
+*.csv

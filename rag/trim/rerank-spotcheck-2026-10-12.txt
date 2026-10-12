@@ -1,0 +1,12 @@
+Loading weights:   0%|          | 0/103 [00:00<?, ?it/s]Loading weights: 100%|██████████| 103/103 [00:00<00:00, 11002.22it/s]
+Loading weights:   0%|          | 0/105 [00:00<?, ?it/s]Loading weights: 100%|██████████| 105/105 [00:00<00:00, 12378.84it/s]
+rag-index-trim: dense 20/24, hybrid 18/24, hybrid+rerank 16/24, expected page in pool 23/24
+   rerank time: 1.22 s per question on this box (~84 candidates)
+   miss: how do I extract a tar.gz file -> ['gzip(1)', 'git-archive(1)', 'git-archive(1)'] (expected in pool: True)
+   miss: make a script executable -> ['lesspipe(1)', 'File manager behavior preferences', 'gzexe (tldr linux)'] (expected in pool: False)
+   miss: find which folder is using the most space -> ['Where can I find the files I want to back up?', 'Where can I find the files I want to back up?', 'File properties'] (expected in pool: True)
+   miss: stop a frozen program -> ['systemctl(1)', 'fsfreeze(8)', 'rtcwake(8)'] (expected in pool: True)
+   miss: search for text inside files -> ['Search', 'Search', 'Search'] (expected in pool: True)
+   miss: list USB drives and partitions -> ['Manage volumes and partitions', 'Manage volumes and partitions', 'Manage volumes and partitions'] (expected in pool: True)
+   miss: restart a service -> ['systemd.service(5)', 'systemd.service(5)', 'systemd.service(5)'] (expected in pool: True)
+   miss: run a command as administrator -> ['sudoers.ws(5)', 'runuser (tldr linux)', 'sudo_plugin(5)'] (expected in pool: True)

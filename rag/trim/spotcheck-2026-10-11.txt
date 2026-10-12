@@ -1,0 +1,15 @@
+rag-index: dense hit@5 19/24, hybrid hit@5 17/24
+   miss: how do I extract a tar.gz file -> ['gzip(1)', 'lz (tldr linux)', 'ptargrep (tldr common)']
+   miss: install a package from the terminal -> ['pip (tldr common)', 'cargo-install (tldr common)', 'installpkg (tldr linux)']
+   miss: make a script executable -> ['gzexe (tldr linux)', 'shc (tldr common)', 'tcc (tldr common)']
+   miss: find which folder is using the most space -> ['Check how much disk space is left', 'Where can I find the files I want to back up?', 'File properties']
+   miss: test if the internet connection works -> ['speed-test (tldr common)', 'The internet seems slow', 'The internet seems slow']
+   miss: list USB drives and partitions -> ['Manage volumes and partitions', 'lsusb (tldr linux)', 'systool (tldr linux)']
+   miss: run a command as administrator -> ['sudoers.ws(5)', 'doas (tldr common)', 'pkexec (tldr linux)']
+rag-index-trim: dense hit@5 20/24, hybrid hit@5 18/24
+   miss: how do I extract a tar.gz file -> ['gzip(1)', 'gzip(1)', 'unzip (tldr common)']
+   miss: make a script executable -> ['gzexe (tldr linux)', 'make (tldr common)', 'bash(1)']
+   miss: find which folder is using the most space -> ['Check how much disk space is left', 'Where can I find the files I want to back up?', 'File properties']
+   miss: test if the internet connection works -> ['The internet seems slow', 'The internet seems slow', 'The internet seems slow']
+   miss: list USB drives and partitions -> ['Manage volumes and partitions', 'Manage volumes and partitions', 'Manage volumes and partitions']
+   miss: run a command as administrator -> ['sudoers.ws(5)', 'runuser (tldr linux)', 'run0 (tldr linux)']
