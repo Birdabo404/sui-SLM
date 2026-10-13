@@ -139,21 +139,17 @@ class HybridRankingTests(unittest.TestCase):
         self.assertAlmostEqual(sim["a"], 0.75, places=5)
         self.assertAlmostEqual(sim["c"], 0.0, places=5)
 
-    def test_dense_scores_against_chromadb_0_6(self):
+    def test_dense_scores_against_chromadb(self):
         try:
             import chromadb
             from chromadb.config import Settings
         except ImportError:
             self.skipTest("chromadb not installed")
-        ver = getattr(chromadb, "__version__", "")
-        if not ver.startswith("0.6"):
-            self.skipTest(f"chromadb {ver} is not 0.6.x")
+        settings = Settings(anonymized_telemetry=False)
+        self.assertFalse(settings.anonymized_telemetry)
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
-        client = chromadb.PersistentClient(
-            path=tmp.name,
-            settings=Settings(anonymized_telemetry=False),
-        )
+        client = chromadb.PersistentClient(path=tmp.name, settings=settings)
         col = client.create_collection("linux_lab", metadata={"hnsw:space": "cosine"})
         col.add(
             ids=["a", "c"],
@@ -168,6 +164,13 @@ class HybridRankingTests(unittest.TestCase):
         sim = dense_scores(col, qemb, ["a", "c"], r)
         self.assertGreater(sim["a"], 0.99)
         self.assertAlmostEqual(sim["c"], 0.0, places=5)
+        del col, client
+        reopened = chromadb.PersistentClient(path=tmp.name, settings=settings)
+        col2 = reopened.get_collection("linux_lab")
+        self.assertEqual(col2.count(), 2)
+        sim2 = dense_scores(col2, qemb, ["a", "c"], col2.query(query_embeddings=qemb, n_results=1))
+        self.assertGreater(sim2["a"], 0.99)
+        self.assertAlmostEqual(sim2["c"], 0.0, places=5)
 
     def test_rrf_matches_original_formula(self):
         lanes = [["a", "b", "c"], ["b", "a"], ["a"]]
@@ -755,6 +758,51 @@ class SnapshotResolveTests(unittest.TestCase):
         sha = git_commit()
         self.assertGreaterEqual(len(sha), 7)
         self.assertTrue(all(c in "0123456789abcdef" for c in sha.lower()))
+
+
+class InstallScriptTests(unittest.TestCase):
+    def _fake_python(self, folder, version_line):
+        fake = Path(folder) / "python3"
+        fake.write_text(
+            "#!/bin/sh\n"
+            f'if [ "$1" = --version ]; then echo {version_line}; exit 0; fi\n'
+            'echo "unexpected: $*" >&2\n'
+            "exit 2\n",
+            encoding="utf-8",
+        )
+        fake.chmod(0o755)
+        env = os.environ.copy()
+        env["PATH"] = folder + os.pathsep + env.get("PATH", "")
+        return env
+
+    def test_accepts_supported_python_and_prints_it_first(self):
+        with tempfile.TemporaryDirectory() as td:
+            env = self._fake_python(td, "Python 3.14.4")
+            r = subprocess.run(
+                ["bash", str(ROOT / "install.sh"), "--check-python"],
+                cwd=str(ROOT),
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(r.stdout.splitlines()[0], "Python 3.14.4")
+
+    def test_rejects_unsupported_python(self):
+        with tempfile.TemporaryDirectory() as td:
+            env = self._fake_python(td, "Python 3.11.9")
+            r = subprocess.run(
+                ["bash", str(ROOT / "install.sh"), "--check-python"],
+                cwd=str(ROOT),
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+        self.assertNotEqual(r.returncode, 0)
+        combined = r.stderr + r.stdout
+        self.assertIn("Python 3.11.9", combined)
+        self.assertIn("3.12, 3.13, and 3.14", combined)
+        self.assertTrue(combined.startswith("Python 3.11.9") or r.stdout.startswith("Python 3.11.9"))
 
 
 class ImportTests(unittest.TestCase):

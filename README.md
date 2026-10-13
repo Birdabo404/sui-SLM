@@ -6,6 +6,8 @@ Thesis: Enhancing Small Language Models for Low-End Devices using Retrieval Augm
 
 ## Setup
 
+Needs Python 3.12, 3.13, or 3.14. `install.sh` prints the version first and exits if it is outside that range.
+
 On Ubuntu, from this repo:
 
 ```
@@ -17,6 +19,8 @@ That creates `.venv`, installs Python packages, checks for Ollama, and pulls `qw
 Ollama is not installed by the script. Install it first from https://ollama.com/download/linux if `ollama` is missing.
 
 Fetch scripts: after `bash corpus/fetch_corpus.sh`, the man-page and GNOME scripts pick the newest `corpus/snapshot-*` folder. Set `SNAP=` to override.
+
+chromadb is pinned at 1.0.8. That version cannot read an index built with chromadb 0.6.3. After this install, rebuild `rag/rag-index` (and `rag/rag-index-v2`) with `rag/build_index.py`. Do not copy an old `chroma/` folder forward.
 
 ## Run
 

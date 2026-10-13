@@ -1,10 +1,16 @@
-torch==2.5.1
-chromadb==0.6.3
+# CPU torch: install from https://download.pytorch.org/whl/cpu (see install.sh).
+# 2.5.1 has no cp314 wheel there. 2.9.1+cpu has wheels for CPython 3.12, 3.13, and 3.14.
+torch==2.9.1
+# 0.6.3 needs chroma-hnswlib==0.7.6, which has no cp314 wheel. 1.0.8 is the first
+# chromadb that does not. On-disk format changed; rebuild the index after this bump.
+chromadb==1.0.8
 posthog>=2.4.0,<6
 sentence-transformers==3.3.1
 rank_bm25==0.2.2
-streamlit==1.41.1
+# 1.41.1 needs protobuf<6; chromadb 1.0.8 needs protobuf 6.x. 1.45.0 is the first with protobuf<7.
+streamlit==1.45.0
 requests==2.32.3
 psutil==6.1.1
 beautifulsoup4==4.12.3
-lxml==5.3.0
+# 5.3.0 has no cp314 wheel; 6.0.1 is the first that does (also has cp312).
+lxml==6.0.1
