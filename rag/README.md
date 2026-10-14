@@ -5,10 +5,10 @@ Index:  rag-index/chroma (ChromaDB, collection "linux_lab", all-MiniLM-L6-v2, co
 Size:   48,391 chunks (~1000 chars each): arch-wiki 22.9k, command-manpages 14.7k, tldr 7.4k,
         man-pages 2.8k, gnome-user-docs 641, ubuntu-docs 29. Build took ~9 min on 8 CPU cores, 463 MB on disk.
 
-Rebuild on the laptop (needs groff, which Ubuntu already has):
+Rebuild on the laptop (needs groff, which Ubuntu already has). chromadb 1.0.8 cannot read a 0.6.3 index; rebuild from the snapshot, do not reuse an old chroma/ folder:
   python3 -m venv .venv && . .venv/bin/activate
-  pip install torch --index-url https://download.pytorch.org/whl/cpu
-  pip install -r requirements.txt
+  pip install torch==2.9.1 --index-url https://download.pytorch.org/whl/cpu
+  pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
   python rag/build_index.py --snap corpus/snapshot-2026-10-11 --out rag/rag-index
 Ask:  python rag/query.py "how do I extract a tar.gz file"            (dense only)
       python rag/query_hybrid.py --tldr-lane "..."                    (dense + keyword + tldr lane)
