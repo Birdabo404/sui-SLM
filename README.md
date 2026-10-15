@@ -62,9 +62,10 @@ python eval/run_eval.py --split test --no-sweep --questions eval/your-heldout.js
 app/          Streamlit chat UI
 corpus/       Fetch scripts for the doc snapshot
 rag/          Index builder, hybrid query, spot checks
-kd/           Teacher Q&A kit for distillation
+kd/           Teacher Q&A kit for distillation (Colab notebook: kd/colab_distill.ipynb)
 eval/         Ablation eval runner
 shared/       System prompt and provisional threshold/k (app + kd/build_sft.py)
+docs/         Chapter 3 methodology outline
 ```
 
 ## Corpus licenses

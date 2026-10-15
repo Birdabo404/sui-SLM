@@ -20,15 +20,21 @@ box with a tiny Qwen3.5-0.8B (outputs in smoke-test-0.8b/, quality is NOT repres
                         --holdout test_questions.txt drops training questions too close to your test set.
                         SYSTEM prompt is imported from shared/prompt.py (same text the chat app uses).
 
-## Run on Colab (T4 is enough for qwen3.5:9b at 4-bit)
+## Run on Colab (T4)
+
+Use `kd/colab_distill.ipynb`. It mounts Drive, clones this repo, stops if `your-heldout.jsonl` is missing, runs `make_seed_chunks.py` → `teacher_generate.py` → `judge_rows.py` → `build_sft.py --holdout`, then QLoRA-SFT of Qwen3.5-2B, GGUF Q4_K_M, and prints the laptop `ollama create` command.
+
+Teacher is Ollama (`qwen3.5:9b`), not transformers 4-bit, because those two scripts only speak Ollama HTTP and the Q4 9B fits a T4. Set `USE_4B_TEACHER = True` for `qwen3.5:4b`. Writes under Drive `thesis-kd/`; re-run to resume.
+
+Manual cells (same scripts):
     from google.colab import drive; drive.mount('/content/drive')
-    !mkdir -p /content/drive/MyDrive/thesis-kd   # upload this folder's files here
+    !mkdir -p /content/drive/MyDrive/thesis-kd
     %cd /content/drive/MyDrive/thesis-kd
     !apt-get -qq install -y zstd && curl -fsSL https://ollama.com/install.sh | sh
     !nohup ollama serve > ollama.log 2>&1 &
     !sleep 5 && ollama pull qwen3.5:9b
-    !python teacher_generate.py --model qwen3.5:9b --limit 20     # look at teacher_raw.jsonl first
-    !python teacher_generate.py --model qwen3.5:9b                # the rest; rerun after a disconnect
+    !python teacher_generate.py --model qwen3.5:9b --limit 20
+    !python teacher_generate.py --model qwen3.5:9b
     !python judge_rows.py --model qwen3.5:9b
     !python build_sft.py --raw teacher_judged.jsonl --holdout test_questions.txt
 Writing to Drive means a Colab disconnect loses at most one row.
