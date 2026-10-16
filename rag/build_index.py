@@ -2,7 +2,7 @@
 """Build the thesis RAG index: English Linux docs -> chunks -> MiniLM embeddings -> ChromaDB.
 
 Usage (from the repo root):
-  python rag/build_index.py --snap corpus/snapshot-2026-10-11 --out rag/rag-index
+  python rag/build_index.py --snap corpus/snapshot-2026-10-11 --out rag/lab-index
   python rag/build_index.py --snap ... --out ... --sources tldr,command-manpages   # subset
   python rag/build_index.py --snap ... --out ... --chunks-only                     # just write chunks.jsonl
 
@@ -33,7 +33,7 @@ DEFAULT_SOURCES = ["tldr", "command-manpages", "man-pages", "ubuntu-docs", "gnom
 # ubuntu-server-docs is unlicensed (no LICENSE file; conf.py licence is TODO). Opt-in only.
 ALL = DEFAULT_SOURCES + ["ubuntu-server-docs"]
 LICENSE = {"tldr": "CC-BY-4.0", "command-manpages": "per package (licenses/command-manpages)",
-           "man-pages": "mixed (licenses/man-pages-LICENSES)", "ubuntu-docs": "CC-BY-SA-4.0",
+           "man-pages": "mixed (licenses/man-pages-LICENSES)", "ubuntu-docs": "CC-BY-SA-3.0",
            "gnome-user-docs": "CC-BY-SA-3.0", "arch-wiki": "GFDL-1.3-or-later",
            "ubuntu-server-docs": "unlicensed"}
 # Distro tag lets the app/eval notice when an Arch-only answer (pacman, AUR) is served for Ubuntu.
@@ -179,7 +179,7 @@ def main():
     here = Path(__file__).resolve().parent
     ap = argparse.ArgumentParser()
     ap.add_argument("--snap", required=True)
-    ap.add_argument("--out", default=str(here / "rag-index"))
+    ap.add_argument("--out", default=str(here / "lab-index"))
     ap.add_argument("--sources", default=",".join(DEFAULT_SOURCES))
     ap.add_argument("--chunks-only", action="store_true")
     ap.add_argument("--model", default="sentence-transformers/all-MiniLM-L6-v2")

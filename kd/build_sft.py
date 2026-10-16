@@ -24,6 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from shared.holdout import load_holdout, path_matches_gold_source
 from shared.prompt import ABSTAIN, SYSTEM, user_msg
 
 
@@ -70,12 +71,26 @@ def main():
     stats["kept"] = len(kept)
 
     if a.holdout:
-        from sentence_transformers import SentenceTransformer, util
-        hq = [q.strip() for q in open(a.holdout, encoding="utf-8") if q.strip()]
-        m = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device="cpu")
-        sim = util.cos_sim(m.encode([r["question"] for r in kept], normalize_embeddings=True), m.encode(hq, normalize_embeddings=True))
-        before = len(kept); kept = [r for r, row in zip(kept, sim) if float(row.max()) < a.holdout_sim]
-        stats["dropped_too_close_to_holdout"] = before - len(kept)
+        hq, gold_sources = load_holdout(a.holdout)
+        if gold_sources:
+            before = len(kept)
+            kept = [
+                r for r in kept
+                if not path_matches_gold_source(seeds[r["seed_id"]].get("path"), gold_sources)
+            ]
+            stats["dropped_source_path_holdout"] = before - len(kept)
+        if kept and hq:
+            from sentence_transformers import SentenceTransformer, util
+            m = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device="cpu")
+            sim = util.cos_sim(
+                m.encode([r["question"] for r in kept], normalize_embeddings=True),
+                m.encode(hq, normalize_embeddings=True),
+            )
+            before = len(kept)
+            kept = [r for r, row in zip(kept, sim) if float(row.max()) < a.holdout_sim]
+            stats["dropped_too_close_to_holdout"] = before - len(kept)
+        else:
+            stats["dropped_too_close_to_holdout"] = 0
 
     ids = list(seeds)
     cmd = lambda c: re.split(r"[\s(]", c["title"].strip().lower())[0]   # "readlink (tldr common)" -> "readlink"

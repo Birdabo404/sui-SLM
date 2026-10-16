@@ -16,6 +16,7 @@ corpus/snapshot-*/
 corpus/**/downloads/
 
 # RAG indexes
+rag/lab-index/
 rag/rag-index/
 rag/rag-index-trim/
 rag/rag-index-v2/

@@ -2,6 +2,7 @@
 """Syntax and small dry run for the Colab KD notebook and helpers. No GPU."""
 import ast
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -13,21 +14,28 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from app.engine import index_ok
 from kd.make_seed_chunks import DEFAULT_MIX
 from rag.build_index import DEFAULT_SOURCES, LICENSE
 from kd.colab_helpers import (
+    OLLAMA_CHAT_TEMPLATE,
     TEACHER_4B,
     TEACHER_9B,
     count_jsonl,
+    latest_sft_checkpoint,
     modelfile_text,
     ollama_create_cmd,
     questions_txt_from_jsonl,
     require_seeds,
+    resolve_chunks,
     resolve_heldout,
     resolve_seeds,
+    select_q4km_gguf,
     teacher_ollama_name,
     write_modelfile,
 )
+from shared.holdout import load_holdout, path_matches_gold_source
+from shared.paths import DEFAULT_INDEX, INDEX_NAME
 from shared.prompt import SYSTEM
 
 NB = ROOT / "kd" / "colab_distill.ipynb"
@@ -66,6 +74,7 @@ class NotebookSyntaxTests(unittest.TestCase):
         text = NB.read_text(encoding="utf-8")
         for needle in (
             "USE_4B_TEACHER",
+            "USE_QLORA = False",
             "your-heldout.jsonl",
             "teacher_generate.py",
             "judge_rows.py",
@@ -73,18 +82,33 @@ class NotebookSyntaxTests(unittest.TestCase):
             "--holdout",
             "qwen3.5:9b",
             "qwen3.5:4b",
-            "QLoRA",
+            "fp16 LoRA",
             "q4_k_m",
             "ollama create",
             "Ollama",
             "transformers 4-bit",
+            "transformers==5.3.0",
+            "trl==0.24.0",
+            "max_length",
+            "processing_class",
+            "assistant_only_loss",
+            "resume_from_checkpoint",
+            "FastLanguageModel",
+            "zstd",
+            "pciutils",
+            "/api/tags",
+            "1,116",
             "tldr=460",
+            "select_q4km_gguf",
         ):
             self.assertIn(needle, text, needle)
+        self.assertNotIn("save_pretrained_merged", text)
+        self.assertNotIn("PARAMETER think false", text)
+        self.assertNotIn("FastVisionModel", text)
 
 
 class DefaultCorpusTests(unittest.TestCase):
-    def test_default_seed_mix_drops_server_docs_and_keeps_1129(self):
+    def test_default_seed_mix_target_is_1129_without_server_docs(self):
         mix = {k: int(v) for k, v in (p.split("=") for p in DEFAULT_MIX.split(","))}
         self.assertNotIn("ubuntu-server-docs", mix)
         self.assertEqual(sum(mix.values()), 1129)
@@ -98,17 +122,137 @@ class DefaultCorpusTests(unittest.TestCase):
 
     def test_default_index_sources_drop_server_docs(self):
         self.assertNotIn("ubuntu-server-docs", DEFAULT_SOURCES)
-        self.assertEqual(LICENSE["ubuntu-docs"], "CC-BY-SA-4.0")
+        self.assertEqual(LICENSE["ubuntu-docs"], "CC-BY-SA-3.0")
         self.assertEqual(LICENSE["ubuntu-server-docs"], "unlicensed")
         self.assertEqual(LICENSE["gnome-user-docs"], "CC-BY-SA-3.0")
 
     def test_fetch_manifest_labels(self):
         script = (ROOT / "corpus" / "fetch_corpus.sh").read_text(encoding="utf-8")
         self.assertIn('INCLUDE_UBUNTU_SERVER="${INCLUDE_UBUNTU_SERVER:-0}"', script)
-        self.assertIn('get ubuntu-docs', script)
-        self.assertIn('"CC-BY-SA-4.0"', script)
+        self.assertIn("get ubuntu-docs", script)
+        self.assertIn('"CC-BY-SA-3.0"', script)
+        self.assertIn("ubuntu-docs-copyright", script)
         self.assertIn("unlicensed (no LICENSE; conf.py TODO)", script)
-        self.assertNotIn('"CC-BY-SA-3.0"', script)
+        self.assertIn("changelogs.ubuntu.com/changelogs/pool/main/u/ubuntu-docs", script)
+        legal_line = [
+            ln for ln in script.splitlines()
+            if "legalcode.txt" in ln and "CC-BY-SA-3.0" in ln
+        ]
+        self.assertTrue(legal_line)
+        self.assertNotIn("|| true", legal_line[0])
+
+
+class DefaultIndexTests(unittest.TestCase):
+    def test_shared_default_is_lab_index(self):
+        self.assertEqual(INDEX_NAME, "lab-index")
+        self.assertTrue(DEFAULT_INDEX.endswith("rag/lab-index") or DEFAULT_INDEX.endswith("rag\\lab-index"))
+
+    def test_listed_defaults_point_at_lab_index(self):
+        from app import engine as engine_mod
+        from kd import colab_helpers as helpers_mod
+
+        self.assertTrue(str(engine_mod.DEFAULT_INDEX).endswith(INDEX_NAME))
+        self.assertNotIn("rag-index-v2", engine_mod.DEFAULT_INDEX)
+        self.assertIn(
+            INDEX_NAME,
+            helpers_mod.SEEDS_MISSING.format(seeds="x", work="y", index=INDEX_NAME),
+        )
+        files = {
+            ROOT / "rag" / "query_hybrid.py": "lab-index",
+            ROOT / "rag" / "query.py": "lab-index",
+            ROOT / "kd" / "make_seed_chunks.py": "lab-index",
+            ROOT / "install.sh": "rag/lab-index",
+        }
+        for path, needle in files.items():
+            text = path.read_text(encoding="utf-8")
+            self.assertIn(needle, text, path.name)
+            if path.name != "install.sh":
+                self.assertNotIn("rag-index-v2", text, path.name)
+
+    def test_install_sh_does_not_reuse_v2_name(self):
+        text = (ROOT / "install.sh").read_text(encoding="utf-8")
+        self.assertIn("rag/lab-index", text)
+        self.assertNotIn("make_trimmed_index.py", text)
+        self.assertNotIn("--out rag/rag-index-v2", text)
+        self.assertNotIn("--out rag/rag-index\n", text)
+
+
+class IndexOkTests(unittest.TestCase):
+    def _index(self, folder, rows):
+        folder = Path(folder)
+        (folder / "chroma").mkdir(parents=True)
+        with open(folder / "chunks.jsonl", "w", encoding="utf-8") as f:
+            for row in rows:
+                f.write(json.dumps(row) + "\n")
+        return folder
+
+    def test_missing_files_are_false(self):
+        with tempfile.TemporaryDirectory() as td:
+            self.assertFalse(index_ok(td))
+
+    def test_clean_index_ok(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = self._index(td, [{"source": "tldr", "path": "tldr/ls.md"}])
+            self.assertTrue(index_ok(path))
+
+    def test_server_docs_fail_loudly(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = self._index(td, [
+                {"source": "tldr", "path": "tldr/ls.md"},
+                {"source": "ubuntu-server-docs", "path": "ubuntu-server-docs/ssh.md"},
+            ])
+            with self.assertRaises(SystemExit) as cm:
+                index_ok(path)
+            msg = str(cm.exception)
+            self.assertIn("ubuntu-server-docs", msg)
+            self.assertIn("INCLUDE_UBUNTU_SERVER=1", msg)
+
+    def test_server_docs_opt_in_flag(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = self._index(td, [{"source": "ubuntu-server-docs", "path": "s.md"}])
+            self.assertTrue(index_ok(path, allow_ubuntu_server=True))
+
+    def test_server_docs_opt_in_env(self):
+        with tempfile.TemporaryDirectory() as td:
+            path = self._index(td, [{"source": "ubuntu-server-docs", "path": "s.md"}])
+            old = os.environ.get("INCLUDE_UBUNTU_SERVER")
+            os.environ["INCLUDE_UBUNTU_SERVER"] = "1"
+            try:
+                self.assertTrue(index_ok(path))
+            finally:
+                if old is None:
+                    os.environ.pop("INCLUDE_UBUNTU_SERVER", None)
+                else:
+                    os.environ["INCLUDE_UBUNTU_SERVER"] = old
+
+
+class HoldoutPathTests(unittest.TestCase):
+    def test_path_matches_gold_source(self):
+        self.assertTrue(path_matches_gold_source("tldr/common/ls.md", ["tldr ls"]))
+        self.assertTrue(path_matches_gold_source("tldr/common/ls.md", ["tldr/common/ls.md"]))
+        self.assertFalse(path_matches_gold_source("command-manpages/ls.1", ["tldr ls"]))
+        self.assertTrue(path_matches_gold_source("command-manpages/ls.1", ["command-manpages ls"]))
+        self.assertFalse(path_matches_gold_source("tldr/common/pwd.md", ["tldr ls"]))
+
+    def test_load_holdout_jsonl_and_txt(self):
+        with tempfile.TemporaryDirectory() as td:
+            src = Path(td) / "h.jsonl"
+            src.write_text(
+                json.dumps({
+                    "id": "a",
+                    "question": "how do I list files",
+                    "source": "tldr ls",
+                }) + "\n",
+                encoding="utf-8",
+            )
+            questions, gold = load_holdout(src)
+            self.assertEqual(questions, ["how do I list files"])
+            self.assertEqual(gold, ["tldr ls"])
+            txt = Path(td) / "q.txt"
+            txt.write_text("how do I use tar\n", encoding="utf-8")
+            questions, gold = load_holdout(txt)
+            self.assertEqual(questions, ["how do I use tar"])
+            self.assertEqual(gold, [])
 
 
 class HelperTests(unittest.TestCase):
@@ -147,7 +291,10 @@ class HelperTests(unittest.TestCase):
     def test_modelfile(self):
         text = modelfile_text("student.gguf")
         self.assertIn("FROM ./student.gguf", text)
-        self.assertIn("think false", text)
+        self.assertNotIn("think false", text)
+        self.assertIn("TEMPLATE", text)
+        self.assertIn("<|im_start|>system", text)
+        self.assertIn(OLLAMA_CHAT_TEMPLATE[:20], text)
         self.assertIn(SYSTEM[:40], text)
         self.assertEqual(ollama_create_cmd("thesis-student"), "ollama create thesis-student -f Modelfile")
         with tempfile.TemporaryDirectory() as td:
@@ -159,6 +306,40 @@ class HelperTests(unittest.TestCase):
             with self.assertRaises(SystemExit) as cm:
                 require_seeds(td, td)
             self.assertIn("Seed chunks are missing", str(cm.exception))
+
+    def test_resolve_chunks_ignores_old_index_names(self):
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            old = td / "rag" / "rag-index-v2"
+            old.mkdir(parents=True)
+            (old / "chunks.jsonl").write_text("{}\n", encoding="utf-8")
+            self.assertIsNone(resolve_chunks(td, td))
+            fresh = td / "rag" / INDEX_NAME
+            fresh.mkdir(parents=True)
+            (fresh / "chunks.jsonl").write_text("{}\n", encoding="utf-8")
+            self.assertEqual(resolve_chunks(td, td), fresh / "chunks.jsonl")
+
+    def test_select_q4km_gguf(self):
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            with self.assertRaises(SystemExit) as cm:
+                select_q4km_gguf(td)
+            self.assertIn("Q4_K_M", str(cm.exception))
+            (td / "other.Q5_K_M.gguf").write_bytes(b"nope")
+            with self.assertRaises(SystemExit):
+                select_q4km_gguf(td)
+            wanted = td / "student.Q4_K_M.gguf"
+            wanted.write_bytes(b"ok")
+            self.assertEqual(select_q4km_gguf(td), wanted)
+
+    def test_latest_sft_checkpoint(self):
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            self.assertIsNone(latest_sft_checkpoint(td))
+            (td / "checkpoint-10").mkdir()
+            (td / "checkpoint-50").mkdir()
+            (td / "checkpoint-2").mkdir()
+            self.assertEqual(latest_sft_checkpoint(td).name, "checkpoint-50")
 
 
 class MockOllama(BaseHTTPRequestHandler):
@@ -188,6 +369,44 @@ class MockOllama(BaseHTTPRequestHandler):
 
 
 class PipelineDryRunTests(unittest.TestCase):
+    def test_seed_holdout_drops_matching_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            chunks = td / "chunks.jsonl"
+            rows = [
+                _chunk("tldr", "ls (tldr common)", "tldr/common/ls.md", "ls lists files. `ls` `ls -l`."),
+                _chunk("tldr", "pwd (tldr common)", "tldr/common/pwd.md", "pwd prints the working directory. `pwd`."),
+            ]
+            with open(chunks, "w", encoding="utf-8") as f:
+                for r in rows:
+                    f.write(json.dumps(r) + "\n")
+            holdout = td / "your-heldout.jsonl"
+            holdout.write_text(
+                json.dumps({
+                    "id": "h1",
+                    "question": "how do I list files",
+                    "source": "tldr ls",
+                }) + "\n",
+                encoding="utf-8",
+            )
+            seeds = td / "seed_chunks.jsonl"
+            r = subprocess.run(
+                [
+                    sys.executable, str(ROOT / "kd" / "make_seed_chunks.py"),
+                    "--chunks", str(chunks),
+                    "--out", str(seeds),
+                    "--mix", "tldr=2",
+                    "--holdout", str(holdout),
+                ],
+                cwd=str(ROOT),
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+            self.assertIn("dropped_source_path_holdout 1", r.stdout)
+            kept = [json.loads(l) for l in seeds.read_text().splitlines() if l.strip()]
+            self.assertEqual([k["path"] for k in kept], ["tldr/common/pwd.md"])
+
     def test_seed_teacher_judge_sft_holdout(self):
         with tempfile.TemporaryDirectory() as td:
             td = Path(td)
@@ -290,8 +509,6 @@ class PipelineDryRunTests(unittest.TestCase):
                 }) + "\n",
                 encoding="utf-8",
             )
-            qtxt = td / "holdout_questions.txt"
-            questions_txt_from_jsonl(holdout, qtxt)
             train = td / "sft_train.jsonl"
             val = td / "sft_val.jsonl"
             r = subprocess.run(
@@ -299,7 +516,7 @@ class PipelineDryRunTests(unittest.TestCase):
                     sys.executable, str(ROOT / "kd" / "build_sft.py"),
                     "--raw", str(judged),
                     "--seeds", str(seeds),
-                    "--holdout", str(qtxt),
+                    "--holdout", str(holdout),
                     "--out-train", str(train),
                     "--out-val", str(val),
                     "--holdout-sim", "0.80",
@@ -309,6 +526,7 @@ class PipelineDryRunTests(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+            self.assertIn("dropped_source_path_holdout", r.stdout)
             self.assertIn("dropped_too_close_to_holdout", r.stdout)
 
 

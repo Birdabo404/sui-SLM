@@ -20,7 +20,7 @@ Ollama is not installed by the script. Install it first from https://ollama.com/
 
 Fetch scripts: after `bash corpus/fetch_corpus.sh`, the man-page and GNOME scripts pick the newest `corpus/snapshot-*` folder. Set `SNAP=` to override.
 
-Rebuild the index on the laptop. Ubuntu Server docs are no longer in the default sources (canonical/ubuntu-server-documentation has no license). chromadb 1.0.8 also cannot read a 0.6.3 `chroma/` folder. Do not copy an old `rag-index` or `rag-index-v2` forward.
+Rebuild the index on the laptop into `rag/lab-index`. Ubuntu Server docs are no longer in the default sources (canonical/ubuntu-server-documentation has no license). chromadb 1.0.8 also cannot read a 0.6.3 `chroma/` folder. Do not copy an old `rag-index` or `rag-index-v2` forward. `index_ok` exits if `chunks.jsonl` still has `source=ubuntu-server-docs` unless `INCLUDE_UBUNTU_SERVER=1`.
 
 ## Run
 
@@ -72,6 +72,6 @@ docs/         Chapter 3 methodology outline
 
 - tldr-pages: CC BY 4.0
 - man-pages: mixed
-- Ubuntu desktop help: CC BY-SA 4.0 (`help.ubuntu.com/legal.html`)
+- Ubuntu desktop help: CC BY-SA 3.0 (ubuntu-docs `.deb` copyright, `Files: ubuntu-help/*/*.page*`; `ubuntu-docs_26.04.1/copyright`). `help.ubuntu.com/legal.html` has said 4.0; we cite the package copyright.
 - GNOME help: CC BY-SA 3.0
 - Ubuntu Server docs: not in the default corpus (no LICENSE file). `INCLUDE_UBUNTU_SERVER=1` to fetch anyway.

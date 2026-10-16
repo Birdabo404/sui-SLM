@@ -1,5 +1,6 @@
 """Chat turn logic used by the Streamlit app and eval. Ollama is localhost only."""
 import csv
+import json
 import os
 import subprocess
 import threading
@@ -11,13 +12,12 @@ import psutil
 import requests
 
 from shared.frozen import format_threshold, load_frozen
+from shared.paths import DEFAULT_INDEX, INDEX_NAME, ROOT
 from shared.prompt import ABSTAIN, MODES, system_for_mode, user_msg
 
-ROOT = Path(__file__).resolve().parent.parent
 BASE_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.5:2b")
 DISTILLED_MODEL = os.environ.get("OLLAMA_DISTILLED_MODEL", "")
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
-DEFAULT_INDEX = os.environ.get("RAG_INDEX", str(ROOT / "rag" / "rag-index-v2"))
 LOG_CSV = Path(os.environ.get("LOG_CSV", str(ROOT / "logs" / "answers.csv")))
 _FROZEN = load_frozen()
 K = _FROZEN["k"]
@@ -71,9 +71,32 @@ def is_weak(hits, threshold=None):
     return max(sims) < threshold
 
 
-def index_ok(path):
+def index_ok(path, allow_ubuntu_server=None):
+    """True if the index files exist. Exits if leftover Server-docs chunks are present.
+
+    Set INCLUDE_UBUNTU_SERVER=1 or allow_ubuntu_server=True to opt in.
+    """
     p = Path(path)
-    return (p / "chunks.jsonl").is_file() and (p / "chroma").is_dir()
+    chunks = p / "chunks.jsonl"
+    if not (chunks.is_file() and (p / "chroma").is_dir()):
+        return False
+    if allow_ubuntu_server is None:
+        allow_ubuntu_server = os.environ.get("INCLUDE_UBUNTU_SERVER", "0") == "1"
+    if allow_ubuntu_server:
+        return True
+    with open(chunks, encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if row.get("source") == "ubuntu-server-docs":
+                raise SystemExit(
+                    f"{chunks} contains source=ubuntu-server-docs. "
+                    "That tree is unlicensed and not in the default corpus. "
+                    f"Rebuild with: python rag/build_index.py --out rag/{INDEX_NAME} "
+                    "or set INCLUDE_UBUNTU_SERVER=1 to opt in."
+                )
+    return True
 
 
 def config_id(model_key, mode):

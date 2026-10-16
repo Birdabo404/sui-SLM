@@ -1,18 +1,24 @@
-# Thesis RAG index (built 2026-10-11 on the box)
+# Thesis RAG index
 
-Corpus: corpus/snapshot-2026-10-11 (English only).
-Index:  rag-index/chroma (ChromaDB, collection "linux_lab", all-MiniLM-L6-v2, cosine), rag-index/chunks.jsonl
-Size:   48,391 chunks (~1000 chars each): arch-wiki 22.9k, command-manpages 14.7k, tldr 7.4k,
-        man-pages 2.8k, gnome-user-docs 641, ubuntu-docs 29. Build took ~9 min on 8 CPU cores, 463 MB on disk.
-
-Rebuild on the laptop (needs groff). Default sources no longer include Ubuntu Server docs (no license)
-or Arch Wiki. chromadb 1.0.8 cannot read a 0.6.3 index. Do not reuse an old chroma/ or rag-index-v2:
+Current default: `rag/lab-index` (ChromaDB collection `linux_lab`, all-MiniLM-L6-v2, cosine).
+Rebuild on the laptop. Default sources skip Ubuntu Server docs (no license) and Arch Wiki.
+chromadb 1.0.8 cannot read a 0.6.3 index. Do not reuse `rag-index` or `rag-index-v2`:
   python3 -m venv .venv && . .venv/bin/activate
   pip install torch==2.9.1 --index-url https://download.pytorch.org/whl/cpu
   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
-  python rag/build_index.py --snap corpus/snapshot-2026-10-11 --out rag/rag-index
+  python rag/build_index.py --snap corpus/snapshot-YYYY-MM-DD --out rag/lab-index
 Ask:  python rag/query.py "how do I extract a tar.gz file"            (dense only)
       python rag/query_hybrid.py --tldr-lane "..."                    (dense + keyword + tldr lane)
+
+Older trees (`rag-index`, `rag-index-trim`, `rag-index-v2`) are historical only. Counts and
+spot-check notes below describe those builds, not `lab-index`.
+
+## Historical: first box build (2026-10-11), rag-index/
+
+Corpus: corpus/snapshot-2026-10-11 (English only).
+Index:  rag-index/chroma, rag-index/chunks.jsonl
+Size:   48,391 chunks (~1000 chars each): arch-wiki 22.9k, command-manpages 14.7k, tldr 7.4k,
+        man-pages 2.8k, gnome-user-docs 641, ubuntu-docs 29. Build took ~9 min on 8 CPU cores, 463 MB on disk.
 
 Known weaknesses from spot checks:
 - Dense-only retrieval misses obvious pages ("ssh to another PC" -> VirtualBox, Arch install pages).
@@ -53,7 +59,7 @@ Ubuntu Server docs: canonical/ubuntu-server-documentation @ 9c2b8ca3a6db (2026-1
 Size: 21,814 chunks, 220 MB: command-manpages 14,799, man-pages 2,782, ubuntu-server-docs 2,632,
       tldr 932, gnome-user-docs 640, ubuntu-docs 29.
 The ubuntu-server-docs loader is still in build_index.py as an opt-in (`--sources ...,ubuntu-server-docs`).
-Use current default:  python rag/query_hybrid.py --index rag/rag-index --tldr-lane "..."
+Use current default:  python rag/query_hybrid.py --index rag/lab-index --tldr-lane "..."
 
 Spot check, same 24 questions (TUNING questions, not a held-out eval), trim/*-v2-2026-10-12.txt:
                  trim (Arch excluded)   v2

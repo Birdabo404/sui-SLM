@@ -21,12 +21,12 @@ Matches what the repo actually builds. This is a section outline, not chapter pr
   - tldr-pages: CC BY 4.0
   - command-manpages: per package (see `licenses/command-manpages`)
   - man-pages: mixed (see `licenses/man-pages-LICENSES`); sections 1/5/7/8 only (2/3 are C APIs)
-  - Ubuntu desktop help: CC BY-SA 4.0 (`help.ubuntu.com/legal.html`)
+  - Ubuntu desktop help: CC BY-SA 3.0 (ubuntu-docs `.deb` copyright, `Files: ubuntu-help/*/*.page*`; https://changelogs.ubuntu.com/changelogs/pool/main/u/ubuntu-docs/ubuntu-docs_26.04.1/copyright). `help.ubuntu.com/legal.html` has said 4.0; we cite the package copyright.
   - GNOME user docs: CC BY-SA 3.0
 - Ubuntu Server docs are not in the default corpus. `canonical/ubuntu-server-documentation` has no LICENSE file, `docs/conf.py` licence is TODO, and the site only shows a copyright footer. Opt-in: `INCLUDE_UBUNTU_SERVER=1` and `--sources ...,ubuntu-server-docs`. MANIFEST must say unlicensed, not CC-BY-SA.
 - Arch Wiki is on disk for old indexes only. Dropped from default `build_index.py --sources` (pacman/AUR answers are wrong on the Ubuntu lab image).
 - English only. Alias stubs and link-list landing pages are filtered.
-- The laptop must rebuild the index after this drop. Do not reuse `rag-index-v2` from 2026-10-12 (that tree still has 2,632 Server-docs chunks).
+- The laptop must rebuild the index into `rag/lab-index`. Do not reuse `rag-index` or `rag-index-v2` from 2026-10-12 (v2 still has 2,632 Server-docs chunks). `index_ok` exits if `chunks.jsonl` contains `source=ubuntu-server-docs` unless `INCLUDE_UBUNTU_SERVER=1`.
 - TODO: snapshot date actually used on the T14 (`corpus/snapshot-YYYY-MM-DD`).
 - TODO: chunk counts per source after the T14 rebuild (old v2 with Server docs was 21,814 chunks: command-manpages 14,799; man-pages 2,782; ubuntu-server-docs 2,632; tldr 932; gnome-user-docs 640; ubuntu-docs 29).
 
@@ -58,13 +58,14 @@ Matches what the repo actually builds. This is a section outline, not chapter pr
 - This is response-level (sequence-level) KD: a larger teacher writes grounded Q&A, then the 2B is SFT'd on those chat rows. There is no logit / temperature / KL distillation.
 - Teacher default: `qwen3.5:9b` through Ollama. The existing scripts (`kd/teacher_generate.py`, `kd/judge_rows.py`) only speak Ollama's HTTP API. Colab notebook: `kd/colab_distill.ipynb` on a free T4. `USE_4B_TEACHER = True` falls back to `qwen3.5:4b` if 9B will not load.
 - Why Ollama, not transformers 4-bit, for the teacher: the KD scripts already talk to Ollama; `qwen3.5:9b` is already a ~6.6–7.6 GB Q4 and fits a T4 16 GB card. A transformers 4-bit teacher would be a second stack.
-- Data steps (resume-safe; Drive flush each row):
-  1. `make_seed_chunks.py` (seed 42): one chunk per page. Default mix (1129 target, no Server docs): tldr=460, command-manpages=295, man-pages=115, gnome-user-docs=230, ubuntu-docs=29. The 150 rows that used to be ubuntu-server-docs went to tldr +60, command-manpages +45, gnome-user-docs +30, man-pages +15. ubuntu-docs is unchanged; only ~16 pages usually qualify. No Arch.
+- Data steps (resume-safe):
+  Teacher and judge append JSONL on Drive (one row at a time). SFT uses `resume_from_checkpoint` when `sft-out/checkpoint-*` exists. GGUF export reloads adapters from `work/lora`, not the in-memory trainer objects.
+  1. `make_seed_chunks.py` (seed 42): one chunk per page. Mix target (no Server docs): tldr=460, command-manpages=295, man-pages=115, gnome-user-docs=230, ubuntu-docs=29. ubuntu-docs usually has about 16 qualifying pages, so the written file is about 1,116 rows, not the 1,129 mix total. Report the printed count. `--holdout` also drops chunks whose path matches a held-out `gold_source`. No Arch.
   2. `teacher_generate.py`: one student-style question + 2–5 steps + answer, facts only from that chunk.
   3. `judge_rows.py`: second teacher pass, yes/no on support and whether it answers the question.
-  4. `build_sft.py --holdout`: drop bad JSON, skip, judge=no, invented backticked commands/flags. Answerable rows = source chunk + 2 distractors. Abstain rows (~25%) = same question, no source chunk, target = `ABSTAIN`. Train/val split by seed chunk.
-- Student: LoRA / QLoRA SFT of `Qwen/Qwen3.5-2B` (notebook uses Unsloth; `USE_QLORA` is on). Unsloth documents large 4-bit error on Qwen3.5 and prefers bf16 LoRA (~5 GB VRAM for 2B, still T4-sized). Record which flag you used.
-- Merge adapters, export GGUF `Q4_K_M`, `ollama create` on the laptop. Distilled config is skipped until `--distilled` / `OLLAMA_DISTILLED_MODEL` is set.
+  4. `build_sft.py --holdout`: drop bad JSON, skip, judge=no, invented backticked commands/flags, then path-holdout and 0.80 question-cosine holdout. Answerable rows = source chunk + 2 distractors. Abstain rows (~25%) = same question, no source chunk, target = `ABSTAIN`. Train/val split by seed chunk.
+- Student: fp16 LoRA SFT of `unsloth/Qwen3.5-2B`. The method is LoRA, not QLoRA. `USE_QLORA` defaults to False. The T4 has no bf16; `load_in_16bit` is fp16 on that card (~5 GB). Unsloth documents large 4-bit error on Qwen3.5. `FastLanguageModel` is the text-only loader (Qwen3.5 is a VLM; `FastVisionModel` is for vision).
+- Export GGUF `Q4_K_M` with `save_pretrained_gguf` (it merges on its own; do not run `save_pretrained_merged` first). `ollama create` on the laptop. Distilled config is skipped until `--distilled` / `OLLAMA_DISTILLED_MODEL` is set.
 - TODO: teacher model actually used (9B or 4B) and Colab GPU type.
 - TODO: seed count, rows generated, rows dropped (bad JSON / skip / judge / invented flag / holdout-near). The invented-flag count is a Ch4 number.
 - TODO: SFT epochs, max seq, LoRA rank, train/val sizes, train loss curve.
@@ -91,12 +92,12 @@ Matches what the repo actually builds. This is a section outline, not chapter pr
 - `--split` is required: `dev` or `test`. JSONL fields: `id`, `question`, `answerable`, `gold_answer`, `source`. Optional `set`: `tuning` | `unanswerable` | `held-out`.
 - Dev (`eval/dev.jsonl`): 24 ranking-tuning questions (`set=tuning`) plus labeled unanswerable rows. Threshold / k sweep runs here only. These 24 were also used for earlier spot checks, so they are not a clean test set.
 - Test: 150–200 hand-written held-out questions (`eval/your-heldout.jsonl`). `eval/test.jsonl` is a format placeholder (`placeholder: true`). Do not report results from it.
-- `build_sft.py --holdout` drops training questions with MiniLM cosine >= 0.80 vs any held-out question. Write the held-out file before SFT.
+- Leakage: `make_seed_chunks.py --holdout` and `build_sft.py --holdout` drop seeds or SFT rows whose source path matches a held-out `gold_source` / `source`. `build_sft.py` then also drops training questions with MiniLM cosine >= 0.80 vs any held-out question. Both print the drop counts. Write the held-out file before those steps.
 - `--split test` refuses the sweep and refuses threshold / k / frozen overrides. Use the committed `shared/frozen.json`.
 - Seed 42 and temperature 0 on every eval row. Every row records `split`, `threshold`, `k`.
 - TODO: write the real held-out file (count, how many answerable / unanswerable, who wrote it, date). Keep it out of git if the repo is public (`.gitignore` lists `eval/your-heldout.jsonl`).
 - TODO: confirm no question string overlap between `eval/dev.jsonl` and the real held-out file.
-- TODO: confirm `dropped_too_close_to_holdout` from `build_sft.py`.
+- TODO: confirm `dropped_source_path_holdout` and `dropped_too_close_to_holdout` from `build_sft.py`.
 
 ## 3.8 Metrics
 
@@ -139,7 +140,7 @@ Score the five configs on the held-out test file (`--split test --no-sweep`). Do
 - Abstain SFT rows use random distractors, not retrieved-but-wrong pages. Easy negatives.
 - Teacher may invent flags; the filter drops those rows and the leftover errors are still possible. Judge is the same model family.
 - Ubuntu Server docs were dropped from the default corpus (no license). Arch Wiki was removed because it answers for the wrong distro.
-- Colab T4 can disconnect; teacher/judge resume from the JSONL on Drive. A 4B teacher is a weaker teacher, not the same run.
-- Unsloth advises against 4-bit QLoRA on Qwen3.5. If `USE_QLORA=True`, say so in Ch4.
+- Colab T4 can disconnect; teacher/judge resume from the JSONL on Drive; SFT resumes from `sft-out/checkpoint-*`; GGUF reloads `work/lora`. A 4B teacher is a weaker teacher, not the same run.
+- The default student method is fp16 LoRA. Unsloth advises against 4-bit QLoRA on Qwen3.5. If `USE_QLORA=True`, say so in Ch4.
 - MiniLM holdout filter (0.80 cosine) can miss paraphrases and can over-drop near-duplicates that are still fair train items.
 - Spot-check 22/24 (hybrid + tldr lane on v2) was tuned on the same 24 questions as `eval/dev.jsonl`. Do not call that a test result.

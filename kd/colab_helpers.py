@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from urllib.error import URLError
+from urllib.request import urlopen
 
+from shared.paths import INDEX_NAME
 from shared.prompt import SYSTEM
 
 REPO_URL = "https://github.com/Birdabo404/sui-SLM.git"
@@ -12,6 +15,18 @@ STUDENT_HF = "unsloth/Qwen3.5-2B"
 TEACHER_9B = "qwen3.5:9b"
 TEACHER_4B = "qwen3.5:4b"
 OLLAMA_NAME = "thesis-student"
+OLLAMA_TAGS_URL = "http://127.0.0.1:11434/api/tags"
+# ChatML, same roles the app sends on /api/chat (system, user, assistant).
+# think is not a Modelfile PARAMETER; the app and eval send think:false.
+OLLAMA_CHAT_TEMPLATE = (
+    "{{ if .System }}<|im_start|>system\n"
+    "{{ .System }}<|im_end|>\n"
+    "{{ end }}{{ range .Messages }}{{ if eq .Role \"user\" }}<|im_start|>user\n"
+    "{{ .Content }}<|im_end|>\n"
+    "{{ else if eq .Role \"assistant\" }}<|im_start|>assistant\n"
+    "{{ .Content }}<|im_end|>\n"
+    "{{ end }}{{ end }}<|im_start|>assistant\n"
+)
 HELDOUT_MISSING = (
     "Held-out questions file is missing: {path}\n"
     "Write 150-200 questions as JSONL with fields "
@@ -23,9 +38,9 @@ HELDOUT_MISSING = (
 )
 SEEDS_MISSING = (
     "Seed chunks are missing: {seeds}\n"
-    "On the laptop, after the v2 index exists:\n"
+    "On the laptop, after rag/{index}/ exists:\n"
     "  python kd/make_seed_chunks.py "
-    "--chunks rag/rag-index-v2/chunks.jsonl --out kd/seed_chunks.jsonl\n"
+    "--chunks rag/{index}/chunks.jsonl --out kd/seed_chunks.jsonl\n"
     "Copy seed_chunks.jsonl or chunks.jsonl to {work}."
 )
 
@@ -61,7 +76,7 @@ def resolve_heldout(candidates, work_dir):
 
 
 def questions_txt_from_jsonl(src, dest):
-    """Write one question per line for build_sft.py --holdout."""
+    """Write one question per line for tools that still want a .txt holdout."""
     src = Path(src)
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -87,8 +102,7 @@ def resolve_chunks(work_dir, repo_dir):
     repo_dir = Path(repo_dir)
     for p in (
         work_dir / "chunks.jsonl",
-        repo_dir / "rag" / "rag-index-v2" / "chunks.jsonl",
-        repo_dir / "rag" / "rag-index" / "chunks.jsonl",
+        repo_dir / "rag" / INDEX_NAME / "chunks.jsonl",
     ):
         if p.is_file():
             return p
@@ -108,7 +122,55 @@ def require_seeds(work_dir, repo_dir):
     seeds = resolve_seeds(work_dir, repo_dir)
     if seeds is not None:
         return seeds
-    raise SystemExit(SEEDS_MISSING.format(seeds=Path(work_dir) / "seed_chunks.jsonl", work=work_dir))
+    raise SystemExit(SEEDS_MISSING.format(
+        seeds=Path(work_dir) / "seed_chunks.jsonl",
+        work=work_dir,
+        index=INDEX_NAME,
+    ))
+
+
+def latest_sft_checkpoint(out_dir):
+    """Highest-numbered sft-out/checkpoint-* directory, or None."""
+    out_dir = Path(out_dir)
+    if not out_dir.is_dir():
+        return None
+    ckpts = [p for p in out_dir.glob("checkpoint-*") if p.is_dir()]
+    if not ckpts:
+        return None
+
+    def step(p):
+        tail = p.name.split("-", 1)[-1]
+        try:
+            return int(tail)
+        except ValueError:
+            return -1
+
+    return max(ckpts, key=step)
+
+
+def select_q4km_gguf(directory):
+    """Return the *Q4_K_M*.gguf file. Stop if it is missing. Never invent a name."""
+    directory = Path(directory)
+    matches = sorted(
+        {
+            *directory.glob("*Q4_K_M*.gguf"),
+            *directory.glob("*q4_k_m*.gguf"),
+        }
+    )
+    if not matches:
+        raise SystemExit(
+            f"No *Q4_K_M*.gguf in {directory}. "
+            "Re-run the GGUF export cell. Refusing to guess a filename."
+        )
+    return matches[0]
+
+
+def ollama_tags_ok(url=OLLAMA_TAGS_URL, timeout=2):
+    try:
+        urlopen(url, timeout=timeout)
+        return True
+    except (URLError, OSError, TimeoutError):
+        return False
 
 
 def modelfile_text(gguf_filename, system=None, temperature=0, num_ctx=4096):
@@ -117,7 +179,7 @@ def modelfile_text(gguf_filename, system=None, temperature=0, num_ctx=4096):
         f"FROM ./{Path(gguf_filename).name}\n"
         f"PARAMETER temperature {temperature}\n"
         f"PARAMETER num_ctx {num_ctx}\n"
-        "PARAMETER think false\n"
+        f'TEMPLATE """{OLLAMA_CHAT_TEMPLATE}"""\n'
         f'SYSTEM """{system}"""\n'
     )
 

@@ -42,12 +42,25 @@ tar --zstd -xf "downloads/$AW" -C arch-wiki usr/share/doc/arch-wiki/html
 curl -fsL -o licenses/arch-wiki-GFDL-1.3.txt https://www.gnu.org/licenses/fdl-1.3.txt
 fi
 
-# 4) Ubuntu desktop help (ubuntu-docs package) - CC BY-SA 4.0 (help.ubuntu.com/legal.html)
+# 4) Ubuntu desktop help (ubuntu-docs). Indexed pages are ubuntu-help/*/*.page*.
+# License is CC-BY-SA-3.0 in the ubuntu-docs .deb copyright:
+# https://changelogs.ubuntu.com/changelogs/pool/main/u/ubuntu-docs/ubuntu-docs_26.04.1/copyright
+# help.ubuntu.com/legal.html has said 4.0; we cite the package copyright.
 DEB="ubuntu-docs_${UBUNTU_DOCS}_all.deb"
-get ubuntu-docs "$UBUNTU_DOCS" "http://archive.ubuntu.com/ubuntu/pool/main/u/ubuntu-docs/$DEB" "$DEB" "CC-BY-SA-4.0"
+get ubuntu-docs "$UBUNTU_DOCS" "http://archive.ubuntu.com/ubuntu/pool/main/u/ubuntu-docs/$DEB" "$DEB" "CC-BY-SA-3.0"
 dpkg-deb -x "downloads/$DEB" ubuntu-docs
 find ubuntu-docs -iname 'copyright' -exec cp {} licenses/ubuntu-docs-copyright \; -quit
-curl -fsL -o licenses/CC-BY-SA-4.0-legalcode.txt https://creativecommons.org/licenses/by-sa/4.0/legalcode.txt || true
+if [ ! -f licenses/ubuntu-docs-copyright ]; then
+  echo "ERROR: ubuntu-docs .deb copyright file was not in the package." >&2
+  exit 1
+fi
+if ! grep -q "CC-BY-SA-3.0" licenses/ubuntu-docs-copyright; then
+  echo "ERROR: ubuntu-docs copyright does not say CC-BY-SA-3.0. Check licenses/ubuntu-docs-copyright before labeling the corpus." >&2
+  exit 1
+fi
+if ! curl -fsL --retry 3 -o licenses/CC-BY-SA-3.0-legalcode.txt https://creativecommons.org/licenses/by-sa/3.0/legalcode.txt; then
+  echo "WARNING: could not download CC-BY-SA-3.0 legalcode.txt. The .deb copyright is in licenses/ubuntu-docs-copyright." >&2
+fi
 
 # 5) Ubuntu Server documentation. Unlicensed. Opt-in only.
 if [ "$INCLUDE_UBUNTU_SERVER" = 1 ]; then

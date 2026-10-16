@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Ask the index a question and see the top chunks with their sources.
-  python rag/query.py --index rag/rag-index-v2 "how do I extract a tar.gz file"
-  python rag/query.py --index rag/rag-index-v2 --exclude-distro arch "install a package"
+  python rag/query.py --index rag/lab-index "how do I extract a tar.gz file"
+  python rag/query.py --index rag/lab-index --exclude-distro arch "install a package"
 """
 import argparse
 import os
@@ -18,7 +18,7 @@ except ImportError:
 HERE = Path(__file__).resolve().parent
 ap = argparse.ArgumentParser()
 ap.add_argument("question")
-ap.add_argument("--index", default=str(HERE / "rag-index-v2"))
+ap.add_argument("--index", default=os.environ.get("RAG_INDEX", str(HERE / "lab-index")))
 ap.add_argument("-k", type=int, default=5)
 ap.add_argument("--exclude-distro", default=None)
 a = ap.parse_args()
