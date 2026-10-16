@@ -25,7 +25,6 @@ from kd.colab_helpers import (
     latest_sft_checkpoint,
     modelfile_text,
     ollama_create_cmd,
-    questions_txt_from_jsonl,
     require_seeds,
     resolve_chunks,
     resolve_heldout,
@@ -34,7 +33,8 @@ from kd.colab_helpers import (
     teacher_ollama_name,
     write_modelfile,
 )
-from shared.holdout import load_holdout, path_matches_gold_source
+from shared.chatml import ASSISTANT_PREFIX, render_chatml
+from shared.holdout import gold_source_stem, load_holdout, path_matches_gold_source
 from shared.paths import DEFAULT_INDEX, INDEX_NAME
 from shared.prompt import SYSTEM
 
@@ -88,23 +88,30 @@ class NotebookSyntaxTests(unittest.TestCase):
             "Ollama",
             "transformers 4-bit",
             "transformers==5.3.0",
-            "trl==0.24.0",
+            "trl==0.28.0",
+            "unsloth==2026.10.6",
+            "unsloth_zoo==2026.10.6",
             "max_length",
             "processing_class",
-            "assistant_only_loss",
+            "train_on_responses_only",
             "resume_from_checkpoint",
             "FastLanguageModel",
             "zstd",
             "pciutils",
+            "apt-get", "update",
             "/api/tags",
             "1,116",
             "tldr=460",
             "select_q4km_gguf",
+            "SFTConfig",
         ):
             self.assertIn(needle, text, needle)
         self.assertNotIn("save_pretrained_merged", text)
         self.assertNotIn("PARAMETER think false", text)
         self.assertNotIn("FastVisionModel", text)
+        self.assertNotIn("questions_txt_from_jsonl", text)
+        self.assertNotIn("holdout_questions.txt", text)
+        self.assertNotIn("assistant_only_loss=True", text)
 
 
 class DefaultCorpusTests(unittest.TestCase):
@@ -227,12 +234,23 @@ class IndexOkTests(unittest.TestCase):
 
 
 class HoldoutPathTests(unittest.TestCase):
+    def test_gold_source_stem(self):
+        self.assertEqual(gold_source_stem("ls"), "ls")
+        self.assertEqual(gold_source_stem("tldr ls"), "ls")
+        self.assertEqual(gold_source_stem("man ls"), "ls")
+        self.assertEqual(gold_source_stem("ssh(1)"), "ssh")
+        self.assertEqual(gold_source_stem("tldr/common/ls.md"), "ls")
+        self.assertEqual(gold_source_stem("command-manpages/ls.1"), "ls")
+
     def test_path_matches_gold_source(self):
         self.assertTrue(path_matches_gold_source("tldr/common/ls.md", ["tldr ls"]))
-        self.assertTrue(path_matches_gold_source("tldr/common/ls.md", ["tldr/common/ls.md"]))
-        self.assertFalse(path_matches_gold_source("command-manpages/ls.1", ["tldr ls"]))
-        self.assertTrue(path_matches_gold_source("command-manpages/ls.1", ["command-manpages ls"]))
+        self.assertTrue(path_matches_gold_source("tldr/common/ls.md", ["ls"]))
+        self.assertTrue(path_matches_gold_source("command-manpages/ls.1", ["tldr ls"]))
+        self.assertTrue(path_matches_gold_source("man-pages/man/man1/ls.1", ["man ls"]))
+        self.assertTrue(path_matches_gold_source("command-manpages/ssh.1", ["ssh(1)"]))
         self.assertFalse(path_matches_gold_source("tldr/common/pwd.md", ["tldr ls"]))
+        self.assertFalse(path_matches_gold_source("tldr/common/tools.md", ["ls"]))
+        self.assertFalse(path_matches_gold_source("tldr/common/false.md", ["ls"]))
 
     def test_load_holdout_jsonl_and_txt(self):
         with tempfile.TemporaryDirectory() as td:
@@ -269,37 +287,39 @@ class HelperTests(unittest.TestCase):
             self.assertIn("eval/test.jsonl", msg)
             self.assertIn("150-200", msg)
 
-    def test_questions_txt_from_jsonl(self):
-        with tempfile.TemporaryDirectory() as td:
-            src = Path(td) / "h.jsonl"
-            src.write_text(
-                "# comment\n"
-                + json.dumps({"id": "a", "question": "how do I list files"})
-                + "\n"
-                + json.dumps({"id": "b", "question": "how do I use tar"})
-                + "\n",
-                encoding="utf-8",
-            )
-            dest = Path(td) / "q.txt"
-            n = questions_txt_from_jsonl(src, dest)
-            self.assertEqual(n, 2)
-            self.assertEqual(dest.read_text(encoding="utf-8").splitlines(), [
-                "how do I list files",
-                "how do I use tar",
-            ])
-
     def test_modelfile(self):
         text = modelfile_text("student.gguf")
         self.assertIn("FROM ./student.gguf", text)
         self.assertNotIn("think false", text)
         self.assertIn("TEMPLATE", text)
+        self.assertIn('PARAMETER stop "<|im_end|>"', text)
+        self.assertIn(ASSISTANT_PREFIX, text)
+        self.assertTrue(OLLAMA_CHAT_TEMPLATE.endswith(ASSISTANT_PREFIX))
         self.assertIn("<|im_start|>system", text)
-        self.assertIn(OLLAMA_CHAT_TEMPLATE[:20], text)
         self.assertIn(SYSTEM[:40], text)
         self.assertEqual(ollama_create_cmd("thesis-student"), "ollama create thesis-student -f Modelfile")
         with tempfile.TemporaryDirectory() as td:
             p = write_modelfile(Path(td) / "Modelfile", "x.gguf")
             self.assertTrue(p.is_file())
+
+    def test_sft_text_matches_modelfile_prefix(self):
+        messages = [
+            {"role": "system", "content": SYSTEM},
+            {"role": "user", "content": "Question: how do I list files"},
+            {"role": "assistant", "content": "Use `ls`."},
+        ]
+        rendered = render_chatml(messages)
+        mf = modelfile_text("student.gguf")
+        self.assertIn("<|im_end|>\n" + ASSISTANT_PREFIX, rendered)
+        self.assertTrue(rendered.endswith("Use `ls`.<|im_end|>\n"))
+        self.assertIn(ASSISTANT_PREFIX, mf)
+        self.assertEqual(
+            render_chatml(messages[:2], add_generation_prompt=True),
+            render_chatml(messages[:2]) + ASSISTANT_PREFIX,
+        )
+        gen = render_chatml(messages[:2], add_generation_prompt=True)
+        self.assertTrue(gen.endswith(ASSISTANT_PREFIX))
+        self.assertTrue(OLLAMA_CHAT_TEMPLATE.endswith(ASSISTANT_PREFIX))
 
     def test_require_seeds_stops(self):
         with tempfile.TemporaryDirectory() as td:
@@ -528,6 +548,13 @@ class PipelineDryRunTests(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
             self.assertIn("dropped_source_path_holdout", r.stdout)
             self.assertIn("dropped_too_close_to_holdout", r.stdout)
+            for dest in (train, val):
+                for line in dest.read_text(encoding="utf-8").splitlines():
+                    if not line.strip():
+                        continue
+                    row = json.loads(line)
+                    self.assertIn("text", row)
+                    self.assertIn(ASSISTANT_PREFIX, row["text"])
 
 
 if __name__ == "__main__":

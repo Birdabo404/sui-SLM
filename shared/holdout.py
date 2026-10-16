@@ -33,33 +33,29 @@ def load_holdout(path):
     return questions, gold_sources
 
 
-def path_matches_gold_source(path, gold_sources):
-    """True if a chunk path matches a held-out gold_source.
+def gold_source_stem(label):
+    """Command stem from a gold_source label or a chunk path.
 
-    gold_source may be a path (tldr/common/ls.md) or a short label (tldr ls).
-    A label's last token is matched to the file stem. Any earlier token must
-    appear in the path so "tldr ls" does not drop command-manpages/ls.1.
+    ssh(1), tldr ls, man ls, tldr/common/ls.md, and command-manpages/ls.1
+    all become ls. Matching is stem equality, not a substring.
     """
-    path_l = str(path or "").replace("\\", "/").lower().strip()
-    if not path_l:
+    raw = str(label or "").strip().lower().replace("\\", "/")
+    if not raw:
+        return ""
+    raw = re.sub(r"\([^)]*\)", "", raw)
+    token = [t for t in re.split(r"[\s/]+", raw) if t]
+    if not token:
+        return ""
+    stem = Path(token[-1]).stem
+    stem = re.sub(r"^\d+\.", "", stem)
+    return stem
+
+
+def path_matches_gold_source(path, gold_sources):
+    """True if the chunk is a page for a held-out command, in any source."""
+    path_stem = gold_source_stem(path)
+    if not path_stem:
         return False
-    stem = Path(path_l).stem.lower()
-    for raw in gold_sources:
-        g = str(raw or "").strip().lower().replace("\\", "/")
-        if not g:
-            continue
-        if g in path_l or path_l in g:
-            return True
-        tokens = [t for t in re.split(r"[\s/]+", g) if t]
-        if not tokens:
-            continue
-        last = Path(tokens[-1]).stem
-        if last != stem:
-            continue
-        families = [
-            t for t in tokens[:-1]
-            if t not in ("common", "pages", "man", "linux")
-        ]
-        if not families or any(t in path_l for t in families):
-            return True
-    return False
+    held = {gold_source_stem(raw) for raw in gold_sources}
+    held.discard("")
+    return path_stem in held

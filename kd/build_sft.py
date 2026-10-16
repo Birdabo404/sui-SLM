@@ -24,6 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from shared.chatml import render_chatml
 from shared.holdout import load_holdout, path_matches_gold_source
 from shared.prompt import ABSTAIN, SYSTEM, user_msg
 
@@ -110,13 +111,29 @@ def main():
         n = ctx.index(src) + 1
         steps = "\n".join(f"{i+1}. {s}" for i, s in enumerate(r.get("steps") or []))
         target = f"Steps:\n{steps}\n\nAnswer: {r['answer']}\n\nSource: [{n}] {src['title']}"
-        examples.append({"kind": "answerable", "seed_id": r["seed_id"], "messages": [
-            {"role": "system", "content": SYSTEM}, {"role": "user", "content": user_msg(r["question"], ctx)},
-            {"role": "assistant", "content": target}]})
+        messages = [
+            {"role": "system", "content": SYSTEM},
+            {"role": "user", "content": user_msg(r["question"], ctx)},
+            {"role": "assistant", "content": target},
+        ]
+        examples.append({
+            "kind": "answerable",
+            "seed_id": r["seed_id"],
+            "messages": messages,
+            "text": render_chatml(messages),
+        })
         if rng.random() < a.abstain_rate:
-            examples.append({"kind": "abstain", "seed_id": r["seed_id"], "messages": [
-                {"role": "system", "content": SYSTEM}, {"role": "user", "content": user_msg(r["question"], distractors(src, 3))},
-                {"role": "assistant", "content": ABSTAIN}]})
+            abstain_messages = [
+                {"role": "system", "content": SYSTEM},
+                {"role": "user", "content": user_msg(r["question"], distractors(src, 3))},
+                {"role": "assistant", "content": ABSTAIN},
+            ]
+            examples.append({
+                "kind": "abstain",
+                "seed_id": r["seed_id"],
+                "messages": abstain_messages,
+                "text": render_chatml(abstain_messages),
+            })
 
     # split by seed chunk so an answerable row and its abstain twin never land on different sides
     seed_ids = sorted({e["seed_id"] for e in examples}); rng.shuffle(seed_ids)

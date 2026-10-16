@@ -17,9 +17,11 @@ Nothing here has been run with the real 9B teacher yet.
                           answerable rows: source chunk + 2 distractor chunks as context -> steps + answer + source
                           abstain rows (25%): same question, context WITHOUT the answer -> "I don't know, ask the lab technician"
                         Output sft_train.jsonl / sft_val.jsonl as {"messages": [...]}, ready for TRL SFTTrainer.
-                        `--holdout` accepts JSONL or a question-per-line file. It drops rows whose source
-                        path matches a held-out gold_source, then drops questions with MiniLM cosine >= 0.80
-                        vs any held-out question. Both drop counts are printed.
+                        `--holdout` accepts JSONL or a question-per-line file. It drops rows whose command
+                        stem matches a held-out gold_source (tldr, man, and command-manpages for that
+                        command), then drops questions with MiniLM cosine >= 0.80 vs any held-out
+                        question. Both drop counts are printed. Each row also has a ChatML `text` field
+                        with Qwen3.5's empty think block.
                         SYSTEM prompt is imported from shared/prompt.py (same text the chat app uses).
 
 ## Run on Colab (T4)

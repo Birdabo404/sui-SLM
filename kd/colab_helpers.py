@@ -1,11 +1,17 @@
 """Path and file checks used by kd/colab_distill.ipynb. No Colab imports."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import urlopen
 
+from shared.chatml import (
+    ASSISTANT_PREFIX,
+    CHATML_INSTRUCTION,
+    CHATML_RESPONSE,
+    IM_END,
+    render_chatml,
+)
 from shared.paths import INDEX_NAME
 from shared.prompt import SYSTEM
 
@@ -16,16 +22,18 @@ TEACHER_9B = "qwen3.5:9b"
 TEACHER_4B = "qwen3.5:4b"
 OLLAMA_NAME = "thesis-student"
 OLLAMA_TAGS_URL = "http://127.0.0.1:11434/api/tags"
-# ChatML, same roles the app sends on /api/chat (system, user, assistant).
-# think is not a Modelfile PARAMETER; the app and eval send think:false.
 OLLAMA_CHAT_TEMPLATE = (
-    "{{ if .System }}<|im_start|>system\n"
+    "{{ if .System }}"
+    "<|im_start|>system\n"
     "{{ .System }}<|im_end|>\n"
-    "{{ end }}{{ range .Messages }}{{ if eq .Role \"user\" }}<|im_start|>user\n"
+    "{{ end }}{{ range .Messages }}{{ if eq .Role \"user\" }}"
+    "<|im_start|>user\n"
     "{{ .Content }}<|im_end|>\n"
-    "{{ else if eq .Role \"assistant\" }}<|im_start|>assistant\n"
+    "{{ else if eq .Role \"assistant\" }}"
+    f"{ASSISTANT_PREFIX}"
     "{{ .Content }}<|im_end|>\n"
-    "{{ end }}{{ end }}<|im_start|>assistant\n"
+    "{{ end }}{{ end }}"
+    f"{ASSISTANT_PREFIX}"
 )
 HELDOUT_MISSING = (
     "Held-out questions file is missing: {path}\n"
@@ -73,28 +81,6 @@ def resolve_heldout(candidates, work_dir):
             return p
     hint = Path(work_dir) / "your-heldout.jsonl"
     raise SystemExit(HELDOUT_MISSING.format(path="; ".join(checked) or hint, hint=hint))
-
-
-def questions_txt_from_jsonl(src, dest):
-    """Write one question per line for tools that still want a .txt holdout."""
-    src = Path(src)
-    dest = Path(dest)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    n = 0
-    with open(src, encoding="utf-8") as fin, open(dest, "w", encoding="utf-8") as fout:
-        for line in fin:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            row = json.loads(line)
-            q = (row.get("question") or "").strip()
-            if not q:
-                continue
-            fout.write(q + "\n")
-            n += 1
-    if n == 0:
-        raise SystemExit(f"No questions in {src}")
-    return n
 
 
 def resolve_chunks(work_dir, repo_dir):
@@ -179,6 +165,7 @@ def modelfile_text(gguf_filename, system=None, temperature=0, num_ctx=4096):
         f"FROM ./{Path(gguf_filename).name}\n"
         f"PARAMETER temperature {temperature}\n"
         f"PARAMETER num_ctx {num_ctx}\n"
+        f'PARAMETER stop "{IM_END}"\n'
         f'TEMPLATE """{OLLAMA_CHAT_TEMPLATE}"""\n'
         f'SYSTEM """{system}"""\n'
     )
