@@ -14,17 +14,21 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
-from app.engine import THESIS_CONFIGS, answer_question, build_messages, ollama_chat
+from app.engine import BASE_MODEL, THESIS_CONFIGS, answer_question, build_messages, ollama_chat
 from eval.run_eval import check_matched_models, run_eval
 from shared.ollama_api import (
     REQUIRED_QUANT,
     THINK,
     assert_matched_models,
+    cached_model_digest,
+    chat_result,
+    clear_digest_cache,
     inspect_chat_response,
     matched_model_diffs,
     model_fields,
     ollama_show,
     strip_think_leaks,
+    tag_names,
 )
 from shared.prompt import SYSTEM, SYSTEM_BASE, system_for_mode
 
@@ -108,6 +112,20 @@ class OllamaChatHttpTests(unittest.TestCase):
         self.assertEqual(out["think"], "false")
         self.assertIn("<think>", out["raw_output"])
 
+    def test_chat_400_on_think_explains_template(self):
+        fake = MagicMock()
+        fake.status_code = 400
+        fake.text = '{"error":"thesis-student does not support thinking"}'
+        with patch("app.engine.requests.post", return_value=fake):
+            with self.assertRaises(RuntimeError) as cm:
+                ollama_chat(
+                    [{"role": "user", "content": "q"}],
+                    "thesis-student",
+                )
+        self.assertIn("rejected think", str(cm.exception))
+        self.assertIn("template", str(cm.exception).lower())
+        fake.raise_for_status.assert_not_called()
+
     def test_every_thesis_mode_sends_shared_system(self):
         hits = [{"title": "ls", "text": "ls -l"}]
         for _model_key, mode in THESIS_CONFIGS:
@@ -127,12 +145,15 @@ class AnswerLogTests(unittest.TestCase):
 
     def test_logs_think_and_raw_and_strips_leak(self):
         def chat(messages, model):
-            return "<think>hidden</think>\nfinal answer"
+            return inspect_chat_response(
+                {"message": {"content": "<think>hidden</think>\nfinal answer"}},
+                think=False,
+            )
 
         result = answer_question(
             "how do I list files",
             "base",
-            "qwen3.5:2b",
+            "thesis-base-q4km",
             chat_fn=chat,
             log_path=self.log,
             model_key="base",
@@ -156,19 +177,37 @@ class AnswerLogTests(unittest.TestCase):
         result = answer_question(
             "how do I time travel",
             "full",
-            "qwen3.5:2b",
+            "thesis-base-q4km",
             retriever=retriever,
-            chat_fn=lambda messages, model: "should not run",
+            chat_fn=lambda messages, model: chat_result("should not run"),
             log_path=self.log,
             model_key="base",
         )
-        self.assertEqual(result["think"], "false")
+        self.assertEqual(result["think"], "")
         self.assertEqual(result["raw_output"], "")
-        self.assertEqual(result["think_leak"], 0)
+        self.assertEqual(result["think_leak"], "")
         with open(self.log, newline="", encoding="utf-8") as f:
             row = list(csv.DictReader(f))[0]
-        self.assertEqual(row["think"], "false")
+        self.assertEqual(row["think"], "")
         self.assertEqual(row["raw_output"], "")
+        self.assertEqual(row["think_leak"], "")
+
+    def test_app_log_caches_digest_per_model(self):
+        clear_digest_cache()
+        fake = MagicMock()
+        fake.status_code = 200
+        fake.json.return_value = {"message": {"content": "hi"}}
+        with patch("app.engine.requests.post", return_value=fake):
+            with patch(
+                "shared.ollama_api.ollama_show",
+                return_value=show_payload(digest="sha256:app"),
+            ) as show:
+                answer_question("q1", "base", "thesis-base-q4km", log_path=self.log)
+                answer_question("q2", "base", "thesis-base-q4km", log_path=self.log)
+        self.assertEqual(show.call_count, 1)
+        with open(self.log, newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+        self.assertEqual([r["model_digest"] for r in rows], ["sha256:app", "sha256:app"])
 
 
 class MatchedModelTests(unittest.TestCase):
@@ -210,6 +249,17 @@ class MatchedModelTests(unittest.TestCase):
         self.assertIn("shared/prompt.py", msg)
         self.assertIn("pirate", msg)
 
+    def test_cached_digest_looks_up_once(self):
+        clear_digest_cache()
+        with patch(
+            "shared.ollama_api.ollama_show",
+            return_value=show_payload(digest="sha256:once"),
+        ) as show:
+            a = cached_model_digest("thesis-base-q4km")
+            b = cached_model_digest("thesis-base-q4km")
+        self.assertEqual([a, b], ["sha256:once", "sha256:once"])
+        self.assertEqual(show.call_count, 1)
+
     def test_file_type_15_counts_as_q4_k_m(self):
         payload = {
             "template": TEMPLATE,
@@ -230,12 +280,12 @@ class MatchedModelTests(unittest.TestCase):
         }
         tags_resp = MagicMock()
         tags_resp.json.return_value = {
-            "models": [{"name": "qwen3.5:2b", "digest": "sha256:from-tags"}]
+            "models": [{"name": "thesis-base-q4km:latest", "digest": "sha256:from-tags"}]
         }
 
         def post(url, json=None, timeout=None):
             self.assertTrue(url.endswith("/api/show"))
-            self.assertEqual(json, {"model": "qwen3.5:2b"})
+            self.assertEqual(json, {"model": "thesis-base-q4km"})
             return show_resp
 
         def get(url, timeout=None):
@@ -244,8 +294,24 @@ class MatchedModelTests(unittest.TestCase):
 
         with patch("shared.ollama_api.requests.post", side_effect=post):
             with patch("shared.ollama_api.requests.get", side_effect=get):
-                data = ollama_show("qwen3.5:2b", host="http://127.0.0.1:11434")
+                data = ollama_show("thesis-base-q4km", host="http://127.0.0.1:11434")
         self.assertEqual(data["digest"], "sha256:from-tags")
+
+    def test_untagged_name_matches_latest_in_tags(self):
+        self.assertEqual(tag_names("thesis-student"), {"thesis-student", "thesis-student:latest"})
+        show_resp = MagicMock()
+        show_resp.json.return_value = {
+            "template": TEMPLATE,
+            "details": {"quantization_level": "Q4_K_M"},
+        }
+        tags_resp = MagicMock()
+        tags_resp.json.return_value = {
+            "models": [{"name": "thesis-student:latest", "digest": "sha256:student"}]
+        }
+        with patch("shared.ollama_api.requests.post", return_value=show_resp):
+            with patch("shared.ollama_api.requests.get", return_value=tags_resp):
+                data = ollama_show("thesis-student")
+        self.assertEqual(data["digest"], "sha256:student")
 
     def test_show_http_failure_exits(self):
         import requests as req_mod
@@ -283,7 +349,7 @@ class EvalShowTests(unittest.TestCase):
 
         def show(name):
             shown.append(name)
-            digest = "sha256:base" if name == "qwen3.5:2b" else "sha256:student"
+            digest = "sha256:student" if "student" in name else "sha256:base"
             return show_payload(digest=digest)
 
         n, skipped, _sweep = run_eval(
@@ -291,18 +357,18 @@ class EvalShowTests(unittest.TestCase):
             self.out,
             distilled_model="student:latest",
             retriever=FakeRetriever(self.hits),
-            chat_fn=lambda messages, model: "ok",
+            chat_fn=lambda messages, model: chat_result("ok"),
             split="dev",
             sweep=False,
             show_fn=show,
         )
         self.assertEqual(n, 5)
         self.assertEqual(skipped, [])
-        self.assertEqual(shown, ["qwen3.5:2b", "student:latest"])
+        self.assertEqual(shown, ["thesis-base-q4km", "student:latest"])
         with open(self.out, newline="", encoding="utf-8") as f:
             rows = list(csv.DictReader(f))
         self.assertTrue(all(r["think"] == "false" for r in rows))
-        base_rows = [r for r in rows if r["model"] == "qwen3.5:2b"]
+        base_rows = [r for r in rows if r["model"] == "thesis-base-q4km"]
         dist_rows = [r for r in rows if r["model"] == "student:latest"]
         self.assertTrue(all(r["model_digest"] == "sha256:base" for r in base_rows))
         self.assertTrue(all(r["model_digest"] == "sha256:student" for r in dist_rows))
@@ -310,7 +376,7 @@ class EvalShowTests(unittest.TestCase):
 
     def test_eval_exits_on_quant_mismatch_before_rows(self):
         def show(name):
-            if name == "qwen3.5:2b":
+            if name == "thesis-base-q4km":
                 return show_payload(quant="Q8_0", digest="sha256:base")
             return show_payload(digest="sha256:student")
 
@@ -320,7 +386,7 @@ class EvalShowTests(unittest.TestCase):
                 self.out,
                 distilled_model="student:latest",
                 retriever=FakeRetriever(self.hits),
-                chat_fn=lambda messages, model: "ok",
+                chat_fn=lambda messages, model: chat_result("ok"),
                 split="dev",
                 sweep=False,
                 show_fn=show,
@@ -335,7 +401,7 @@ class EvalShowTests(unittest.TestCase):
                 self.out,
                 distilled_model="student:latest",
                 retriever=FakeRetriever(self.hits),
-                chat_fn=lambda messages, model: "ok",
+                chat_fn=lambda messages, model: chat_result("ok"),
                 split="dev",
                 sweep=False,
             )
@@ -352,12 +418,12 @@ class EvalShowTests(unittest.TestCase):
 
         digests = check_matched_models(
             THESIS_CONFIGS,
-            "qwen3.5:2b",
+            BASE_MODEL,
             "student:latest",
             show_fn=show,
         )
-        self.assertEqual(seen, ["qwen3.5:2b", "student:latest"])
-        self.assertEqual(digests["qwen3.5:2b"], "sha256:qwen3.5:2b")
+        self.assertEqual(seen, ["thesis-base-q4km", "student:latest"])
+        self.assertEqual(digests["thesis-base-q4km"], "sha256:thesis-base-q4km")
         self.assertEqual(digests["student:latest"], "sha256:student:latest")
 
 

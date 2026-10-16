@@ -45,10 +45,8 @@ from app.engine import (
 from shared.frozen import PATH as FROZEN_PATH
 from shared.frozen import format_threshold, load_frozen
 from shared.ollama_api import (
-    THINK,
     assert_matched_models,
     assert_quant,
-    format_think,
     model_fields,
     ollama_show,
 )
@@ -270,7 +268,6 @@ def run_eval(
         )
     else:
         digests = {}
-    print(f"think={format_think(THINK)}; CoT comes from shared/prompt.py only")
 
     need_rag = any(uses_rag(mode) for _, mode in configs)
     if need_rag and retriever is None:

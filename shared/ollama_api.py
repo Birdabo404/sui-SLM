@@ -11,8 +11,8 @@ REQUIRED_QUANT = "Q4_K_M"
 DEFAULT_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 THINK_BLOCK_RE = re.compile(r"<think\b[^>]*>.*?</think>", re.DOTALL | re.IGNORECASE)
 THINK_OPEN_RE = re.compile(r"<think\b[^>]*>", re.IGNORECASE)
-GGUF_FILE_TYPE_Q4_K_M = {"15", 15}
 SHARED_SYSTEMS = (SYSTEM, SYSTEM_BASE, SYSTEM_COT, SYSTEM_RAG)
+_DIGEST_CACHE = {}
 
 
 def format_think(value=THINK):
@@ -20,12 +20,22 @@ def format_think(value=THINK):
 
 
 def normalize_quant(value):
-    if value in GGUF_FILE_TYPE_Q4_K_M:
-        return REQUIRED_QUANT
     text = str(value or "").strip().upper().replace(" ", "_")
     if text in {"15", "Q4_K_M"}:
         return REQUIRED_QUANT
     return text
+
+
+def tag_names(model):
+    name = (model or "").strip()
+    names = {name}
+    if not name:
+        return names
+    if ":" not in name:
+        names.add(name + ":latest")
+    elif name.endswith(":latest"):
+        names.add(name[: -len(":latest")])
+    return names
 
 
 def has_think_tags(text):
@@ -45,51 +55,52 @@ def strip_think_leaks(text):
 
 
 def inspect_chat_response(payload, think=THINK):
-    """Pull content/thinking out of an /api/chat JSON body or a plain string."""
-    if isinstance(payload, str):
-        content = payload
-        thinking = ""
-    else:
-        msg = (payload or {}).get("message") or {}
-        content = msg.get("content") or ""
-        thinking = msg.get("thinking")
-        if thinking is None:
-            thinking = payload.get("thinking") or ""
-        thinking = "" if thinking is None else str(thinking)
+    """Pull content/thinking out of an /api/chat JSON body."""
+    msg = (payload or {}).get("message") or {}
+    content = msg.get("content") or ""
+    thinking = msg.get("thinking")
+    if thinking is None:
+        thinking = (payload or {}).get("thinking") or ""
+    thinking = "" if thinking is None else str(thinking)
     stripped, tag_leak = strip_think_leaks(content)
     thinking_leak = bool(thinking.strip())
-    leaked = tag_leak or thinking_leak
+    return chat_result(
+        stripped,
+        raw_output=content,
+        thinking=thinking,
+        think=think,
+        think_leak=int(tag_leak or thinking_leak),
+    )
+
+
+def chat_result(text, raw_output=None, thinking="", think=THINK, think_leak=0):
     return {
-        "text": stripped,
-        "raw_output": content,
+        "text": text,
+        "raw_output": text if raw_output is None else raw_output,
         "thinking": thinking,
         "think": format_think(think),
-        "think_leak": int(leaked),
+        "think_leak": int(think_leak),
     }
 
 
-def empty_chat_result(text="", think=THINK):
+def empty_chat_result(text=""):
     return {
         "text": text,
         "raw_output": "",
         "thinking": "",
-        "think": format_think(think),
-        "think_leak": 0,
+        "think": "",
+        "think_leak": "",
     }
 
 
-def as_chat_result(out, think=THINK):
-    if isinstance(out, dict) and "raw_output" in out and "think" in out:
-        return {
-            "text": out.get("text") or "",
-            "raw_output": out.get("raw_output") or "",
-            "thinking": out.get("thinking") or "",
-            "think": out.get("think") or format_think(think),
-            "think_leak": int(out.get("think_leak") or 0),
-        }
-    if isinstance(out, dict) and "text" in out and "message" not in out:
-        return inspect_chat_response(out.get("text") or "", think=think)
-    return inspect_chat_response(out, think=think)
+def as_chat_result(out):
+    return {
+        "text": out["text"],
+        "raw_output": out["raw_output"],
+        "thinking": out["thinking"],
+        "think": out["think"],
+        "think_leak": out["think_leak"],
+    }
 
 
 def _system_from_modelfile(modelfile):
@@ -214,6 +225,36 @@ def assert_quant(info):
         raise SystemExit(format_match_failure(diffs))
 
 
+def remember_digest(model, digest):
+    if model:
+        _DIGEST_CACHE[model] = digest
+
+
+def clear_digest_cache():
+    _DIGEST_CACHE.clear()
+
+
+def cached_model_digest(model, host=None):
+    if not model:
+        return ""
+    if model in _DIGEST_CACHE:
+        return _DIGEST_CACHE[model]
+    try:
+        digest = digest_from_show(ollama_show(model, host=host))
+    except SystemExit:
+        digest = ""
+    _DIGEST_CACHE[model] = digest
+    return digest
+
+
+def _digest_from_tags_payload(model, payload):
+    aliases = tag_names(model)
+    for m in (payload or {}).get("models") or []:
+        if m.get("name") in aliases or m.get("model") in aliases:
+            return m.get("digest") or ""
+    return ""
+
+
 def ollama_show(model, host=None):
     host = host or DEFAULT_HOST
     url = host.rstrip("/") + "/api/show"
@@ -227,10 +268,9 @@ def ollama_show(model, host=None):
         try:
             tags = requests.get(host.rstrip("/") + "/api/tags", timeout=60)
             tags.raise_for_status()
-            for m in tags.json().get("models") or []:
-                if m.get("name") == model or m.get("model") == model:
-                    data["digest"] = m.get("digest") or ""
-                    break
+            found = _digest_from_tags_payload(model, tags.json())
+            if found:
+                data["digest"] = found
         except requests.RequestException:
             pass
     return data
