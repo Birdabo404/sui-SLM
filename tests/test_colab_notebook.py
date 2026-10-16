@@ -111,6 +111,7 @@ class NotebookSyntaxTests(unittest.TestCase):
             "Modelfile-base",
             "Q8_0",
             "differ only in the FROM line",
+            "remove_columns",
         ):
             self.assertIn(needle, text, needle)
         self.assertGreaterEqual(text.count("save_pretrained_gguf"), 2)
@@ -250,6 +251,11 @@ class HoldoutPathTests(unittest.TestCase):
         self.assertEqual(gold_source_stem("ssh(1)"), "ssh")
         self.assertEqual(gold_source_stem("tldr/common/ls.md"), "ls")
         self.assertEqual(gold_source_stem("command-manpages/ls.1"), "ls")
+        self.assertEqual(gold_source_stem("ls.1.gz"), "ls")
+        self.assertEqual(gold_source_stem("command-manpages/coreutils/ls.1.gz"), "ls")
+        self.assertEqual(gold_source_stem("man-pages/man/man1/ls.1.gz"), "ls")
+        self.assertEqual(gold_source_stem("command-manpages/openssh-client/ssh.1.gz"), "ssh")
+        self.assertEqual(gold_source_stem("gzip.1.gz"), "gzip")
 
     def test_path_matches_gold_source(self):
         self.assertTrue(path_matches_gold_source("tldr/common/ls.md", ["tldr ls"]))
@@ -257,9 +263,14 @@ class HoldoutPathTests(unittest.TestCase):
         self.assertTrue(path_matches_gold_source("command-manpages/ls.1", ["tldr ls"]))
         self.assertTrue(path_matches_gold_source("man-pages/man/man1/ls.1", ["man ls"]))
         self.assertTrue(path_matches_gold_source("command-manpages/ssh.1", ["ssh(1)"]))
+        self.assertTrue(path_matches_gold_source("command-manpages/coreutils/ls.1.gz", ["tldr ls"]))
+        self.assertTrue(path_matches_gold_source("command-manpages/coreutils/ls.1.gz", ["ls"]))
+        self.assertTrue(path_matches_gold_source("man-pages/man/man1/ls.1.gz", ["man ls"]))
         self.assertFalse(path_matches_gold_source("tldr/common/pwd.md", ["tldr ls"]))
         self.assertFalse(path_matches_gold_source("tldr/common/tools.md", ["ls"]))
         self.assertFalse(path_matches_gold_source("tldr/common/false.md", ["ls"]))
+        self.assertFalse(path_matches_gold_source("command-manpages/coreutils/tools.1.gz", ["ls"]))
+        self.assertFalse(path_matches_gold_source("command-manpages/coreutils/false.1.gz", ["ls"]))
 
     def test_load_holdout_jsonl_and_txt(self):
         with tempfile.TemporaryDirectory() as td:
@@ -468,6 +479,54 @@ class PipelineDryRunTests(unittest.TestCase):
             self.assertIn("dropped_source_path_holdout 1", r.stdout)
             kept = [json.loads(l) for l in seeds.read_text().splitlines() if l.strip()]
             self.assertEqual([k["path"] for k in kept], ["tldr/common/pwd.md"])
+
+    def test_seed_holdout_drops_gzipped_nested_manpage(self):
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            chunks = td / "chunks.jsonl"
+            rows = [
+                _chunk(
+                    "command-manpages",
+                    "ls(1)",
+                    "command-manpages/coreutils/ls.1.gz",
+                    "ls lists files. `ls` `ls -l`.",
+                ),
+                _chunk(
+                    "command-manpages",
+                    "pwd(1)",
+                    "command-manpages/coreutils/pwd.1.gz",
+                    "pwd prints the working directory. `pwd`.",
+                ),
+            ]
+            with open(chunks, "w", encoding="utf-8") as f:
+                for r in rows:
+                    f.write(json.dumps(r) + "\n")
+            holdout = td / "your-heldout.jsonl"
+            holdout.write_text(
+                json.dumps({
+                    "id": "h1",
+                    "question": "how do I list files",
+                    "source": "tldr ls",
+                }) + "\n",
+                encoding="utf-8",
+            )
+            seeds = td / "seed_chunks.jsonl"
+            r = subprocess.run(
+                [
+                    sys.executable, str(ROOT / "kd" / "make_seed_chunks.py"),
+                    "--chunks", str(chunks),
+                    "--out", str(seeds),
+                    "--mix", "command-manpages=2",
+                    "--holdout", str(holdout),
+                ],
+                cwd=str(ROOT),
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
+            self.assertIn("dropped_source_path_holdout 1", r.stdout)
+            kept = [json.loads(l) for l in seeds.read_text().splitlines() if l.strip()]
+            self.assertEqual([k["path"] for k in kept], ["command-manpages/coreutils/pwd.1.gz"])
 
     def test_seed_teacher_judge_sft_holdout(self):
         with tempfile.TemporaryDirectory() as td:

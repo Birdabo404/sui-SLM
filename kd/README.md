@@ -8,7 +8,8 @@ Nothing here has been run with the real 9B teacher yet.
                         tldr 460, command-manpages 295, man-pages 115, gnome-user-docs 230, ubuntu-docs 29.
                         ubuntu-docs often yields about 16 pages, so the file is usually about 1,116 rows.
                         Use the printed count, not the 1,129 mix total. One chunk per page. No Arch Wiki.
-                        `--holdout` drops chunks whose path matches a held-out `gold_source` / `source`.
+                        `--holdout` drops chunks whose path matches a held-out `gold_source` / `source`
+                        (including nested gzipped man pages such as command-manpages/coreutils/ls.1.gz).
 - teacher_generate.py   9B writes 1 student-style question + 2-5 reasoning steps + answer per chunk,
                         using only that chunk. Resumable. Std-lib only, talks to Ollama.
 - judge_rows.py         optional 2nd 9B pass that grades each row yes/no (supported, actually answers it).
@@ -16,7 +17,8 @@ Nothing here has been run with the real 9B teacher yet.
                         rows the judge said no to, then builds:
                           answerable rows: source chunk + 2 distractor chunks as context -> steps + answer + source
                           abstain rows (25%): same question, context WITHOUT the answer -> "I don't know, ask the lab technician"
-                        Output sft_train.jsonl / sft_val.jsonl as {"messages": [...]}, ready for TRL SFTTrainer.
+                        Output sft_train.jsonl / sft_val.jsonl as {"messages": [...], "text": ChatML}.
+                        The notebook drops the messages column before SFT so TRL uses the rendered text.
                         `--holdout` accepts JSONL or a question-per-line file. It drops rows whose command
                         stem matches a held-out gold_source (tldr, man, and command-manpages for that
                         command), then drops questions with MiniLM cosine >= 0.80 vs any held-out

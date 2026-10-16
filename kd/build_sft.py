@@ -10,7 +10,8 @@
    it doesn't know instead of guessing.
 4. Optional --holdout: a text file of your hand-written test questions (one per line). Training rows
    too similar to any of them are dropped so the evaluation stays held out.
-Output is {"messages": [system, user, assistant]} per line, which TRL's SFTTrainer reads directly.
+Output is {"messages": [system, user, assistant], "text": ChatML} per line.
+The notebook drops messages before SFT so TRL uses the rendered text field.
   python kd/build_sft.py --raw teacher_raw.jsonl --seeds seed_chunks.jsonl --holdout test_questions.txt
 """
 import argparse

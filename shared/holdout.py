@@ -36,8 +36,10 @@ def load_holdout(path):
 def gold_source_stem(label):
     """Command stem from a gold_source label or a chunk path.
 
-    ssh(1), tldr ls, man ls, tldr/common/ls.md, and command-manpages/ls.1
-    all become ls. Matching is stem equality, not a substring.
+    ssh(1), tldr ls, man ls, tldr/common/ls.md, command-manpages/ls.1,
+    and command-manpages/coreutils/ls.1.gz all become ls. Matching is
+    stem equality, not a substring. .gz is stripped before the trailing
+    man section so gzipped pages do not keep a leftover .1.
     """
     raw = str(label or "").strip().lower().replace("\\", "/")
     if not raw:
@@ -46,7 +48,11 @@ def gold_source_stem(label):
     token = [t for t in re.split(r"[\s/]+", raw) if t]
     if not token:
         return ""
-    stem = Path(token[-1]).stem
+    name = token[-1]
+    if name.endswith(".gz"):
+        name = name[: -len(".gz")]
+    name = re.sub(r"\.\d+[a-z]*$", "", name)
+    stem = Path(name).stem
     stem = re.sub(r"^\d+\.", "", stem)
     return stem
 
