@@ -1,0 +1,419 @@
+<!doctype html>
+<!--
+  polaris — thesis demo UI, static mock of spec v3.1 (2026-10-17).
+  Routes: #empty (default) · #answer · #idk · #compare · #daylight
+  Fonts are bundled in ./fonts (SIL OFL 1.1). No network, no JS. All figures are example data.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>polaris · thesis demo mock v3.1</title>
+<link rel="stylesheet" href="polaris.css">
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="star" viewBox="0 0 24 24"><path d="M12 0L14.2 9.8 24 12 14.2 14.2 12 24 9.8 14.2 0 12 9.8 9.8Z"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M5 12h13M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6.5a2 2 0 0 0-2-2h-7a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h2"/></g></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="M9.5 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="M6.5 9.5l5.5 5.5 5.5-5.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+</svg>
+
+<!-- ═════════════════════════════ #empty ═════════════════════════════ -->
+<div class="screen" id="empty">
+  <aside class="side">
+    <section>
+      <h2>status</h2>
+      <div class="kv"><span class="k">model</span><span class="v">qwen3.5:2b</span></div>
+      <div class="kv"><span class="k">index</span><span class="v">1.2k docs</span></div>
+    </section>
+    <section>
+      <h2>view</h2>
+      <a class="toggle" href="#compare"><span class="track"></span>Compare modes</a>
+      <a class="toggle" href="#daylight"><span class="track"></span>Daylight</a>
+    </section>
+    <section>
+      <h2>idk threshold</h2>
+      <div class="kv"><span class="v">cos <b>0.30</b> <i>(frozen)</i></span></div>
+    </section>
+    <section>
+      <h2>session</h2>
+      <div class="kv"><span class="k">answers</span><span class="v">0</span></div>
+      <div class="kv"><span class="k">avg latency</span><span class="v">—</span></div>
+    </section>
+    <section>
+      <a class="btn" href="#empty">clear chat</a>
+    </section>
+    <footer class="side-foot">
+      <p class="note">example data only</p>
+      <p class="footer-license">Inter, JetBrains Mono · SIL OFL 1.1</p>
+    </footer>
+  </aside>
+
+  <main class="main">
+    <div class="col">
+      <header class="band">
+        <a class="mark" href="#empty">polaris<svg aria-hidden="true"><use href="#star"/></svg></a>
+        <span class="tag">offline help for the linux lab</span>
+        <span class="spacer"></span>
+        <span class="pill-offline">offline</span>
+      </header>
+
+      <div class="empty">
+        <div class="mark">polaris<span class="star"><svg aria-hidden="true"><use href="#star"/></svg><span class="const"></span></span></div>
+        <p class="tag">offline help for the linux lab</p>
+      </div>
+
+      <div class="composer-empty">
+        <div class="modes center" role="radiogroup" aria-label="Mode">
+          <span class="mode-pill" role="radio" aria-checked="false">base</span>
+          <span class="mode-pill" role="radio" aria-checked="false">cot</span>
+          <span class="mode-pill" role="radio" aria-checked="false">rag</span>
+          <span class="mode-pill" role="radio" aria-checked="true">full</span>
+        </div>
+        <div class="input focus">
+          <span class="caret"></span>
+          <span class="ph">ask a linux or lab question…</span>
+          <button class="send" aria-label="Send"><svg><use href="#i-send"/></svg></button>
+        </div>
+        <div class="examples">
+          <span class="ex">extract a .tar.gz file</span>
+          <span class="ex">make a file readable only by me</span>
+          <span class="ex">connect to the lab printer</span>
+          <span class="ex">what's the lab wi-fi password?</span>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ═════════════════════════════ #answer ═════════════════════════════ -->
+<div class="screen" id="answer">
+  <aside class="side">
+    <section>
+      <h2>status</h2>
+      <div class="kv"><span class="k">model</span><span class="v">qwen3.5:2b</span></div>
+      <div class="kv"><span class="k">index</span><span class="v">1.2k docs</span></div>
+    </section>
+    <section>
+      <h2>view</h2>
+      <a class="toggle" href="#compare"><span class="track"></span>Compare modes</a>
+      <a class="toggle" href="#daylight"><span class="track"></span>Daylight</a>
+    </section>
+    <section>
+      <h2>idk threshold</h2>
+      <div class="kv"><span class="v">cos <b>0.30</b> <i>(frozen)</i></span></div>
+    </section>
+    <section>
+      <h2>session</h2>
+      <div class="kv"><span class="k">answers</span><span class="v">1</span></div>
+      <div class="kv"><span class="k">avg latency</span><span class="v">2.9 s</span></div>
+    </section>
+    <section>
+      <a class="btn" href="#empty">clear chat</a>
+    </section>
+    <footer class="side-foot">
+      <p class="note">example data only</p>
+      <p class="footer-license">Inter, JetBrains Mono · SIL OFL 1.1</p>
+    </footer>
+  </aside>
+
+  <main class="main">
+    <div class="col">
+      <header class="band slim">
+        <a class="mark" href="#empty">polaris<svg aria-hidden="true"><use href="#star"/></svg></a>
+        <span class="tag">offline help for the linux lab</span>
+        <span class="spacer"></span>
+        <span class="pill-offline">offline</span>
+      </header>
+
+      <div class="thread">
+        <p class="you"><span class="who">you ›</span>How do I find large files in my home folder?</p>
+
+        <article class="card">
+          <div class="card-head"><span class="mode">[ FULL ]</span><span class="sub">rag + cot</span></div>
+          <div class="card-body">
+            <div class="reasoning"><svg aria-hidden="true"><use href="#i-chev"/></svg><span class="lbl">reasoning</span><span class="meta">4 steps</span></div>
+            <div class="prose">
+              <p>Use <code>du</code> to see which folders take the most space <span class="ref">[1]</span>, then <code>find</code> to list single files over 500&nbsp;MB <span class="ref">[2]</span>. Lower <code>+500M</code> to widen the search. Both commands only read; nothing gets moved or deleted.</p>
+            </div>
+            <div class="code"><pre>du -h -d 1 ~ <span class="op">|</span> sort -hr <span class="op">|</span> head -n 10</pre><button class="copy" aria-label="Copy"><svg><use href="#i-copy"/></svg></button></div>
+            <div class="code"><pre>find ~ -size +500M -exec ls -lh {} +</pre><button class="copy" aria-label="Copy"><svg><use href="#i-copy"/></svg></button></div>
+            <div class="retr ok"><span class="lbl">retrieval</span><span><b>0.68</b> · threshold <b>0.30</b></span>
+              <span class="bar"><span class="fill" style="width:68%"></span><span class="tick"></span></span></div>
+            <div class="chips">
+              <span class="chip" title="score 0.68 · tldr/common/du.md"><span class="i">[1]</span><span class="k">tldr</span><span class="n">du</span></span>
+              <span class="chip" title="score 0.61 · man/man1/find.1"><span class="i">[2]</span><span class="k">man</span><span class="n">find(1)</span></span>
+            </div>
+          </div>
+          <div class="metrics"><span><b>214</b> tok</span><span>·</span><span><b>2.9</b> s</span><span>·</span><span>ram <b>—</b></span><span>·</span><span>docs <b>3</b></span><span>|</span><span>copy</span></div>
+        </article>
+      </div>
+
+      <div class="composer">
+        <div class="modes" role="radiogroup" aria-label="Mode">
+          <span class="mode-pill" role="radio" aria-checked="false">base</span>
+          <span class="mode-pill" role="radio" aria-checked="false">cot</span>
+          <span class="mode-pill" role="radio" aria-checked="false">rag</span>
+          <span class="mode-pill" role="radio" aria-checked="true">full</span>
+        </div>
+        <div class="input">
+          <span class="ph">ask a linux or lab question…</span>
+          <button class="send" aria-label="Send"><svg><use href="#i-send"/></svg></button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ═════════════════════════════ #idk ═════════════════════════════ -->
+<div class="screen" id="idk">
+  <aside class="side">
+    <section>
+      <h2>status</h2>
+      <div class="kv"><span class="k">model</span><span class="v">qwen3.5:2b</span></div>
+      <div class="kv"><span class="k">index</span><span class="v">1.2k docs</span></div>
+    </section>
+    <section>
+      <h2>view</h2>
+      <a class="toggle" href="#compare"><span class="track"></span>Compare modes</a>
+      <a class="toggle" href="#daylight"><span class="track"></span>Daylight</a>
+    </section>
+    <section>
+      <h2>idk threshold</h2>
+      <div class="kv"><span class="v">cos <b>0.30</b> <i>(frozen)</i></span></div>
+    </section>
+    <section>
+      <h2>session</h2>
+      <div class="kv"><span class="k">answers</span><span class="v">1</span></div>
+      <div class="kv"><span class="k">avg latency</span><span class="v">0.2 s</span></div>
+    </section>
+    <section>
+      <a class="btn" href="#empty">clear chat</a>
+    </section>
+    <footer class="side-foot">
+      <p class="note">example data only</p>
+      <p class="footer-license">Inter, JetBrains Mono · SIL OFL 1.1</p>
+    </footer>
+  </aside>
+
+  <main class="main">
+    <div class="col">
+      <header class="band slim">
+        <a class="mark" href="#empty">polaris<svg aria-hidden="true"><use href="#star"/></svg></a>
+        <span class="tag">offline help for the linux lab</span>
+        <span class="spacer"></span>
+        <span class="pill-offline">offline</span>
+      </header>
+
+      <div class="thread">
+        <p class="you"><span class="who">you ›</span>Who won the 2022 World Cup?</p>
+
+        <article class="card">
+          <div class="card-head"><span class="mode">[ FULL ]</span><span class="sub">rag + cot</span></div>
+          <div class="card-body">
+            <div class="idk">
+              <svg aria-hidden="true"><use href="#star"/></svg>
+              <h4>no fix on this one</h4>
+              <p>My local docs don’t cover this well enough to answer safely.</p>
+              <div class="retr low"><span class="lbl">retrieval</span><span><b>0.18</b> · threshold <b>0.30</b></span>
+                <span class="bar"><span class="fill" style="width:18%"></span><span class="tick"></span></span></div>
+              <p class="best">best match: <b>man cups(1)</b></p>
+              <p>I only know Linux and the computer lab. For a command question, name the command or run <code>man -k &lt;keyword&gt;</code>.</p>
+            </div>
+          </div>
+          <div class="metrics"><span><b>0</b> tok</span><span>·</span><span><b>0.2</b> s</span><span>·</span><span>ram <b>—</b></span><span>·</span><span>docs <b>0</b></span></div>
+        </article>
+      </div>
+
+      <div class="composer">
+        <div class="modes" role="radiogroup" aria-label="Mode">
+          <span class="mode-pill" role="radio" aria-checked="false">base</span>
+          <span class="mode-pill" role="radio" aria-checked="false">cot</span>
+          <span class="mode-pill" role="radio" aria-checked="false">rag</span>
+          <span class="mode-pill" role="radio" aria-checked="true">full</span>
+        </div>
+        <div class="input">
+          <span class="ph">ask a linux or lab question…</span>
+          <button class="send" aria-label="Send"><svg><use href="#i-send"/></svg></button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ═════════════════════════════ #compare ═════════════════════════════ -->
+<div class="screen polaris-compare" id="compare">
+  <aside class="side">
+    <section>
+      <h2>status</h2>
+      <div class="kv"><span class="k">model</span><span class="v">qwen3.5:2b</span></div>
+      <div class="kv"><span class="k">index</span><span class="v">1.2k docs</span></div>
+    </section>
+    <section>
+      <h2>view</h2>
+      <a class="toggle on" href="#answer"><span class="track"></span>Compare modes</a>
+      <a class="toggle" href="#daylight"><span class="track"></span>Daylight</a>
+    </section>
+    <section>
+      <h2>compare</h2>
+      <div class="pick"><span class="k">left</span><span class="select">BASE<svg aria-hidden="true"><use href="#i-down"/></svg></span></div>
+      <div class="pick"><span class="k">right</span><span class="select">FULL<svg aria-hidden="true"><use href="#i-down"/></svg></span></div>
+    </section>
+    <section>
+      <h2>idk threshold</h2>
+      <div class="kv"><span class="v">cos <b>0.30</b> <i>(frozen)</i></span></div>
+    </section>
+    <section>
+      <h2>session</h2>
+      <div class="kv"><span class="k">answers</span><span class="v">2</span></div>
+      <div class="kv"><span class="k">avg latency</span><span class="v">2.1 s</span></div>
+    </section>
+    <section>
+      <a class="btn" href="#empty">clear chat</a>
+    </section>
+    <footer class="side-foot">
+      <p class="note">example data only</p>
+      <p class="footer-license">Inter, JetBrains Mono · SIL OFL 1.1</p>
+    </footer>
+  </aside>
+
+  <main class="main">
+    <div class="col">
+      <header class="band slim">
+        <a class="mark" href="#empty">polaris<svg aria-hidden="true"><use href="#star"/></svg></a>
+        <span class="tag">offline help for the linux lab</span>
+        <span class="spacer"></span>
+        <span class="pill-offline">offline</span>
+      </header>
+
+      <div class="thread">
+        <p class="you"><span class="who">you ›</span>How do I find large files in my home folder?</p>
+
+        <div class="cmp">
+          <article class="card">
+            <div class="card-head"><span class="mode">[ BASE ]</span><span class="sub">model only</span></div>
+            <div class="card-body">
+              <div class="prose">
+                <p>You can list files by size with <code>ls</code>. The <code>-S</code> flag sorts largest first, <code>-h</code> shows readable sizes, and <code>-R</code> goes through every subfolder:</p>
+              </div>
+              <div class="code"><pre>ls -lhSR ~</pre><button class="copy" aria-label="Copy"><svg><use href="#i-copy"/></svg></button></div>
+              <div class="retr"><span class="lbl">retrieval</span><span>off</span></div>
+            </div>
+            <div class="metrics"><span><b>96</b> tok</span><span>·</span><span><b>1.2</b> s</span><span>·</span><span>ram <b>—</b></span><span>·</span><span>docs <b>0</b></span><span>|</span><span>copy</span></div>
+          </article>
+
+          <article class="card">
+            <div class="card-head"><span class="mode">[ FULL ]</span><span class="sub">rag + cot</span></div>
+            <div class="card-body">
+              <div class="reasoning"><svg aria-hidden="true"><use href="#i-chev"/></svg><span class="lbl">reasoning</span><span class="meta">4 steps</span></div>
+              <div class="prose">
+                <p>Use <code>du</code> to see which folders take the most space <span class="ref">[1]</span>, then <code>find</code> to list single files over 500&nbsp;MB <span class="ref">[2]</span>. Lower <code>+500M</code> to widen the search. Both commands only read; nothing gets moved or deleted.</p>
+              </div>
+              <div class="code"><pre>du -h -d 1 ~ <span class="op">|</span> sort -hr <span class="op">|</span> head -n 10</pre><button class="copy" aria-label="Copy"><svg><use href="#i-copy"/></svg></button></div>
+              <div class="code"><pre>find ~ -size +500M -exec ls -lh {} +</pre><button class="copy" aria-label="Copy"><svg><use href="#i-copy"/></svg></button></div>
+              <div class="retr ok"><span class="lbl">retrieval</span><span><b>0.68</b> · threshold <b>0.30</b></span>
+                <span class="bar"><span class="fill" style="width:68%"></span><span class="tick"></span></span></div>
+              <div class="chips">
+                <span class="chip" title="score 0.68 · tldr/common/du.md"><span class="i">[1]</span><span class="k">tldr</span><span class="n">du</span></span>
+                <span class="chip" title="score 0.61 · man/man1/find.1"><span class="i">[2]</span><span class="k">man</span><span class="n">find(1)</span></span>
+              </div>
+            </div>
+            <div class="metrics"><span><b>214</b> tok</span><span>·</span><span><b>2.9</b> s</span><span>·</span><span>ram <b>—</b></span><span>·</span><span>docs <b>3</b></span><span>|</span><span>copy</span></div>
+          </article>
+        </div>
+      </div>
+
+      <div class="composer">
+        <div class="input">
+          <span class="ph">ask a linux or lab question…</span>
+          <button class="send" aria-label="Send"><svg><use href="#i-send"/></svg></button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ═════════════════════════════ #daylight ═════════════════════════════ -->
+<div class="screen polaris-daylight" id="daylight">
+  <aside class="side">
+    <section>
+      <h2>status</h2>
+      <div class="kv"><span class="k">model</span><span class="v">qwen3.5:2b</span></div>
+      <div class="kv"><span class="k">index</span><span class="v">1.2k docs</span></div>
+    </section>
+    <section>
+      <h2>view</h2>
+      <a class="toggle" href="#compare"><span class="track"></span>Compare modes</a>
+      <a class="toggle on" href="#answer"><span class="track"></span>Daylight</a>
+    </section>
+    <section>
+      <h2>idk threshold</h2>
+      <div class="kv"><span class="v">cos <b>0.30</b> <i>(frozen)</i></span></div>
+    </section>
+    <section>
+      <h2>session</h2>
+      <div class="kv"><span class="k">answers</span><span class="v">1</span></div>
+      <div class="kv"><span class="k">avg latency</span><span class="v">2.9 s</span></div>
+    </section>
+    <section>
+      <a class="btn" href="#empty">clear chat</a>
+    </section>
+    <footer class="side-foot">
+      <p class="note">example data only</p>
+      <p class="footer-license">Inter, JetBrains Mono · SIL OFL 1.1</p>
+    </footer>
+  </aside>
+
+  <main class="main">
+    <div class="col">
+      <header class="band slim">
+        <a class="mark" href="#empty">polaris<svg aria-hidden="true"><use href="#star"/></svg></a>
+        <span class="tag">offline help for the linux lab</span>
+        <span class="spacer"></span>
+        <span class="pill-offline">offline</span>
+      </header>
+
+      <div class="thread">
+        <p class="you"><span class="who">you ›</span>How do I find large files in my home folder?</p>
+
+        <article class="card">
+          <div class="card-head"><span class="mode">[ FULL ]</span><span class="sub">rag + cot</span></div>
+          <div class="card-body">
+            <div class="reasoning"><svg aria-hidden="true"><use href="#i-chev"/></svg><span class="lbl">reasoning</span><span class="meta">4 steps</span></div>
+            <div class="prose">
+              <p>Use <code>du</code> to see which folders take the most space <span class="ref">[1]</span>, then <code>find</code> to list single files over 500&nbsp;MB <span class="ref">[2]</span>. Lower <code>+500M</code> to widen the search. Both commands only read; nothing gets moved or deleted.</p>
+            </div>
+            <div class="code"><pre>du -h -d 1 ~ <span class="op">|</span> sort -hr <span class="op">|</span> head -n 10</pre><button class="copy" aria-label="Copy"><svg><use href="#i-copy"/></svg></button></div>
+            <div class="code"><pre>find ~ -size +500M -exec ls -lh {} +</pre><button class="copy" aria-label="Copy"><svg><use href="#i-copy"/></svg></button></div>
+            <div class="retr ok"><span class="lbl">retrieval</span><span><b>0.68</b> · threshold <b>0.30</b></span>
+              <span class="bar"><span class="fill" style="width:68%"></span><span class="tick"></span></span></div>
+            <div class="chips">
+              <span class="chip" title="score 0.68 · tldr/common/du.md"><span class="i">[1]</span><span class="k">tldr</span><span class="n">du</span></span>
+              <span class="chip" title="score 0.61 · man/man1/find.1"><span class="i">[2]</span><span class="k">man</span><span class="n">find(1)</span></span>
+            </div>
+          </div>
+          <div class="metrics"><span><b>214</b> tok</span><span>·</span><span><b>2.9</b> s</span><span>·</span><span>ram <b>—</b></span><span>·</span><span>docs <b>3</b></span><span>|</span><span>copy</span></div>
+        </article>
+      </div>
+
+      <div class="composer">
+        <div class="modes" role="radiogroup" aria-label="Mode">
+          <span class="mode-pill" role="radio" aria-checked="false">base</span>
+          <span class="mode-pill" role="radio" aria-checked="false">cot</span>
+          <span class="mode-pill" role="radio" aria-checked="false">rag</span>
+          <span class="mode-pill" role="radio" aria-checked="true">full</span>
+        </div>
+        <div class="input">
+          <span class="ph">ask a linux or lab question…</span>
+          <button class="send" aria-label="Send"><svg><use href="#i-send"/></svg></button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+</body>
+</html>
