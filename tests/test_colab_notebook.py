@@ -18,7 +18,9 @@ from app.engine import index_ok
 from kd.make_seed_chunks import DEFAULT_MIX
 from rag.build_index import DEFAULT_SOURCES, LICENSE
 from kd.colab_helpers import (
+    OLLAMA_BASE_NAME,
     OLLAMA_CHAT_TEMPLATE,
+    OLLAMA_NAME,
     TEACHER_4B,
     TEACHER_9B,
     count_jsonl,
@@ -104,8 +106,15 @@ class NotebookSyntaxTests(unittest.TestCase):
             "tldr=460",
             "select_q4km_gguf",
             "SFTConfig",
+            "thesis-base-q4km",
+            "gguf-base",
+            "Modelfile-base",
+            "Q8_0",
+            "differ only in the FROM line",
         ):
             self.assertIn(needle, text, needle)
+        self.assertGreaterEqual(text.count("save_pretrained_gguf"), 2)
+        self.assertGreaterEqual(text.count("q4_k_m"), 2)
         self.assertNotIn("save_pretrained_merged", text)
         self.assertNotIn("PARAMETER think false", text)
         self.assertNotIn("FastVisionModel", text)
@@ -297,10 +306,43 @@ class HelperTests(unittest.TestCase):
         self.assertTrue(OLLAMA_CHAT_TEMPLATE.endswith(ASSISTANT_PREFIX))
         self.assertIn("<|im_start|>system", text)
         self.assertIn(SYSTEM[:40], text)
+        self.assertEqual(OLLAMA_NAME, "thesis-student")
+        self.assertEqual(OLLAMA_BASE_NAME, "thesis-base-q4km")
         self.assertEqual(ollama_create_cmd("thesis-student"), "ollama create thesis-student -f Modelfile")
+        self.assertEqual(
+            ollama_create_cmd(OLLAMA_BASE_NAME, "Modelfile-base"),
+            "ollama create thesis-base-q4km -f Modelfile-base",
+        )
         with tempfile.TemporaryDirectory() as td:
             p = write_modelfile(Path(td) / "Modelfile", "x.gguf")
             self.assertTrue(p.is_file())
+
+    def test_base_and_student_modelfiles_differ_only_in_from(self):
+        student = modelfile_text("student.Q4_K_M.gguf")
+        base = modelfile_text("base.Q4_K_M.gguf")
+        student_lines = student.splitlines()
+        base_lines = base.splitlines()
+        self.assertEqual(len(student_lines), len(base_lines))
+        self.assertEqual(student_lines[0], "FROM ./student.Q4_K_M.gguf")
+        self.assertEqual(base_lines[0], "FROM ./base.Q4_K_M.gguf")
+        diffs = [(a, b) for a, b in zip(student_lines, base_lines) if a != b]
+        self.assertEqual(len(diffs), 1, diffs)
+        self.assertTrue(diffs[0][0].startswith("FROM "))
+        self.assertTrue(diffs[0][1].startswith("FROM "))
+        self.assertEqual(student_lines[1:], base_lines[1:])
+        self.assertIn('PARAMETER stop "<|im_end|>"', student)
+        self.assertIn("TEMPLATE", student)
+        self.assertIn(SYSTEM[:40], student)
+        with tempfile.TemporaryDirectory() as td:
+            td = Path(td)
+            written_s = write_modelfile(td / "Modelfile", "student.Q4_K_M.gguf")
+            written_b = write_modelfile(td / "Modelfile-base", "base.Q4_K_M.gguf")
+            s_lines = written_s.read_text(encoding="utf-8").splitlines()
+            b_lines = written_b.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(s_lines[1:], b_lines[1:])
+            self.assertNotEqual(s_lines[0], b_lines[0])
+            self.assertTrue(s_lines[0].startswith("FROM "))
+            self.assertTrue(b_lines[0].startswith("FROM "))
 
     def test_sft_text_matches_modelfile_prefix(self):
         messages = [

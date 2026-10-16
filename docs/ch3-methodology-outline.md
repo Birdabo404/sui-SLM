@@ -6,7 +6,7 @@ Matches what the repo actually builds. This is a section outline, not chapter pr
 
 - Offline Linux / computer-lab help assistant for first- and second-year IT students.
 - Target machine: ThinkPad T14 Gen 2 (i5 11th gen, Ubuntu). Measured runs boot with `mem=8G`.
-- Local chat UI: Streamlit (`app/app.py`). Local model: Ollama on `127.0.0.1:11434`. Base model name: `qwen3.5:2b`.
+- Local chat UI: Streamlit (`app/app.py`). Local model: Ollama on `127.0.0.1:11434`. Thesis configs 1–4 use `thesis-base-q4km` (unmodified `unsloth/Qwen3.5-2B` exported Q4_K_M in the same Colab session as the student). Do not use stock `ollama pull qwen3.5:2b` for those runs; that tag is Q8_0 and a different template. `app.engine.BASE_MODEL` still defaults to `qwen3.5:2b`; pass `--base-model thesis-base-q4km` or the sidebar.
 - No outbound calls at answer time. MiniLM must already be in the Hugging Face cache (`install.sh` downloads it).
 - Shared system prompt in `shared/prompt.py` is used by the chat app and by `kd/build_sft.py`. Do not fork the text.
 - Answer log: `logs/answers.csv` (model, mode, latency, app RSS, Ollama RSS, total RSS, system used memory, threshold, k). Stale headers are rotated, not overwritten.
@@ -65,27 +65,27 @@ Matches what the repo actually builds. This is a section outline, not chapter pr
   3. `judge_rows.py`: second teacher pass, yes/no on support and whether it answers the question.
   4. `build_sft.py --holdout`: drop bad JSON, skip, judge=no, invented backticked commands/flags, then path-holdout and 0.80 question-cosine holdout. Answerable rows = source chunk + 2 distractors. Abstain rows (~25%) = same question, no source chunk, target = `ABSTAIN`. Train/val split by seed chunk.
 - Student: fp16 LoRA SFT of `unsloth/Qwen3.5-2B`. The method is LoRA, not QLoRA. `USE_QLORA` defaults to False. The T4 has no bf16; `load_in_16bit` is fp16 on that card (~5 GB). Unsloth documents large 4-bit error on Qwen3.5. The notebook uses `FastLanguageModel` for text-only SFT (Qwen3.5 is a VLM; `FastVisionModel` is for vision). To confirm on Colab: that this loader is the one that actually runs for `unsloth/Qwen3.5-2B`.
-- Export GGUF `Q4_K_M` with `save_pretrained_gguf` (it merges on its own; do not run `save_pretrained_merged` first). `ollama create` on the laptop. Distilled config is skipped until `--distilled` / `OLLAMA_DISTILLED_MODEL` is set.
+- Export GGUF `Q4_K_M` with `save_pretrained_gguf` (it merges on its own; do not run `save_pretrained_merged` first). The same Colab session also exports unmodified `unsloth/Qwen3.5-2B` through the same `save_pretrained_gguf(..., "q4_k_m")` so base and student share that llama.cpp. Both Modelfiles are `modelfile_text()` (same TEMPLATE, SYSTEM, stop). Laptop: `ollama create thesis-student -f Modelfile` and `ollama create thesis-base-q4km -f Modelfile-base`. Distilled config is skipped until `--distilled` / `OLLAMA_DISTILLED_MODEL` is set.
 - TODO: teacher model actually used (9B or 4B) and Colab GPU type.
 - TODO: seed count, rows generated, rows dropped (bad JSON / skip / judge / invented flag / holdout-near). The invented-flag count is a Ch4 number.
 - TODO: SFT epochs, max seq, LoRA rank, train/val sizes, train loss curve.
-- TODO: GGUF filename, `ollama create` name, file size on the T14.
+- TODO: GGUF filenames and file sizes on the T14 after the real Colab export.
 - TODO: hand-check of ~50 kept teacher rows (pass/fail).
 
 ## 3.6 Five configs (KD isolated by 4 vs 5)
 
 | id | model | mode |
 |---|---|---|
-| base | `qwen3.5:2b` | base |
-| base+CoT | `qwen3.5:2b` | cot |
-| base+RAG | `qwen3.5:2b` | rag |
-| base+RAG+CoT | `qwen3.5:2b` | full |
-| distilled+RAG+CoT | student GGUF | full |
+| base | `thesis-base-q4km` | base |
+| base+CoT | `thesis-base-q4km` | cot |
+| base+RAG | `thesis-base-q4km` | rag |
+| base+RAG+CoT | `thesis-base-q4km` | full |
+| distilled+RAG+CoT | `thesis-student` | full |
 
 - Defined in `app.engine.THESIS_CONFIGS`. Sidebar picks model and mode separately.
-- Isolation: configs 1–4 hold the model fixed (`qwen3.5:2b`) and change prompt / retrieval. Config 5 holds RAG+CoT fixed and changes only the weights. The KD claim is 4 vs 5, not 1 vs 5.
+- Isolation: configs 1–4 hold the model fixed (`thesis-base-q4km`) and change prompt / retrieval. Config 5 holds RAG+CoT fixed and changes only the weights. The KD claim is 4 vs 5, not 1 vs 5. Stock `qwen3.5:2b` is Q8_0; using it for 1–4 would confound KD with quant and template.
 - Do not report 5 as "RAG+CoT+KD beats base" without the 4 vs 5 pair.
-- TODO: Ollama name of the registered student GGUF.
+- Planned Ollama names after the Colab export: `thesis-base-q4km` and `thesis-student`.
 
 ## 3.7 Dev / test split and leakage control
 

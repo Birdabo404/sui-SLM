@@ -26,7 +26,14 @@ Nothing here has been run with the real 9B teacher yet.
 
 ## Run on Colab (T4)
 
-Use `kd/colab_distill.ipynb`. It mounts Drive, clones this repo, stops if `your-heldout.jsonl` is missing, runs `make_seed_chunks.py` → `teacher_generate.py` → `judge_rows.py` → `build_sft.py --holdout`, then fp16 LoRA of Qwen3.5-2B, GGUF Q4_K_M, and prints the laptop `ollama create` command.
+Use `kd/colab_distill.ipynb`. It mounts Drive, clones this repo, stops if `your-heldout.jsonl` is missing, runs `make_seed_chunks.py` → `teacher_generate.py` → `judge_rows.py` → `build_sft.py --holdout`, then fp16 LoRA of Qwen3.5-2B, and exports two Q4_K_M GGUFs in the same Colab session (same llama.cpp): the LoRA student (`work/gguf`) and unmodified `unsloth/Qwen3.5-2B` (`work/gguf-base`). Both Modelfiles come from `modelfile_text()` (same TEMPLATE, SYSTEM, and stop). The last cell prints both laptop commands:
+
+    ollama create thesis-student -f Modelfile
+    ollama create thesis-base-q4km -f Modelfile-base
+
+Thesis configs 1–4 must use `thesis-base-q4km`, not stock `ollama pull qwen3.5:2b`. That tag is Q8_0 and a different template; using it would confound the 4 vs 5 KD pair with quant and template. Eval:
+
+    python eval/run_eval.py --split test --no-sweep --questions eval/your-heldout.jsonl --out logs/eval-test.csv --base-model thesis-base-q4km --distilled thesis-student
 
 Teacher is Ollama (`qwen3.5:9b`), not transformers 4-bit, because those two scripts only speak Ollama HTTP and the Q4 9B fits a T4. Set `USE_4B_TEACHER = True` for `qwen3.5:4b`. `USE_QLORA` defaults to False (fp16 LoRA; the T4 has no bf16). Writes under Drive `thesis-kd/`; re-run to resume (JSONL append, `resume_from_checkpoint`, reload `work/lora`).
 
@@ -41,4 +48,5 @@ From this repo, after `rag/lab-index` exists:
 - Risky commands (wipefs, dd, mkfs, rm -r) are in the corpus. The prompt asks the teacher to open with a
   warning and send the student to the lab technician; check that it does.
 - SYSTEM prompt in shared/prompt.py must stay identical for the offline chat app and SFT rows.
+- Thesis configs 1–4 use `thesis-base-q4km` from the Colab export. Do not score them against stock `qwen3.5:2b` (Q8_0).
 - Abstain rows use random distractors, so they are easy. Harder ones (retrieved-but-wrong pages) are later work.

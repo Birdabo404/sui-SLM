@@ -21,6 +21,7 @@ STUDENT_HF = "unsloth/Qwen3.5-2B"
 TEACHER_9B = "qwen3.5:9b"
 TEACHER_4B = "qwen3.5:4b"
 OLLAMA_NAME = "thesis-student"
+OLLAMA_BASE_NAME = "thesis-base-q4km"
 OLLAMA_TAGS_URL = "http://127.0.0.1:11434/api/tags"
 OLLAMA_CHAT_TEMPLATE = (
     "{{ if .System }}"
@@ -171,8 +172,8 @@ def modelfile_text(gguf_filename, system=None, temperature=0, num_ctx=4096):
     )
 
 
-def ollama_create_cmd(model_name=OLLAMA_NAME):
-    return f"ollama create {model_name} -f Modelfile"
+def ollama_create_cmd(model_name=OLLAMA_NAME, modelfile="Modelfile"):
+    return f"ollama create {model_name} -f {Path(modelfile).name}"
 
 
 def write_modelfile(dest, gguf_filename, system=None):
