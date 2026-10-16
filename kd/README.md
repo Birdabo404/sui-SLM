@@ -5,10 +5,12 @@ Nothing here has been run with the real 9B teacher yet. The plumbing was smoke-t
 box with a tiny Qwen3.5-0.8B (outputs in smoke-test-0.8b/, quality is NOT representative of the 9B).
 
 ## Files
-- seed_chunks.jsonl     1,116 doc chunks picked by make_seed_chunks.py (seed 42) from rag-index-v2 (2026-10-12):
-                        tldr 400, Ubuntu command man pages 250, man-pages 100, GNOME help 200, Ubuntu docs 16
-                        (only 16 pages qualify), Ubuntu Server docs 150. No Arch Wiki (dropped from the corpus).
-                        One chunk per page, no alias stubs or link-list landing pages.
+- seed_chunks.jsonl     picked by make_seed_chunks.py (seed 42). Default mix (1129 target, no Server docs):
+                        tldr 460, command-manpages 295, man-pages 115, gnome-user-docs 230, ubuntu-docs 29.
+                        ubuntu-docs often yields ~16 pages, so the file is usually ~1,116 rows.
+                        The 150 rows that used to be ubuntu-server-docs (unlicensed, dropped) went to
+                        tldr +60, command-manpages +45, gnome-user-docs +30, man-pages +15.
+                        One chunk per page, no alias stubs or link-list landing pages. No Arch Wiki.
 - teacher_generate.py   9B writes 1 student-style question + 2-5 reasoning steps + answer per chunk,
                         using only that chunk. Resumable. Std-lib only, talks to Ollama.
 - judge_rows.py         optional 2nd 9B pass that grades each row yes/no (supported, actually answers it).

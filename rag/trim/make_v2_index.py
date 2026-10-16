@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
 """Make rag-index-v2 (2026-10-12): rag-index-trim WITHOUT the Arch Wiki, PLUS the Ubuntu Server docs.
+
+Historical recipe. Ubuntu Server docs are unlicensed and are no longer in the default corpus.
+Rebuild with rag/build_index.py (defaults skip Server docs) instead of this script.
+
 Copies the existing embeddings for every kept chunk (no re-embedding), embeds only the new Ubuntu
 Server chunks with the same MiniLM model, and leaves rag-index/ and rag-index-trim/ untouched.
   python rag/trim/make_v2_index.py --snap <snapshot> --src rag/rag-index-trim --out rag/rag-index-v2

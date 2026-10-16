@@ -5,7 +5,8 @@ Index:  rag-index/chroma (ChromaDB, collection "linux_lab", all-MiniLM-L6-v2, co
 Size:   48,391 chunks (~1000 chars each): arch-wiki 22.9k, command-manpages 14.7k, tldr 7.4k,
         man-pages 2.8k, gnome-user-docs 641, ubuntu-docs 29. Build took ~9 min on 8 CPU cores, 463 MB on disk.
 
-Rebuild on the laptop (needs groff, which Ubuntu already has). chromadb 1.0.8 cannot read a 0.6.3 index; rebuild from the snapshot, do not reuse an old chroma/ folder:
+Rebuild on the laptop (needs groff). Default sources no longer include Ubuntu Server docs (no license)
+or Arch Wiki. chromadb 1.0.8 cannot read a 0.6.3 index. Do not reuse an old chroma/ or rag-index-v2:
   python3 -m venv .venv && . .venv/bin/activate
   pip install torch==2.9.1 --index-url https://download.pytorch.org/whl/cpu
   pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
@@ -42,17 +43,17 @@ This is a quick sanity check, not the thesis evaluation set.
   Caveat: tuned on these same 24 questions, so confirm on held-out questions before calling it a result.
   Scripts/outputs: trim/rerank_spotcheck.py, trim/lanes_spotcheck.py, trim/*-spotcheck-2026-10-12.txt
 
-## rag-index-v2 (2026-10-12): Arch Wiki DROPPED, Ubuntu Server docs ADDED, tldr trim kept
+## rag-index-v2 (2026-10-12, superseded): Arch Wiki DROPPED, Ubuntu Server docs ADDED, tldr trim kept
+Historical. Server docs were added here, then dropped from the default corpus (no license). Rebuild
+with `rag/build_index.py` (defaults have no Server docs) instead of reusing this tree.
 Built by trim/make_v2_index.py from rag-index-trim (rag-index/ and rag-index-trim/ untouched):
 reuses the 19,182 non-Arch embeddings as-is, embeds only the new Ubuntu Server chunks (~50 s on the box).
-  python rag/trim/make_v2_index.py --snap corpus/snapshot-2026-10-11 --src rag/rag-index-trim --out rag/rag-index-v2
 Ubuntu Server docs: canonical/ubuntu-server-documentation @ 9c2b8ca3a6db (2026-10-12), 243 English pages
 (tutorial/how-to/explanation/reference; contributing/ and legacy/ skipped) -> 2,632 chunks.
 Size: 21,814 chunks, 220 MB: command-manpages 14,799, man-pages 2,782, ubuntu-server-docs 2,632,
       tldr 932, gnome-user-docs 640, ubuntu-docs 29.
-build_index.py now has the ubuntu-server-docs loader (myst(); keeps code indentation so netplan YAML
-survives) and arch-wiki is no longer in its default --sources.
-Use:  python rag/query_hybrid.py --index rag/rag-index-v2 --tldr-lane "..."
+The ubuntu-server-docs loader is still in build_index.py as an opt-in (`--sources ...,ubuntu-server-docs`).
+Use current default:  python rag/query_hybrid.py --index rag/rag-index --tldr-lane "..."
 
 Spot check, same 24 questions (TUNING questions, not a held-out eval), trim/*-v2-2026-10-12.txt:
                  trim (Arch excluded)   v2

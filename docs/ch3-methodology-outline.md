@@ -17,18 +17,18 @@ Matches what the repo actually builds. This is a section outline, not chapter pr
 ## 3.2 Corpus and licenses
 
 - Snapshot folder: `corpus/snapshot-*`. Fetch scripts pick the newest folder unless `SNAP=` is set.
-- Sources in the default v2 index (`rag/rag-index-v2`):
+- Sources in the default index (`rag/build_index.py` defaults):
   - tldr-pages: CC BY 4.0
   - command-manpages: per package (see `licenses/command-manpages`)
   - man-pages: mixed (see `licenses/man-pages-LICENSES`); sections 1/5/7/8 only (2/3 are C APIs)
-  - Ubuntu desktop help: CC BY-SA 3.0
+  - Ubuntu desktop help: CC BY-SA 4.0 (`help.ubuntu.com/legal.html`)
   - GNOME user docs: CC BY-SA 3.0
-  - Ubuntu Server docs: license unverified (repo has no LICENSE; `docs/conf.py` licence field empty). Treat as unverified until Canonical confirms. Pin by commit hash, not tarball sha256.
-- Arch Wiki is on disk for old indexes only. Dropped from default `build_index.py --sources` and from v2 (pacman/AUR answers are wrong on the Ubuntu lab image).
+- Ubuntu Server docs are not in the default corpus. `canonical/ubuntu-server-documentation` has no LICENSE file, `docs/conf.py` licence is TODO, and the site only shows a copyright footer. Opt-in: `INCLUDE_UBUNTU_SERVER=1` and `--sources ...,ubuntu-server-docs`. MANIFEST must say unlicensed, not CC-BY-SA.
+- Arch Wiki is on disk for old indexes only. Dropped from default `build_index.py --sources` (pacman/AUR answers are wrong on the Ubuntu lab image).
 - English only. Alias stubs and link-list landing pages are filtered.
+- The laptop must rebuild the index after this drop. Do not reuse `rag-index-v2` from 2026-10-12 (that tree still has 2,632 Server-docs chunks).
 - TODO: snapshot date actually used on the T14 (`corpus/snapshot-YYYY-MM-DD`).
-- TODO: chunk counts per source after the T14 rebuild (v2 on the box was 21,814 chunks: command-manpages 14,799; man-pages 2,782; ubuntu-server-docs 2,632; tldr 932; gnome-user-docs 640; ubuntu-docs 29).
-- TODO: Ubuntu Server docs commit actually fetched (`USD_COMMIT` or the default in `fetch_corpus.sh`).
+- TODO: chunk counts per source after the T14 rebuild (old v2 with Server docs was 21,814 chunks: command-manpages 14,799; man-pages 2,782; ubuntu-server-docs 2,632; tldr 932; gnome-user-docs 640; ubuntu-docs 29).
 
 ## 3.3 RAG pipeline
 
@@ -59,7 +59,7 @@ Matches what the repo actually builds. This is a section outline, not chapter pr
 - Teacher default: `qwen3.5:9b` through Ollama. The existing scripts (`kd/teacher_generate.py`, `kd/judge_rows.py`) only speak Ollama's HTTP API. Colab notebook: `kd/colab_distill.ipynb` on a free T4. `USE_4B_TEACHER = True` falls back to `qwen3.5:4b` if 9B will not load.
 - Why Ollama, not transformers 4-bit, for the teacher: the KD scripts already talk to Ollama; `qwen3.5:9b` is already a ~6.6–7.6 GB Q4 and fits a T4 16 GB card. A transformers 4-bit teacher would be a second stack.
 - Data steps (resume-safe; Drive flush each row):
-  1. `make_seed_chunks.py` (seed 42): one chunk per page, mix tldr=400, command-manpages=250, man-pages=100, gnome-user-docs=200, ubuntu-docs=29, ubuntu-server-docs=150. No Arch.
+  1. `make_seed_chunks.py` (seed 42): one chunk per page. Default mix (1129 target, no Server docs): tldr=460, command-manpages=295, man-pages=115, gnome-user-docs=230, ubuntu-docs=29. The 150 rows that used to be ubuntu-server-docs went to tldr +60, command-manpages +45, gnome-user-docs +30, man-pages +15. ubuntu-docs is unchanged; only ~16 pages usually qualify. No Arch.
   2. `teacher_generate.py`: one student-style question + 2–5 steps + answer, facts only from that chunk.
   3. `judge_rows.py`: second teacher pass, yes/no on support and whether it answers the question.
   4. `build_sft.py --holdout`: drop bad JSON, skip, judge=no, invented backticked commands/flags. Answerable rows = source chunk + 2 distractors. Abstain rows (~25%) = same question, no source chunk, target = `ABSTAIN`. Train/val split by seed chunk.
@@ -138,7 +138,7 @@ Score the five configs on the held-out test file (`--split test --no-sweep`). Do
 - KD is sequence-level. The 2B never sees 9B logits.
 - Abstain SFT rows use random distractors, not retrieved-but-wrong pages. Easy negatives.
 - Teacher may invent flags; the filter drops those rows and the leftover errors are still possible. Judge is the same model family.
-- Ubuntu Server docs licence is unverified. Arch Wiki was removed because it answers for the wrong distro.
+- Ubuntu Server docs were dropped from the default corpus (no license). Arch Wiki was removed because it answers for the wrong distro.
 - Colab T4 can disconnect; teacher/judge resume from the JSONL on Drive. A 4B teacher is a weaker teacher, not the same run.
 - Unsloth advises against 4-bit QLoRA on Qwen3.5. If `USE_QLORA=True`, say so in Ch4.
 - MiniLM holdout filter (0.80 cosine) can miss paraphrases and can over-drop near-duplicates that are still fair train items.

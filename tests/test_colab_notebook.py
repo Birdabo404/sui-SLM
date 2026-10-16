@@ -13,6 +13,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+from kd.make_seed_chunks import DEFAULT_MIX
+from rag.build_index import DEFAULT_SOURCES, LICENSE
 from kd.colab_helpers import (
     TEACHER_4B,
     TEACHER_9B,
@@ -76,8 +78,37 @@ class NotebookSyntaxTests(unittest.TestCase):
             "ollama create",
             "Ollama",
             "transformers 4-bit",
+            "tldr=460",
         ):
             self.assertIn(needle, text, needle)
+
+
+class DefaultCorpusTests(unittest.TestCase):
+    def test_default_seed_mix_drops_server_docs_and_keeps_1129(self):
+        mix = {k: int(v) for k, v in (p.split("=") for p in DEFAULT_MIX.split(","))}
+        self.assertNotIn("ubuntu-server-docs", mix)
+        self.assertEqual(sum(mix.values()), 1129)
+        self.assertEqual(mix, {
+            "tldr": 460,
+            "command-manpages": 295,
+            "man-pages": 115,
+            "gnome-user-docs": 230,
+            "ubuntu-docs": 29,
+        })
+
+    def test_default_index_sources_drop_server_docs(self):
+        self.assertNotIn("ubuntu-server-docs", DEFAULT_SOURCES)
+        self.assertEqual(LICENSE["ubuntu-docs"], "CC-BY-SA-4.0")
+        self.assertEqual(LICENSE["ubuntu-server-docs"], "unlicensed")
+        self.assertEqual(LICENSE["gnome-user-docs"], "CC-BY-SA-3.0")
+
+    def test_fetch_manifest_labels(self):
+        script = (ROOT / "corpus" / "fetch_corpus.sh").read_text(encoding="utf-8")
+        self.assertIn('INCLUDE_UBUNTU_SERVER="${INCLUDE_UBUNTU_SERVER:-0}"', script)
+        self.assertIn('get ubuntu-docs', script)
+        self.assertIn('"CC-BY-SA-4.0"', script)
+        self.assertIn("unlicensed (no LICENSE; conf.py TODO)", script)
+        self.assertNotIn('"CC-BY-SA-3.0"', script)
 
 
 class HelperTests(unittest.TestCase):

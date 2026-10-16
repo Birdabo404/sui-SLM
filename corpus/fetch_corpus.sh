@@ -7,11 +7,13 @@ set -euo pipefail
 for t in curl unzip xz zstd dpkg-deb sha256sum; do command -v $t >/dev/null || { echo "Missing $t. Run: sudo apt install curl unzip xz-utils zstd"; exit 1; }; done
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 UBUNTU_DOCS="${UBUNTU_DOCS:-26.04.1}"          # match the CCIS lab's Ubuntu release
-# Ubuntu Server docs have no releases/tags; pin a commit of canonical/ubuntu-server-documentation (main)
+# Ubuntu Server docs: unlicensed (no LICENSE; conf.py TODO; site is a copyright footer only).
+# Off by default. INCLUDE_UBUNTU_SERVER=1 to fetch anyway; pin a commit (no tags).
 USD_COMMIT="${USD_COMMIT:-9c2b8ca3a6db4f73fb93c257be198408b7ab2542}"   # 2026-10-12T09:15:13Z
+INCLUDE_UBUNTU_SERVER="${INCLUDE_UBUNTU_SERVER:-0}"
 SKIP_ARCH="${SKIP_ARCH:-1}"                   # Arch Wiki dropped from the corpus 2026-10-12; SKIP_ARCH=0 to fetch it anyway
 OUT="${OUT:-$SCRIPT_DIR/snapshot-$(date +%Y-%m-%d)}"
-mkdir -p "$OUT"/{downloads,tldr,man-pages,arch-wiki,ubuntu-docs,ubuntu-server-docs,licenses}
+mkdir -p "$OUT"/{downloads,tldr,man-pages,arch-wiki,ubuntu-docs,licenses}
 cd "$OUT"
 NOW="$(date -Iseconds)"
 echo "source,version,url,sha256,license,fetched_at" > MANIFEST.csv
@@ -40,20 +42,22 @@ tar --zstd -xf "downloads/$AW" -C arch-wiki usr/share/doc/arch-wiki/html
 curl -fsL -o licenses/arch-wiki-GFDL-1.3.txt https://www.gnu.org/licenses/fdl-1.3.txt
 fi
 
-# 4) Ubuntu desktop help (ubuntu-docs package) - CC BY-SA 3.0
+# 4) Ubuntu desktop help (ubuntu-docs package) - CC BY-SA 4.0 (help.ubuntu.com/legal.html)
 DEB="ubuntu-docs_${UBUNTU_DOCS}_all.deb"
-get ubuntu-docs "$UBUNTU_DOCS" "http://archive.ubuntu.com/ubuntu/pool/main/u/ubuntu-docs/$DEB" "$DEB" "CC-BY-SA-3.0"
+get ubuntu-docs "$UBUNTU_DOCS" "http://archive.ubuntu.com/ubuntu/pool/main/u/ubuntu-docs/$DEB" "$DEB" "CC-BY-SA-4.0"
 dpkg-deb -x "downloads/$DEB" ubuntu-docs
 find ubuntu-docs -iname 'copyright' -exec cp {} licenses/ubuntu-docs-copyright \; -quit
+curl -fsL -o licenses/CC-BY-SA-4.0-legalcode.txt https://creativecommons.org/licenses/by-sa/4.0/legalcode.txt || true
 
-# 5) Ubuntu Server documentation (Sphinx/MyST markdown source, English only), pinned commit.
-#    The repo has no LICENSE file; the CC BY-SA 3.0 statement is the user's decision / Canonical's
-#    docs licence -- see licenses/ubuntu-server-docs-LICENSE.txt for what was (not) found in the source.
-get ubuntu-server-docs "${USD_COMMIT:0:12}" "https://github.com/canonical/ubuntu-server-documentation/archive/$USD_COMMIT.tar.gz" "ubuntu-server-documentation-$USD_COMMIT.tar.gz" "CC-BY-SA-3.0 (see licenses/ubuntu-server-docs-LICENSE.txt)"
-tar -xzf "downloads/ubuntu-server-documentation-$USD_COMMIT.tar.gz" -C ubuntu-server-docs --strip-components=1 \
-    --wildcards '*/docs/tutorial/*' '*/docs/how-to/*' '*/docs/explanation/*' '*/docs/reference/*' '*/docs/index.md' '*/docs/conf.py' '*/README.md'
-find ubuntu-server-docs -type f ! -name '*.md' ! -name '*.rst' ! -name conf.py -delete
-curl -fsL -o licenses/CC-BY-SA-3.0-legalcode.txt https://creativecommons.org/licenses/by-sa/3.0/legalcode.txt || true
+# 5) Ubuntu Server documentation. Unlicensed. Opt-in only.
+if [ "$INCLUDE_UBUNTU_SERVER" = 1 ]; then
+  mkdir -p ubuntu-server-docs
+  get ubuntu-server-docs "${USD_COMMIT:0:12}" "https://github.com/canonical/ubuntu-server-documentation/archive/$USD_COMMIT.tar.gz" "ubuntu-server-documentation-$USD_COMMIT.tar.gz" "unlicensed (no LICENSE; conf.py TODO)"
+  tar -xzf "downloads/ubuntu-server-documentation-$USD_COMMIT.tar.gz" -C ubuntu-server-docs --strip-components=1 \
+      --wildcards '*/docs/tutorial/*' '*/docs/how-to/*' '*/docs/explanation/*' '*/docs/reference/*' '*/docs/index.md' '*/docs/conf.py' '*/README.md'
+  find ubuntu-server-docs -type f ! -name '*.md' ! -name '*.rst' ! -name conf.py -delete
+fi
 
-echo; cat MANIFEST.csv; echo; du -sh tldr man-pages arch-wiki ubuntu-docs ubuntu-server-docs
+echo; cat MANIFEST.csv; echo; du -sh tldr man-pages arch-wiki ubuntu-docs
+if [ "$INCLUDE_UBUNTU_SERVER" = 1 ]; then du -sh ubuntu-server-docs; fi
 echo "Done: $(pwd). Keep downloads/ + MANIFEST.csv unchanged; cite these versions in Ch3."

@@ -20,7 +20,7 @@ Ollama is not installed by the script. Install it first from https://ollama.com/
 
 Fetch scripts: after `bash corpus/fetch_corpus.sh`, the man-page and GNOME scripts pick the newest `corpus/snapshot-*` folder. Set `SNAP=` to override.
 
-chromadb is pinned at 1.0.8. That version cannot read an index built with chromadb 0.6.3. After this install, rebuild `rag/rag-index` (and `rag/rag-index-v2`) with `rag/build_index.py`. Do not copy an old `chroma/` folder forward.
+Rebuild the index on the laptop. Ubuntu Server docs are no longer in the default sources (canonical/ubuntu-server-documentation has no license). chromadb 1.0.8 also cannot read a 0.6.3 `chroma/` folder. Do not copy an old `rag-index` or `rag-index-v2` forward.
 
 ## Run
 
@@ -72,5 +72,6 @@ docs/         Chapter 3 methodology outline
 
 - tldr-pages: CC BY 4.0
 - man-pages: mixed
-- Ubuntu and GNOME help: CC BY-SA 3.0
-- Ubuntu Server docs: license unverified
+- Ubuntu desktop help: CC BY-SA 4.0 (`help.ubuntu.com/legal.html`)
+- GNOME help: CC BY-SA 3.0
+- Ubuntu Server docs: not in the default corpus (no LICENSE file). `INCLUDE_UBUNTU_SERVER=1` to fetch anyway.
