@@ -66,11 +66,12 @@ Fetch the corpus (needs the network, once). The man-page and GNOME scripts use t
   bash corpus/fetch_command_manpages.sh
   bash corpus/fetch_gnome_user_docs.sh
 
-Build the index (CPU, several minutes on the T14). Default sources already skip Arch Wiki and include Ubuntu Server docs.
-chromadb 1.0.8 cannot read an index built with chromadb 0.6.3. Rebuild; do not reuse an old rag-index:
+Build the index (CPU, several minutes on the T14). Default sources skip Arch Wiki and Ubuntu Server
+docs (Server docs have no license). Rebuild on the laptop into rag/lab-index. Do not reuse rag-index
+or rag-index-v2 (v2 still has Server-docs chunks). chromadb 1.0.8 also cannot read an index built
+with chromadb 0.6.3:
   . .venv/bin/activate
-  python rag/build_index.py --snap corpus/snapshot-YYYY-MM-DD --out rag/rag-index
-  python rag/trim/make_trimmed_index.py --src rag/rag-index --snap corpus/snapshot-YYYY-MM-DD --out rag/rag-index-v2
+  python rag/build_index.py --snap corpus/snapshot-YYYY-MM-DD --out rag/lab-index
 
 Start Ollama if it is not running, then:
   streamlit run app/app.py
