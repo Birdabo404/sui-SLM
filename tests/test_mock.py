@@ -32,6 +32,7 @@ from app.engine import (
     ollama_chat,
     uses_rag,
 )
+from shared.ollama_api import THINK
 from shared.frozen import load_frozen
 from eval.run_eval import (
     EVAL_FIELDS,
@@ -380,6 +381,10 @@ class MockRunTests(unittest.TestCase):
         self.assertTrue(rows[0]["git_commit"])
         self.assertEqual(rows[0]["threshold"], "0.30")
         self.assertEqual(rows[0]["k"], "5")
+        self.assertEqual(rows[0]["think"], "false")
+        self.assertEqual(rows[0]["think_leak"], "0")
+        self.assertTrue(rows[0]["raw_output"].startswith("MOCK ANSWER from "))
+        self.assertEqual(rows[0]["model_digest"], "")
 
     def test_csv_rotates_on_header_mismatch(self):
         with open(self.log, "w", encoding="utf-8") as f:
@@ -417,11 +422,17 @@ class MockRunTests(unittest.TestCase):
                 temperature=0,
                 seed=42,
             )
-        self.assertEqual(out, "hi")
+        self.assertEqual(out["text"], "hi")
+        self.assertEqual(out["think"], "false")
+        self.assertEqual(out["think_leak"], 0)
+        self.assertEqual(out["raw_output"], "hi")
         body = post.call_args.kwargs["json"]
+        self.assertEqual(body["think"], False)
+        self.assertIs(body["think"], THINK)
         self.assertEqual(body["options"]["temperature"], 0)
         self.assertEqual(body["options"]["seed"], 42)
         self.assertEqual(body["model"], "qwen3.5:2b")
+        self.assertNotIn("think", body["options"])
 
 
 class EvalTests(unittest.TestCase):
@@ -482,6 +493,10 @@ class EvalTests(unittest.TestCase):
         self.assertTrue(all(r["split"] == "dev" for r in rows))
         self.assertTrue(all(r["threshold"] == "0.30" for r in rows))
         self.assertTrue(all(r["k"] == "5" for r in rows))
+        self.assertTrue(all(r["think"] == "false" for r in rows))
+        self.assertTrue(all(r["think_leak"] == "0" for r in rows))
+        self.assertTrue(all("raw_output" in r for r in rows))
+        self.assertTrue(all(r["model_digest"] == "" for r in rows))
         rag_rows = [r for r in rows if r["mode"] in ("rag", "full")]
         self.assertTrue(all("ls (tldr common)" in r["cited_sources"] for r in rag_rows))
         self.assertTrue(all("app_rss_mb" in r and r["app_rss_mb"] for r in rows))

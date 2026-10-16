@@ -32,6 +32,7 @@ from app.engine import (
     DEFAULT_INDEX,
     DISTILLED_MODEL,
     EVAL_SEED,
+    OLLAMA_HOST,
     THESIS_CONFIGS,
     answer_question,
     config_id,
@@ -43,11 +44,20 @@ from app.engine import (
 )
 from shared.frozen import PATH as FROZEN_PATH
 from shared.frozen import format_threshold, load_frozen
+from shared.ollama_api import (
+    THINK,
+    assert_matched_models,
+    assert_quant,
+    format_think,
+    model_fields,
+    ollama_show,
+)
 
 EVAL_FIELDS = [
     "ts", "git_commit", "split", "threshold", "k", "config", "model", "mode",
     "question_id", "question", "answerable", "gold_answer", "gold_source",
     "answer", "cited_sources", "n_chunks", "weak_retrieval",
+    "think", "think_leak", "thinking", "raw_output", "model_digest",
     "latency_s", "app_rss_mb", "ollama_rss_mb", "total_mb", "system_used_mb",
 ]
 SWEEP_THRESHOLDS = (0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50)
@@ -182,6 +192,43 @@ def load_retriever(index_dir):
     return HybridRetriever(index_dir)
 
 
+def models_needed(configs, base_model, distilled_model):
+    names = {}
+    for model_key, _mode in configs:
+        name = model_name_for(model_key, base_model=base_model, distilled_model=distilled_model)
+        if name:
+            names[model_key] = name
+    return names
+
+
+def check_matched_models(configs, base_model, distilled_model, show_fn=None, host=None):
+    """Call /api/show and refuse to run if quant, template, or SYSTEM do not match."""
+    names = models_needed(configs, base_model, distilled_model)
+    if not names:
+        return {}
+    show = show_fn or (lambda model: ollama_show(model, host=host or OLLAMA_HOST))
+    infos = {}
+    for _key, name in names.items():
+        if name in infos:
+            continue
+        infos[name] = model_fields(show(name), name=name)
+        print(
+            f"show {name}: quant={infos[name]['quant']} digest={infos[name]['digest'] or '?'}"
+        )
+    base_name = names.get("base")
+    distilled_name = names.get("distilled")
+    if base_name and distilled_name:
+        assert_matched_models(infos[base_name], infos[distilled_name])
+        print(
+            f"matched models: template {len(infos[base_name]['template'])} chars, "
+            f"quant {infos[base_name]['quant']}"
+        )
+    else:
+        for info in infos.values():
+            assert_quant(info)
+    return {name: info["digest"] for name, info in infos.items()}
+
+
 def run_eval(
     questions_path,
     out_path,
@@ -198,6 +245,7 @@ def run_eval(
     split=None,
     sweep=True,
     frozen_path=None,
+    show_fn=None,
 ):
     refuse_test_overrides(split, k=k, threshold=threshold, frozen_path=frozen_path)
     split = refuse_sweep_on_test(split, sweep)
@@ -212,6 +260,17 @@ def run_eval(
     commit = git_commit()
     threshold_s = format_threshold(threshold)
     k_i = int(k)
+    # Injected chat_fn is used by unit tests; skip live /api/show unless show_fn is set.
+    if show_fn is not None or chat_fn is None:
+        digests = check_matched_models(
+            configs,
+            base_model,
+            distilled_model,
+            show_fn=show_fn,
+        )
+    else:
+        digests = {}
+    print(f"think={format_think(THINK)}; CoT comes from shared/prompt.py only")
 
     need_rag = any(uses_rag(mode) for _, mode in configs)
     if need_rag and retriever is None:
@@ -239,6 +298,7 @@ def run_eval(
                 "answerable": q["answerable"],
                 "gold_answer": q["gold_answer"],
                 "gold_source": q["source"],
+                "model_digest": digests.get(model, ""),
             }
             answer_question(
                 q["question"],

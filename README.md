@@ -56,6 +56,10 @@ python eval/run_eval.py --split test --no-sweep --questions eval/your-heldout.js
 
 `--split test` without `--no-sweep` exits with an error. `--split test` also rejects `--threshold`, `-k`, and `--frozen`. The distilled config is skipped until `--distilled` or `OLLAMA_DISTILLED_MODEL` is set.
 
+Every chat call sends `think: false`. CoT is only the wording in `shared/prompt.py`. Each eval row and `logs/answers.csv` records `think`, `think_leak`, `thinking`, `raw_output`, and `model_digest`. Leaked `<think>` tags are stripped from the answer and flagged.
+
+At eval start, `/api/show` is called for the base and distilled models. Both must be quant `Q4_K_M`, share the same chat template, and use the system prompt from `shared/prompt.py` (a baked Modelfile `SYSTEM` must match that file, or be empty so the chat messages supply it). A mismatch exits with a diff. Both GGUFs must come from the same conversion path and the same llama.cpp version.
+
 ## Folder layout
 
 ```
