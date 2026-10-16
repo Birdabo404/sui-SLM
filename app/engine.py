@@ -11,10 +11,18 @@ import psutil
 import requests
 
 from shared.frozen import format_threshold, load_frozen
+from shared.ollama_api import (
+    THINK,
+    as_chat_result,
+    cached_model_digest,
+    empty_chat_result,
+    inspect_chat_response,
+    remember_digest,
+)
 from shared.prompt import ABSTAIN, MODES, system_for_mode, user_msg
 
 ROOT = Path(__file__).resolve().parent.parent
-BASE_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.5:2b")
+BASE_MODEL = os.environ.get("OLLAMA_MODEL", "thesis-base-q4km")
 DISTILLED_MODEL = os.environ.get("OLLAMA_DISTILLED_MODEL", "")
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
 DEFAULT_INDEX = os.environ.get("RAG_INDEX", str(ROOT / "rag" / "rag-index-v2"))
@@ -53,7 +61,9 @@ THESIS_CONFIGS = (
 CSV_FIELDS = [
     "ts", "git_commit", "config", "model", "mode", "latency_s",
     "app_rss_mb", "ollama_rss_mb", "total_mb", "system_used_mb",
-    "n_chunks", "weak_retrieval", "threshold", "k", "question",
+    "n_chunks", "weak_retrieval", "threshold", "k",
+    "think", "think_leak", "thinking", "raw_output", "answer", "model_digest",
+    "question",
 ]
 
 
@@ -156,7 +166,7 @@ def build_messages(question, hits, mode):
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def ollama_chat(messages, model, host=None, temperature=0.2, seed=None):
+def ollama_chat(messages, model, host=None, temperature=0.2, seed=None, think=THINK):
     host = host or OLLAMA_HOST
     url = host.rstrip("/") + "/api/chat"
     options = {"temperature": temperature, "num_ctx": 4096}
@@ -165,13 +175,19 @@ def ollama_chat(messages, model, host=None, temperature=0.2, seed=None):
     body = {
         "model": model,
         "stream": False,
-        "think": False,
+        "think": think,
         "messages": messages,
         "options": options,
     }
     r = requests.post(url, json=body, timeout=300)
+    if r.status_code == 400 and "think" in (r.text or "").lower():
+        raise RuntimeError(
+            f"{model} rejected think={think!r}. "
+            "Custom GGUFs need the same chat template as thesis-base-q4km "
+            f"(Ollama: {r.text[:300]})"
+        )
     r.raise_for_status()
-    return r.json()["message"]["content"]
+    return inspect_chat_response(r.json(), think=think)
 
 
 class RamSampler:
@@ -275,6 +291,7 @@ def answer_question(
 ):
     k = K if k is None else k
     threshold = WEAK_DENSE if threshold is None else threshold
+    using_default_chat = chat_fn is None
     if chat_fn is None:
         def chat_fn(messages, model_name):
             return ollama_chat(
@@ -286,7 +303,7 @@ def answer_question(
     sampler.start()
     hits = []
     weak = False
-    text = ""
+    chat = empty_chat_result()
     try:
         if uses_rag(mode):
             if retriever is None:
@@ -294,14 +311,23 @@ def answer_question(
             hits = retriever.retrieve(question, k=k, tldr_lane=True)
             weak = is_weak(hits, threshold=threshold)
             if weak:
-                text = ABSTAIN
+                chat = empty_chat_result(ABSTAIN)
             else:
-                text = chat_fn(build_messages(question, hits, mode), model)
+                chat = as_chat_result(chat_fn(build_messages(question, hits, mode), model))
         else:
-            text = chat_fn(build_messages(question, hits, mode), model)
+            chat = as_chat_result(chat_fn(build_messages(question, hits, mode), model))
     finally:
         ram = sampler.stop()
+    text = chat["text"]
     latency = time.perf_counter() - t0
+    if extra_log is not None and "model_digest" in extra_log:
+        digest = extra_log.get("model_digest") or ""
+        if digest:
+            remember_digest(model, digest)
+    elif using_default_chat and model:
+        digest = cached_model_digest(model)
+    else:
+        digest = ""
     row = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "git_commit": git_commit(),
@@ -317,6 +343,11 @@ def answer_question(
         "weak_retrieval": int(weak) if uses_rag(mode) else "",
         "threshold": format_threshold(threshold),
         "k": int(k),
+        "think": chat["think"],
+        "think_leak": chat["think_leak"],
+        "thinking": chat["thinking"],
+        "raw_output": chat["raw_output"],
+        "model_digest": digest,
         "question": question.replace("\n", " "),
         "cited_sources": format_cited_sources(hits),
         "answer": text,
@@ -331,5 +362,9 @@ def answer_question(
         "latency_s": latency,
         "config": row["config"],
         "cited_sources": row["cited_sources"],
+        "think": chat["think"],
+        "think_leak": chat["think_leak"],
+        "thinking": chat["thinking"],
+        "raw_output": chat["raw_output"],
         **ram,
     }

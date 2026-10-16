@@ -18,6 +18,7 @@ os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 from shared.prompt import ABSTAIN, SYSTEM, system_for_mode, user_msg
 from rag.query_hybrid import dense_scores, rrf_fuse, tokenize
 from app.engine import (
+    BASE_MODEL,
     CSV_FIELDS,
     THESIS_CONFIGS,
     WEAK_DENSE,
@@ -32,6 +33,7 @@ from app.engine import (
     ollama_chat,
     uses_rag,
 )
+from shared.ollama_api import THINK, chat_result
 from shared.frozen import load_frozen
 from eval.run_eval import (
     EVAL_FIELDS,
@@ -86,6 +88,8 @@ class ConfigTests(unittest.TestCase):
         )
 
     def test_model_and_mode_are_separate(self):
+        self.assertEqual(BASE_MODEL, "thesis-base-q4km")
+        self.assertEqual(model_name_for("base"), "thesis-base-q4km")
         self.assertEqual(model_name_for("base", base_model="qwen3.5:2b", distilled_model=""), "qwen3.5:2b")
         self.assertEqual(model_name_for("distilled", base_model="qwen3.5:2b", distilled_model=""), "")
         self.assertEqual(
@@ -254,7 +258,7 @@ class MockRunTests(unittest.TestCase):
     def _chat(self, messages, model):
         self.last_messages = messages
         self.last_model = model
-        return "MOCK ANSWER from " + messages[0]["content"][:24]
+        return chat_result("MOCK ANSWER from " + messages[0]["content"][:24])
 
     def test_base_skips_retrieval(self):
         retriever = FakeRetriever([{"title": "x", "text": "y", "rrf": 0.05, "source": "tldr", "path": "x.md"}])
@@ -380,6 +384,10 @@ class MockRunTests(unittest.TestCase):
         self.assertTrue(rows[0]["git_commit"])
         self.assertEqual(rows[0]["threshold"], "0.30")
         self.assertEqual(rows[0]["k"], "5")
+        self.assertEqual(rows[0]["think"], "false")
+        self.assertEqual(rows[0]["think_leak"], "0")
+        self.assertTrue(rows[0]["raw_output"].startswith("MOCK ANSWER from "))
+        self.assertEqual(rows[0]["model_digest"], "")
 
     def test_csv_rotates_on_header_mismatch(self):
         with open(self.log, "w", encoding="utf-8") as f:
@@ -417,11 +425,17 @@ class MockRunTests(unittest.TestCase):
                 temperature=0,
                 seed=42,
             )
-        self.assertEqual(out, "hi")
+        self.assertEqual(out["text"], "hi")
+        self.assertEqual(out["think"], "false")
+        self.assertEqual(out["think_leak"], 0)
+        self.assertEqual(out["raw_output"], "hi")
         body = post.call_args.kwargs["json"]
+        self.assertEqual(body["think"], False)
+        self.assertIs(body["think"], THINK)
         self.assertEqual(body["options"]["temperature"], 0)
         self.assertEqual(body["options"]["seed"], 42)
         self.assertEqual(body["model"], "qwen3.5:2b")
+        self.assertNotIn("think", body["options"])
 
 
 class EvalTests(unittest.TestCase):
@@ -457,7 +471,7 @@ class EvalTests(unittest.TestCase):
 
         def chat(messages, model):
             seen.append(model)
-            return "mock"
+            return chat_result("mock")
 
         n, skipped, _sweep = run_eval(
             self.questions,
@@ -476,12 +490,16 @@ class EvalTests(unittest.TestCase):
         self.assertEqual(list(rows[0].keys()), EVAL_FIELDS)
         configs = sorted({r["config"] for r in rows})
         self.assertEqual(configs, ["base", "base+CoT", "base+RAG", "base+RAG+CoT"])
-        self.assertTrue(all(r["model"] == "qwen3.5:2b" for r in rows))
+        self.assertTrue(all(r["model"] == "thesis-base-q4km" for r in rows))
         self.assertTrue(all(r["git_commit"] for r in rows))
         self.assertTrue(all(r["question_id"] in ("q1", "q2") for r in rows))
         self.assertTrue(all(r["split"] == "dev" for r in rows))
         self.assertTrue(all(r["threshold"] == "0.30" for r in rows))
         self.assertTrue(all(r["k"] == "5" for r in rows))
+        self.assertTrue(all(r["think"] == "false" for r in rows))
+        self.assertTrue(all(r["think_leak"] == "0" for r in rows))
+        self.assertTrue(all("raw_output" in r for r in rows))
+        self.assertTrue(all(r["model_digest"] == "" for r in rows))
         rag_rows = [r for r in rows if r["mode"] in ("rag", "full")]
         self.assertTrue(all("ls (tldr common)" in r["cited_sources"] for r in rag_rows))
         self.assertTrue(all("app_rss_mb" in r and r["app_rss_mb"] for r in rows))
@@ -496,7 +514,7 @@ class EvalTests(unittest.TestCase):
             self.out,
             distilled_model="student:latest",
             retriever=FakeRetriever(hits),
-            chat_fn=lambda messages, model: model,
+            chat_fn=lambda messages, model: chat_result(model),
             split="dev",
             sweep=False,
         )
@@ -563,7 +581,7 @@ class EvalTests(unittest.TestCase):
                 self.out,
                 distilled_model="student:latest",
                 retriever=FakeRetriever([{"dense": 0.55}]),
-                chat_fn=lambda messages, model: "x",
+                chat_fn=lambda messages, model: chat_result("x"),
                 split="test",
                 sweep=True,
             )
@@ -590,7 +608,7 @@ class EvalTests(unittest.TestCase):
                         self.out,
                         distilled_model="student:latest",
                         retriever=hits,
-                        chat_fn=lambda messages, model: "x",
+                        chat_fn=lambda messages, model: chat_result("x"),
                         split="test",
                         sweep=False,
                         **kwargs,
@@ -653,7 +671,7 @@ class EvalTests(unittest.TestCase):
                 "id": "ls#0", "title": "ls (tldr common)", "text": "ls -l",
                 "source": "tldr", "path": "tldr/common/ls.md", "dense": 0.55,
             }]),
-            chat_fn=lambda messages, model: "x",
+            chat_fn=lambda messages, model: chat_result("x"),
             split="dev",
             sweep=False,
             frozen_path=frozen,
@@ -700,7 +718,7 @@ class EvalTests(unittest.TestCase):
             self.out,
             configs=[("base", "rag")],
             retriever=FakeRetriever(hits),
-            chat_fn=lambda messages, model: "x",
+            chat_fn=lambda messages, model: chat_result("x"),
             split="dev",
             sweep=True,
         )

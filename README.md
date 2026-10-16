@@ -32,12 +32,12 @@ streamlit run app/app.py
 
 Pick the model and the mode separately in the sidebar.
 
-- Model: `base` (`qwen3.5:2b`) or `distilled` (Ollama name, empty until you register the GGUF).
+- Model: `base` (`thesis-base-q4km`) or `distilled` (Ollama name, empty until you register the GGUF). Stock `ollama pull qwen3.5:2b` is Q8_0 and will not pass the matched-model check.
 - Mode: base, CoT, RAG, RAG+CoT.
 
 That covers the five thesis configs: base, base+CoT, base+RAG, base+RAG+CoT, distilled+RAG+CoT.
 
-RAG uses hybrid MiniLM+BM25 with the tldr lane. If none of the top-k fused chunks has MiniLM cosine of at least the threshold in `shared/frozen.json`, the app says it does not know. 0.30 and k=5 there are provisional defaults, not a tuned result. After `--split dev` on the real index, replace those values and commit the sweep CSV. Each answer logs model, mode, latency, app RSS, Ollama RSS, total RSS, system used memory, threshold, and k to `logs/answers.csv`. If `logs/answers.csv` already exists with a different header, it is renamed to `answers.<timestamp>.csv` first.
+RAG uses hybrid MiniLM+BM25 with the tldr lane. If none of the top-k fused chunks has MiniLM cosine of at least the threshold in `shared/frozen.json`, the app says it does not know. 0.30 and k=5 there are provisional defaults, not a tuned result. After `--split dev` on the real index, replace those values and commit the sweep CSV. Each answer logs model, mode, latency, app RSS, Ollama RSS, total RSS, system used memory, threshold, k, the full answer, `raw_output`, `thinking`, and `model_digest` to `logs/answers.csv`. If `logs/answers.csv` already exists with a different header, it is renamed to `answers.<timestamp>.csv` first.
 
 The app does not call the internet. The embedding model must already be in the Hugging Face cache (install.sh downloads it).
 
@@ -55,6 +55,12 @@ python eval/run_eval.py --split test --no-sweep --questions eval/your-heldout.js
 ```
 
 `--split test` without `--no-sweep` exits with an error. `--split test` also rejects `--threshold`, `-k`, and `--frozen`. The distilled config is skipped until `--distilled` or `OLLAMA_DISTILLED_MODEL` is set.
+
+Default `--base-model` is `thesis-base-q4km` (unmodified Qwen3.5-2B exported Q4_K_M with the same conversion path as the student). Stock `ollama pull qwen3.5:2b` is Q8_0 and will not pass the check.
+
+Every chat call sends `think: false`. CoT is only the wording in `shared/prompt.py`. Each eval row and `logs/answers.csv` records `think`, `think_leak`, `thinking`, `raw_output`, and `model_digest`. Leaked `<think>` tags are stripped from the answer and flagged. Weak-retrieval abstain rows leave `think` blank because no model call is made. If Ollama returns 400 for `think: false`, the GGUF is missing the Qwen3.5 thinking template; recreate it with the same Modelfile as `thesis-base-q4km`.
+
+At eval start, `/api/show` is called for the base and distilled models. Both must be quant `Q4_K_M`, share the same chat template, and use the system prompt from `shared/prompt.py` (a baked Modelfile `SYSTEM` must match that file, or be empty so the chat messages supply it). A mismatch exits with a diff. Both GGUFs must come from the same conversion path and the same llama.cpp version.
 
 ## Folder layout
 
