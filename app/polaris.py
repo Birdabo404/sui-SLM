@@ -199,6 +199,12 @@ def records_to_csv(records):
     writer.writeheader()
     for rec in records:
         row = {k: rec.get(k, "") for k in EXPORT_FIELDS}
+        row["latency_s"] = f"{float(rec.get('latency_s') or 0):.4f}"
+        row["app_rss_mb"] = f"{float(rec.get('app_rss_mb') or 0):.1f}"
+        row["ollama_rss_mb"] = f"{float(rec.get('ollama_rss_mb') or 0):.1f}"
+        row["total_mb"] = f"{float(rec.get('total_mb') or 0):.1f}"
+        dense = rec.get("retrieval_max_dense")
+        row["retrieval_max_dense"] = "" if dense is None else f"{float(dense):.4f}"
         row["docs"] = "; ".join(rec.get("docs") or [])
         row["hits_json"] = json.dumps(rec.get("hits") or [], ensure_ascii=False)
         writer.writerow(row)

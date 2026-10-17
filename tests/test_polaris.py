@@ -188,7 +188,7 @@ class RunRecordTests(unittest.TestCase):
         rows = list(csv.DictReader(io.StringIO(csv_text)))
         self.assertEqual(list(rows[0].keys()), list(EXPORT_FIELDS))
         self.assertEqual(rows[0]["question"], "q")
-        self.assertEqual(rows[0]["total_mb"], "300")
+        self.assertEqual(rows[0]["total_mb"], "300.0")
         self.assertNotIn("answers.csv", csv_text)
         payload = json.loads(records_to_json([rec]))
         self.assertEqual(payload[0]["answer"], "hi")

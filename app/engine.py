@@ -209,7 +209,7 @@ def model_digest(model, host=None, timeout=1.5):
             text = _digest_from_details((r.json() or {}).get("details") or {})
             if text:
                 return text
-    except (requests.RequestException, ValueError, TypeError, AttributeError):
+    except Exception:
         pass
     try:
         r = requests.get(base + "/api/tags", timeout=timeout)
@@ -221,7 +221,7 @@ def model_digest(model, host=None, timeout=1.5):
                 text = _digest_from_details(item.get("details") or {})
                 if text:
                     return text
-    except (requests.RequestException, ValueError, TypeError, AttributeError):
+    except Exception:
         return ""
     return ""
 
@@ -232,7 +232,7 @@ def ollama_reachable(host=None, timeout=1.0):
     try:
         r = requests.get(base + "/api/tags", timeout=timeout)
         return bool(r.ok)
-    except requests.RequestException:
+    except Exception:
         return False
 
 
