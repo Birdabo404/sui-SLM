@@ -16,9 +16,11 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 from shared.prompt import ABSTAIN, SYSTEM, system_for_mode, user_msg
-from rag.query_hybrid import dense_scores, rrf_fuse, tokenize
+from rag.query_hybrid import dense_scores, retrieve, rrf_fuse, tokenize
 from app.engine import (
     CSV_FIELDS,
+    MODE_LABELS,
+    MODE_SUBS,
     THESIS_CONFIGS,
     WEAK_DENSE,
     answer_question,
@@ -28,6 +30,7 @@ from app.engine import (
     is_ollama_process,
     is_weak,
     log_answer,
+    mode_choices,
     model_name_for,
     ollama_chat,
     uses_rag,
@@ -98,6 +101,23 @@ class ConfigTests(unittest.TestCase):
             config_id("other", "base")
         with self.assertRaises(ValueError):
             config_id("base", "nope")
+
+    def test_mode_labels_are_base_cot_rag_full(self):
+        self.assertEqual(list(mode_choices()), ["base", "cot", "rag", "full"])
+        self.assertEqual(
+            [MODE_LABELS[m] for m in mode_choices()],
+            ["BASE", "COT", "RAG", "FULL"],
+        )
+        self.assertEqual(MODE_SUBS["base"], "MODEL ONLY")
+        self.assertEqual(MODE_SUBS["full"], "RAG + COT")
+
+    def test_mode_choices_picks_up_a_new_thesis_mode(self):
+        extra_configs = THESIS_CONFIGS + (("base", "kd"),)
+        extra_labels = {**MODE_LABELS, "kd": "KD"}
+        with patch("app.engine.THESIS_CONFIGS", extra_configs), patch(
+            "app.engine.MODE_LABELS", extra_labels
+        ):
+            self.assertEqual(mode_choices(), ["base", "cot", "rag", "full", "kd"])
 
 
 class HybridRankingTests(unittest.TestCase):
@@ -197,6 +217,57 @@ class HybridRankingTests(unittest.TestCase):
             {"dense": 0.12, "rrf": 1 / 60},
             {"dense": 0.20, "rrf": 1 / 61},
         ]))
+
+    def test_retrieve_attaches_bm25_and_keeps_rrf_dense(self):
+        rows = [
+            {
+                "id": "a", "text": "tar extract gzip", "title": "tar",
+                "source": "tldr", "path": "tldr/tar.md", "distro": "common",
+            },
+            {
+                "id": "b", "text": "unrelated potatoes", "title": "x",
+                "source": "man", "path": "man/x.1", "distro": "common",
+            },
+        ]
+
+        class FakeBM25:
+            def get_scores(self, tokens):
+                return [5.0, 0.25]
+
+        class Enc:
+            def tolist(self):
+                return [[1.0, 0.0]]
+
+        class FakeModel:
+            def encode(self, texts, normalize_embeddings=True):
+                return Enc()
+
+        class FakeCol:
+            metadata = {"embed_model": "x"}
+
+            def query(self, query_embeddings, n_results=50, where=None):
+                return {"ids": [["a", "b"]], "distances": [[0.2, 0.8]]}
+
+            def get(self, ids, include):
+                return {"ids": [], "embeddings": []}
+
+        hits = retrieve(
+            "extract tar",
+            k=2,
+            tldr_lane=False,
+            rows=rows,
+            bm25=FakeBM25(),
+            col=FakeCol(),
+            model=FakeModel(),
+        )
+        self.assertEqual(len(hits), 2)
+        by_id = {h["id"]: h for h in hits}
+        self.assertAlmostEqual(by_id["a"]["bm25"], 5.0)
+        self.assertAlmostEqual(by_id["b"]["bm25"], 0.25)
+        self.assertIn("rrf", by_id["a"])
+        self.assertAlmostEqual(by_id["a"]["dense"], 0.8)
+        self.assertEqual(by_id["a"]["title"], "tar")
+        self.assertEqual(hits[0]["id"], "a")
 
 
 class OllamaRamTests(unittest.TestCase):
@@ -821,6 +892,7 @@ class ImportTests(unittest.TestCase):
         except ImportError:
             st = MagicMock()
             st.cache_resource = lambda fn: fn
+            st.cache_data = lambda *a, **k: (lambda fn: fn)
             sys.modules["streamlit"] = st
         import importlib
         if "app.app" in sys.modules:

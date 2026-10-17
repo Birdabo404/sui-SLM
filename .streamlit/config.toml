@@ -1,2 +1,46 @@
+# Dark Polaris theme (primary). Fonts in app/static, served at /app/static/<file>.
+[server]
+enableStaticServing = true
+headless = true
+
 [browser]
 gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+
+[[theme.fontFaces]]
+family = "Inter"
+url = "app/static/Inter-Regular.woff2"
+weight = 400
+style = "normal"
+[[theme.fontFaces]]
+family = "Inter"
+url = "app/static/Inter-SemiBold.woff2"
+weight = 600
+style = "normal"
+[[theme.fontFaces]]
+family = "JetBrains Mono"
+url = "app/static/JetBrainsMono-Regular.woff2"
+weight = 400
+style = "normal"
+[[theme.fontFaces]]
+family = "JetBrains Mono"
+url = "app/static/JetBrainsMono-SemiBold.woff2"
+weight = 600
+style = "normal"
+
+[theme]
+base = "dark"
+primaryColor = "#F5B942"
+backgroundColor = "#0B1220"
+secondaryBackgroundColor = "#16213A"
+textColor = "#E6EAF2"
+font = "Inter, sans-serif"
+headingFont = "'JetBrains Mono', monospace"
+codeFont = "'JetBrains Mono', monospace"
+baseFontSize = 14
+
+[theme.sidebar]
+backgroundColor = "#111A2C"
+secondaryBackgroundColor = "#16213A"
