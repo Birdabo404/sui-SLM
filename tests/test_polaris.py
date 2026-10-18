@@ -417,6 +417,7 @@ class HtmlTests(unittest.TestCase):
         self.assertNotIn("2100", html)
         self.assertNotIn("docs", html)
         self.assertNotIn("tok", html)
+        self.assertNotIn("copy", html)
         self.assertEqual(format_total_ram(2520), "2.5 GB")
         split = ram_split_html(rec)
         self.assertIn("app <b>420</b> MB", split)

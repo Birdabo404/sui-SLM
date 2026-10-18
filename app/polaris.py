@@ -452,8 +452,6 @@ def metrics_html(record):
     ]
     if record.get("abstained"):
         bits.append("abstain")
-    if "`" in (record.get("answer") or "") and not record.get("abstained"):
-        bits.append('<span class="copy-hint">| copy</span>')
     return f'<div class="metrics">{" · ".join(bits)}</div>'
 
 
