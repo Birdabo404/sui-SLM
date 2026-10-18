@@ -229,13 +229,12 @@ def run_polaris():
     if compare_on:
         st.markdown('<div class="polaris-compare"></div>', unsafe_allow_html=True)
 
-    slim = bool(st.session_state.messages)
-    st.markdown(header_band_html(slim=slim), unsafe_allow_html=True)
+    empty = not st.session_state.messages
+    st.markdown(header_band_html(slim=not empty, animate=empty), unsafe_allow_html=True)
 
     for i, msg in enumerate(st.session_state.messages):
         _replay_message(msg, i, compact_compare=True)
 
-    empty = not st.session_state.messages
     if empty:
         st.markdown(empty_hero_html(), unsafe_allow_html=True)
 
@@ -487,12 +486,16 @@ def _render_card(record, key, align_slots=False):
         if rag:
             st.markdown(evidence_block_html(record, collapsed=True), unsafe_allow_html=True)
         elif align_slots:
-            st.markdown(empty_slot_html("ev"), unsafe_allow_html=True)
+            st.markdown(
+                empty_slot_html("ev", f"no sources in {MODE_LABELS.get(mode, mode)}"),
+                unsafe_allow_html=True,
+            )
         st.markdown(
             retrieval_bar_html(
                 record.get("retrieval_max_dense"),
                 record.get("threshold"),
                 retrieval_off=not rag,
+                mode=mode,
             ),
             unsafe_allow_html=True,
         )

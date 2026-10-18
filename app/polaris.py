@@ -348,15 +348,20 @@ def _fmt_score(value, digits=2):
     return f"{float(value):.{digits}f}"
 
 
-def empty_slot_html(kind=""):
+def empty_slot_html(kind="", label=""):
     klass = f"slot-empty {kind}".strip()
-    return f'<div class="{klass}">&nbsp;</div>'
+    inner = escape(label) if label else "&nbsp;"
+    return f'<div class="{klass}">{inner}</div>'
 
 
-def header_band_html(slim=False):
-    klass = "band slim" if slim else "band"
+def header_band_html(slim=False, animate=False):
+    classes = ["band"]
+    if slim:
+        classes.append("slim")
+    if animate:
+        classes.append("orbit-on")
     return (
-        f'<div class="{klass}">'
+        f'<div class="{" ".join(classes)}">'
         '<span class="mark"><span class="word">polaris'
         f'<span class="orbit" aria-hidden="true"><span class="float">{STAR_SVG}</span></span>'
         "</span></span>"
@@ -386,13 +391,11 @@ def card_head_html(mode):
     )
 
 
-def retrieval_bar_html(score, threshold, retrieval_off=False):
+def retrieval_bar_html(score, threshold, retrieval_off=False, mode=""):
     if retrieval_off:
-        return (
-            '<div class="retr off">'
-            '<span class="lbl">retrieval</span> off'
-            "</div>"
-        )
+        name = mode_label(mode)
+        text = f"no retrieval in {name}" if mode else "no retrieval"
+        return f'<div class="retr off">{escape(text)}</div>'
     n = 0.0 if score is None else max(0.0, min(1.0, float(score)))
     t = 0.30 if threshold is None else float(threshold)
     t = max(0.0, min(1.0, t))
@@ -617,12 +620,13 @@ def card_html(record, align_slots=False):
     if rag:
         parts.append(evidence_block_html(record, collapsed=True))
     elif align_slots:
-        parts.append(empty_slot_html("ev"))
+        parts.append(empty_slot_html("ev", f"no sources in {mode_label(mode)}"))
     parts.append(
         retrieval_bar_html(
             record.get("retrieval_max_dense"),
             record.get("threshold"),
             retrieval_off=not rag,
+            mode=mode,
         )
     )
     if abstained:
@@ -639,8 +643,8 @@ def waiting_html(mode, after_label):
         '<div class="card waiting-card">'
         + card_head_html(mode)
         + f'<div class="slot-empty body">waiting · runs after {escape(after_label)} finishes</div>'
-        + empty_slot_html("ev")
-        + '<div class="retr off"><span class="slot-line"></span></div>'
+        + empty_slot_html("ev", "no sources yet")
+        + '<div class="retr off">no retrieval yet</div>'
         + empty_slot_html("best")
         + '<div class="metrics slot-empty foot"></div>'
         + "</div>"
