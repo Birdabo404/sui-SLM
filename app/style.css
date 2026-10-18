@@ -185,7 +185,8 @@
 .slot-empty{min-height:18px;margin-top:var(--s-2);font:400 var(--fs-xs)/1.4 var(--f-mono);color:var(--c-slate-dim)}
 .slot-empty.body{min-height:88px}
 .slot-empty.retr{min-height:52px}
-.slot-empty.ev{min-height:28px}
+.slot-empty.ev,.slot-empty.best{min-height:28px;display:flex;align-items:center}
+.slot-empty.ev::after,.slot-empty.best::after{content:"";flex:1;height:1px;background:var(--c-slate-dim)}
 .slot-empty.foot{min-height:28px;border-top:var(--hair);margin-top:auto}
 
 [class*="st-key-cmp"] [data-testid="stColumn"]{min-width:420px;display:flex;flex-direction:column}

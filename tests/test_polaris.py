@@ -521,6 +521,11 @@ class HtmlTests(unittest.TestCase):
         self.assertIn("slot-empty ev", wait)
         self.assertIn("[ FULL ]", wait)
         self.assertNotIn("dashed", wait)
+        css = style_path().read_text(encoding="utf-8")
+        compact = css.replace(" ", "").replace("\n", "")
+        self.assertIn(".slot-empty.ev,.slot-empty.best{", compact)
+        self.assertIn(".slot-empty.ev::after,.slot-empty.best::after{", compact)
+        self.assertIn("height:1px;background:var(--c-slate-dim)", compact)
 
 
 class HelperTests(unittest.TestCase):
