@@ -243,20 +243,63 @@ def chip_name(hit):
     return Path(path).name if path else (hit.get("source") or "")
 
 
-def best_match_label(hits):
+def _best_hit(hits):
     if not hits:
-        return ""
+        return None
     ranked = sorted(
         hits,
         key=lambda h: (_opt_float(h.get("dense")) is not None, _opt_float(h.get("dense")) or 0.0),
         reverse=True,
     )
-    top = ranked[0]
+    return ranked[0]
+
+
+def short_doc_name(hit):
+    title = (hit.get("title") or "").strip()
+    if title:
+        word = title.split()[0]
+        return word.split("(")[0] or word
+    path = (hit.get("path") or "").strip()
+    if path:
+        return Path(path).stem
+    return ""
+
+
+def best_match_label(hits):
+    top = _best_hit(hits)
+    if top is None:
+        return ""
     key = source_key(top.get("source"))
     name = chip_name(top)
     if name:
         return f"{key.lower()} {name}"
     return key.lower()
+
+
+def evidence_source_phrase(hits):
+    top = _best_hit(hits)
+    if top is None:
+        return ""
+    key = source_key(top.get("source")).lower()
+    name = short_doc_name(top)
+    return f"{key} {name}".strip()
+
+
+def source_count(record):
+    if not uses_rag(record.get("mode") or ""):
+        return 0
+    hits = record.get("hits") or []
+    if hits:
+        return len(hits)
+    return len(record.get("docs") or [])
+
+
+def source_count_label(n):
+    return f"{n} source" if n == 1 else f"{n} sources"
+
+
+def format_total_ram(mb):
+    return f"{float(mb or 0.0) / 1024.0:.1f} GB"
 
 
 def split_reasoning(text):
@@ -305,6 +348,11 @@ def _fmt_score(value, digits=2):
     return f"{float(value):.{digits}f}"
 
 
+def empty_slot_html(kind=""):
+    klass = f"slot-empty {kind}".strip()
+    return f'<div class="{klass}">&nbsp;</div>'
+
+
 def header_band_html(slim=False):
     klass = "band slim" if slim else "band"
     return (
@@ -345,16 +393,26 @@ def retrieval_bar_html(score, threshold, retrieval_off=False):
         )
     n = 0.0 if score is None else max(0.0, min(1.0, float(score)))
     t = 0.30 if threshold is None else float(threshold)
+    t = max(0.0, min(1.0, t))
     ok = score is not None and float(score) >= t
     klass = "retr ok" if ok else "retr low"
     width = f"{n * 100:.1f}%"
-    tick = f"{max(0.0, min(1.0, t)) * 100:.1f}%"
+    tick = f"{t * 100:.1f}%"
+    score_lbl = _fmt_score(score)
     return (
         f'<div class="{klass}">'
-        f'<span class="lbl">retrieval</span> <b>{_fmt_score(score)}</b>'
-        f" · threshold <b>{format_threshold(t)}</b>"
-        f'<span class="bar"><span class="fill" style="width:{width}"></span>'
-        f'<span class="tick" style="left:{tick}"></span></span>'
+        f'<div class="retr-top"><span class="lbl">retrieval</span> <b>{score_lbl}</b></div>'
+        f'<div class="bar">'
+        f'<span class="fill" style="width:{width}"></span>'
+        f'<span class="tick" style="left:{tick}"></span>'
+        f'<span class="knob" style="left:{width}"></span>'
+        f"</div>"
+        f'<div class="scale">'
+        f'<span class="mark start" style="left:0%">0</span>'
+        f'<span class="mark thr" style="left:{tick}">{format_threshold(t)}</span>'
+        f'<span class="mark score" style="left:{width}">{score_lbl}</span>'
+        f'<span class="mark end" style="left:100%">1</span>'
+        f"</div>"
         f"</div>"
     )
 
@@ -386,15 +444,11 @@ def source_chips_html(hits, retrieval_off=False):
 
 
 def metrics_html(record):
-    n_docs = len(record.get("docs") or [])
-    if not uses_rag(record.get("mode") or ""):
-        n_docs = 0
+    n = source_count(record)
     bits = [
-        f'<b>{record["latency_s"]:.1f}</b> s',
-        f'app <b>{record["app_rss_mb"]:.0f}</b>',
-        f'ollama <b>{record["ollama_rss_mb"]:.0f}</b>',
-        f'total <b>{record["total_mb"]:.0f}</b>',
-        f'docs <b>{n_docs}</b>',
+        f'<b>{float(record.get("latency_s") or 0):.1f}</b> s',
+        f'<b>{format_total_ram(record.get("total_mb"))}</b> total',
+        source_count_label(n),
     ]
     if record.get("abstained"):
         bits.append("abstain")
@@ -403,20 +457,70 @@ def metrics_html(record):
     return f'<div class="metrics">{" · ".join(bits)}</div>'
 
 
+def ram_split_html(record):
+    app_mb = float(record.get("app_rss_mb") or 0)
+    ollama_mb = float(record.get("ollama_rss_mb") or 0)
+    return (
+        f'<p class="ram-split">app <b>{app_mb:.0f}</b> MB'
+        f' · ollama <b>{ollama_mb:.0f}</b> MB</p>'
+    )
+
+
 def idk_card_html(record):
-    hits = record.get("hits") or []
-    best = best_match_label(hits)
-    best_line = f'<p class="best">best match: {escape(best)}</p>' if best else ""
     body = escape(record.get("answer") or "").replace("\n", "<br>")
     return (
-        '<div class="idk">'
-        f"{STAR_SVG}"
+        '<div class="idk-body">'
+        f'<span class="idk-star">{STAR_SVG}</span>'
         "<h4>no fix on this one</h4>"
         f"<p>{body}</p>"
-        + retrieval_bar_html(record.get("retrieval_max_dense"), record.get("threshold"))
-        + best_line
-        + "</div>"
+        "</div>"
+        '<div class="polaris-idk-flag" hidden></div>'
     )
+
+
+def best_match_html(record):
+    hits = record.get("hits") or []
+    top = _best_hit(hits)
+    if top is None:
+        return empty_slot_html("best")
+    src = source_key(top.get("source")).lower()
+    title = (top.get("title") or "").strip()
+    if title and "(" not in title:
+        name = title
+    else:
+        name = short_doc_name(top)
+    dense = _fmt_score(top.get("dense"))
+    thr_raw = record.get("threshold")
+    thr = format_threshold(0.30 if thr_raw is None else thr_raw)
+    d = _opt_float(top.get("dense"))
+    t = 0.30 if thr_raw is None else float(thr_raw)
+    needed = " needed" if d is None or d < t else ""
+    gap = " " if name else ""
+    return (
+        f'<p class="best">best match: <span class="src">{escape(src)}</span>'
+        f"{gap}{escape(name)} · cosine {dense} of {thr}{needed}</p>"
+    )
+
+
+def evidence_summary_text(record):
+    n = source_count(record)
+    phrase = evidence_source_phrase(record.get("hits") or [])
+    label = f"Evidence · {source_count_label(n)}"
+    if phrase:
+        label += f" · {phrase}"
+    return label
+
+
+def evidence_summary_html(record):
+    n = source_count(record)
+    phrase = evidence_source_phrase(record.get("hits") or [])
+    src_html = ""
+    if phrase:
+        key, _, rest = phrase.partition(" ")
+        src_html = f' · <span class="src">{escape(key)}</span>'
+        if rest:
+            src_html += f" {escape(rest)}"
+    return f"Evidence · {source_count_label(n)}{src_html}"
 
 
 def evidence_rows_html(hits):
@@ -425,15 +529,13 @@ def evidence_rows_html(hits):
     parts = ['<ol class="ev">']
     for hit in hits:
         dense = _fmt_score(hit.get("dense"))
-        rrf = _fmt_score(hit.get("rrf"), 4)
-        bm25 = _fmt_score(hit.get("bm25"), 3)
+        src = source_key(hit.get("source"))
         parts.append(
             "<li>"
             f'<span class="rank">{int(hit["rank"])}</span>'
-            f'<span class="src">{escape(str(hit.get("source") or ""))}</span>'
+            f'<span class="src">{escape(src)}</span>'
             f'<span class="title">{escape(str(hit.get("title") or ""))}</span>'
-            f'<span class="path">{escape(str(hit.get("path") or ""))}</span>'
-            f'<span class="sc">cos {dense} · rrf {rrf} · bm25 {bm25}</span>'
+            f'<span class="sc">cosine {dense}</span>'
             f'<p class="snip">{escape(str(hit.get("snippet") or ""))}</p>'
             "</li>"
         )
@@ -441,10 +543,113 @@ def evidence_rows_html(hits):
     return "".join(parts)
 
 
+def debug_rows_html(hits):
+    if not hits:
+        return '<p class="no-sources">no hits</p>'
+    parts = ['<ol class="dbg-ev">']
+    for hit in hits:
+        parts.append(
+            "<li>"
+            f'<span class="rank">{int(hit["rank"])}</span>'
+            f'<span class="path">{escape(str(hit.get("path") or ""))}</span>'
+            f'<span class="sc">rrf {_fmt_score(hit.get("rrf"), 4)}'
+            f' · bm25 {_fmt_score(hit.get("bm25"), 3)}'
+            f' · cos {_fmt_score(hit.get("dense"))}</span>'
+            "</li>"
+        )
+    parts.append("</ol>")
+    return "".join(parts)
+
+
+def evidence_panel_html(record):
+    hits = record.get("hits") or []
+    thr_raw = record.get("threshold")
+    thr = format_threshold(0.30 if thr_raw is None else thr_raw)
+    parts = []
+    top = _best_hit(hits)
+    if top is not None:
+        src = source_key(top.get("source")).lower()
+        dense = _fmt_score(top.get("dense"))
+        parts.append(
+            f'<p class="best-panel">best match: '
+            f'<span class="src">{escape(src)}</span>'
+            f" · cosine {dense} of {thr}</p>"
+        )
+        parts.append(evidence_rows_html(hits))
+    else:
+        parts.append('<p class="no-sources">no hits</p>')
+    parts.append(ram_split_html(record))
+    parts.append('<details class="dbg"><summary>Debug</summary>')
+    parts.append(debug_rows_html(hits))
+    parts.append("</details>")
+    return "".join(parts)
+
+
+def evidence_block_html(record, collapsed=True):
+    open_attr = "" if collapsed else " open"
+    return (
+        f'<details class="ev-box"{open_attr}>'
+        f"<summary>{evidence_summary_html(record)}</summary>"
+        f"{evidence_panel_html(record)}"
+        "</details>"
+    )
+
+
+def answer_body_html(text):
+    parts = []
+    for kind, chunk in split_code_blocks(text):
+        if kind == "code":
+            parts.append(f'<pre class="cmd"><code>{escape(chunk)}</code></pre>')
+        elif chunk.strip():
+            parts.append(f'<div class="prose">{escape(chunk).replace(chr(10), "<br>")}</div>')
+    if not parts:
+        return '<div class="prose"></div>'
+    return "".join(parts)
+
+
+def card_html(record, align_slots=False):
+    mode = record.get("mode") or ""
+    rag = uses_rag(mode)
+    abstained = bool(record.get("abstained"))
+    klass = "card idk-card" if abstained else "card"
+    parts = [f'<div class="{klass}">']
+    if abstained:
+        parts.append('<div class="polaris-idk-flag" hidden></div>')
+    parts.append(card_head_html(mode))
+    if abstained:
+        parts.append(idk_card_html(record))
+    else:
+        parts.append(answer_body_html(record.get("answer") or ""))
+    if rag:
+        parts.append(evidence_block_html(record, collapsed=True))
+    elif align_slots:
+        parts.append(empty_slot_html("ev"))
+    parts.append(
+        retrieval_bar_html(
+            record.get("retrieval_max_dense"),
+            record.get("threshold"),
+            retrieval_off=not rag,
+        )
+    )
+    if abstained:
+        parts.append(best_match_html(record))
+    elif align_slots:
+        parts.append(empty_slot_html("best"))
+    parts.append(metrics_html(record))
+    parts.append("</div>")
+    return "".join(parts)
+
+
 def waiting_html(mode, after_label):
     return (
-        card_head_html(mode)
-        + f'<div class="waiting">waiting · runs after {escape(after_label)} finishes</div>'
+        '<div class="card waiting-card">'
+        + card_head_html(mode)
+        + f'<div class="slot-empty body">waiting · runs after {escape(after_label)} finishes</div>'
+        + empty_slot_html("ev")
+        + '<div class="retr off"><span class="lbl">retrieval</span></div>'
+        + empty_slot_html("best")
+        + '<div class="metrics slot-empty foot"></div>'
+        + "</div>"
     )
 
 

@@ -35,12 +35,14 @@ from app.engine import (
 from app.polaris import (
     EXAMPLES,
     avg_latency,
+    best_match_html,
     build_run_record,
     card_head_html,
     compare_compact_html,
     default_compare_modes,
     empty_hero_html,
-    evidence_rows_html,
+    empty_slot_html,
+    evidence_block_html,
     header_band_html,
     idk_card_html,
     index_chunk_count,
@@ -51,7 +53,6 @@ from app.polaris import (
     records_to_json,
     retrieval_bar_html,
     sidebar_kv_html,
-    source_chips_html,
     split_code_blocks,
     split_reasoning,
     style_path,
@@ -431,12 +432,12 @@ def _run_compare(question, left_mode, right_mode, model, retriever, index_dir):
         with col_l:
             rec_l = _answer_record(question, left_mode, model, retriever, index_dir)
             if rec_l is not None:
-                _render_card(rec_l, key="answer-cmp-left")
+                _render_card(rec_l, key="answer-cmp-left", align_slots=True)
         wait.empty()
         rec_r = _answer_record(question, right_mode, model, retriever, index_dir)
         with col_r:
             if rec_r is not None:
-                _render_card(rec_r, key="answer-cmp-right")
+                _render_card(rec_r, key="answer-cmp-right", align_slots=True)
     return rec_l, rec_r
 
 
@@ -454,10 +455,10 @@ def _replay_message(msg, index, compact_compare=False):
             col_l, col_r = st.columns(2, gap="medium")
             with col_l:
                 if left:
-                    _render_card(left, key=f"answer-h{index}-l")
+                    _render_card(left, key=f"answer-h{index}-l", align_slots=True)
             with col_r:
                 if right:
-                    _render_card(right, key=f"answer-h{index}-r")
+                    _render_card(right, key=f"answer-h{index}-r", align_slots=True)
         return
     rec = msg.get("record")
     if rec:
@@ -466,40 +467,40 @@ def _replay_message(msg, index, compact_compare=False):
     st.markdown(msg.get("content") or "")
 
 
-def _render_card(record, key):
+def _render_card(record, key, align_slots=False):
     mode = record.get("mode") or ""
     rag = uses_rag(mode)
+    abstained = bool(record.get("abstained"))
     with st.container(key=key):
         st.markdown(card_head_html(mode), unsafe_allow_html=True)
-        if record.get("abstained"):
+        if abstained:
             st.markdown(idk_card_html(record), unsafe_allow_html=True)
-            _render_evidence(record)
-        else:
-            if mode in ("cot", "full"):
-                reason, answer = split_reasoning(record.get("answer") or "")
-                if reason:
-                    with st.expander("REASONING", expanded=False):
-                        st.markdown(reason)
-                    _render_answer_body(answer)
-                else:
-                    _render_answer_body(record.get("answer") or "")
+        elif mode in ("cot", "full"):
+            reason, answer = split_reasoning(record.get("answer") or "")
+            if reason:
+                with st.expander("REASONING", expanded=False):
+                    st.markdown(reason)
+                _render_answer_body(answer)
             else:
                 _render_answer_body(record.get("answer") or "")
-            st.markdown(
-                retrieval_bar_html(
-                    record.get("retrieval_max_dense"),
-                    record.get("threshold"),
-                    retrieval_off=not rag,
-                ),
-                unsafe_allow_html=True,
-            )
-            raw_hits = record.get("hits") or []
-            st.markdown(
-                source_chips_html(raw_hits, retrieval_off=not rag),
-                unsafe_allow_html=True,
-            )
-            if rag:
-                _render_evidence(record)
+        else:
+            _render_answer_body(record.get("answer") or "")
+        if rag:
+            st.markdown(evidence_block_html(record, collapsed=True), unsafe_allow_html=True)
+        elif align_slots:
+            st.markdown(empty_slot_html("ev"), unsafe_allow_html=True)
+        st.markdown(
+            retrieval_bar_html(
+                record.get("retrieval_max_dense"),
+                record.get("threshold"),
+                retrieval_off=not rag,
+            ),
+            unsafe_allow_html=True,
+        )
+        if abstained:
+            st.markdown(best_match_html(record), unsafe_allow_html=True)
+        elif align_slots:
+            st.markdown(empty_slot_html("best"), unsafe_allow_html=True)
         st.markdown(metrics_html(record), unsafe_allow_html=True)
 
 
@@ -513,12 +514,6 @@ def _render_answer_body(text):
             st.code(chunk, language="bash")
         elif chunk.strip():
             st.markdown(chunk)
-
-
-def _render_evidence(record):
-    hits = record.get("hits") or []
-    with st.expander("Evidence", expanded=False):
-        st.markdown(evidence_rows_html(hits), unsafe_allow_html=True)
 
 
 if __name__ == "__main__":

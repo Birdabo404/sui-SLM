@@ -17,18 +17,26 @@ from shared.prompt import ABSTAIN
 from app.engine import WEAK_DENSE, answer_question, is_weak, model_digest, ollama_reachable
 from app.polaris import (
     EXPORT_FIELDS,
+    best_match_html,
     best_match_label,
     build_run_record,
     card_head_html,
+    card_html,
+    debug_rows_html,
     default_compare_modes,
     doc_label,
+    evidence_block_html,
+    evidence_panel_html,
     evidence_rows_html,
+    evidence_summary_text,
+    format_total_ram,
     idk_card_html,
     index_chunk_count,
     max_dense,
     metrics_html,
     pair_compare_modes,
     polaris_on,
+    ram_split_html,
     records_to_csv,
     records_to_json,
     retrieval_bar_html,
@@ -37,6 +45,7 @@ from app.polaris import (
     split_code_blocks,
     split_reasoning,
     style_path,
+    waiting_html,
 )
 class FakeRetriever:
     def __init__(self, hits):
@@ -169,10 +178,18 @@ class RunRecordTests(unittest.TestCase):
         self.assertEqual(rec["answer"], ABSTAIN)
         html = idk_card_html(rec)
         self.assertIn("no fix on this one", html)
-        self.assertIn("best match:", html)
-        self.assertIn("retr low", html)
+        self.assertIn("idk-body", html)
+        self.assertNotIn('class="idk"', html)
+        self.assertIn("polaris-idk-flag", html)
         self.assertIn(ABSTAIN.splitlines()[0], html)
         self.assertIn("Please ask the lab technician", html)
+        card = card_html(rec)
+        self.assertIn("idk-card", card)
+        self.assertIn("retr low", card)
+        self.assertIn("best match:", card)
+        self.assertIn("cosine 0.10 of 0.30 needed", card)
+        self.assertIn("Evidence · 1 source", card)
+        self.assertNotIn(" open", card.split("ev-box", 1)[1][:20])
 
     def test_base_record_has_no_retrieval_max(self):
         result = answer_question(
@@ -314,8 +331,17 @@ class HtmlTests(unittest.TestCase):
         self.assertIn("retr ok", html)
         self.assertIn("width:74.0%", html)
         self.assertIn("left:30.0%", html)
+        self.assertIn("left:74.0%", html)
+        self.assertIn(">0.30<", html)
+        self.assertIn(">0.74<", html)
+        self.assertIn(">0<", html)
+        self.assertIn(">1<", html)
+        self.assertNotIn("threshold <b>", html)
         low = retrieval_bar_html(0.22, 0.30)
         self.assertIn("retr low", low)
+        self.assertIn("width:22.0%", low)
+        self.assertIn("left:22.0%", low)
+        self.assertIn("left:30.0%", low)
 
     def test_chips_and_evidence(self):
         hits = [
@@ -330,14 +356,44 @@ class HtmlTests(unittest.TestCase):
                 "bm25": 2.1, "snippet": "tar — tape archive",
             },
         ]
+        rec = {
+            "mode": "full",
+            "hits": hits,
+            "docs": ["tar (tldr common)", "tar(1)"],
+            "threshold": 0.30,
+            "app_rss_mb": 420,
+            "ollama_rss_mb": 2100,
+            "total_mb": 2520,
+            "latency_s": 1.8,
+            "abstained": False,
+            "answer": "use tar",
+            "retrieval_max_dense": 0.74,
+        }
         chips = source_chips_html(hits)
         self.assertIn("TLDR", chips)
         self.assertIn("MAN", chips)
+        self.assertEqual(evidence_summary_text(rec), "Evidence · 2 sources · tldr tar")
         ev = evidence_rows_html(hits)
-        self.assertIn("cos 0.74", ev)
-        self.assertIn("rrf 0.0500", ev)
-        self.assertIn("bm25 6.200", ev)
-        self.assertIn("tldr/common/tar.md", ev)
+        self.assertIn("cosine 0.74", ev)
+        self.assertNotIn("rrf", ev)
+        self.assertNotIn("bm25", ev)
+        self.assertNotIn("tldr/common/tar.md", ev)
+        panel = evidence_panel_html(rec)
+        self.assertIn("best match:", panel)
+        self.assertIn("cosine 0.74 of 0.30", panel)
+        self.assertNotIn("rrf 0.0500", panel.split("<details", 1)[0])
+        self.assertNotIn("tldr/common/tar.md", panel.split("<details", 1)[0])
+        self.assertIn("app <b>420</b> MB", panel)
+        self.assertIn("ollama <b>2100</b> MB", panel)
+        dbg = debug_rows_html(hits)
+        self.assertIn("rrf 0.0500", dbg)
+        self.assertIn("bm25 6.200", dbg)
+        self.assertIn("tldr/common/tar.md", dbg)
+        block = evidence_block_html(rec)
+        self.assertIn("<summary>", block)
+        self.assertIn("Evidence · 2 sources", block)
+        self.assertIn("tldr", block)
+        self.assertNotIn(" open", block.split("ev-box", 1)[1][:20])
         off = source_chips_html([], retrieval_off=True)
         self.assertIn("retrieval off", off)
 
@@ -354,11 +410,17 @@ class HtmlTests(unittest.TestCase):
         }
         html = metrics_html(rec)
         self.assertIn("1.8", html)
-        self.assertIn("420", html)
-        self.assertIn("2100", html)
-        self.assertIn("2520", html)
-        self.assertIn("docs <b>3</b>", html)
+        self.assertIn("2.5 GB", html)
+        self.assertIn("total", html)
+        self.assertIn("3 sources", html)
+        self.assertNotIn("app <b>420</b>", html)
+        self.assertNotIn("2100", html)
+        self.assertNotIn("docs", html)
         self.assertNotIn("tok", html)
+        self.assertEqual(format_total_ram(2520), "2.5 GB")
+        split = ram_split_html(rec)
+        self.assertIn("app <b>420</b> MB", split)
+        self.assertIn("ollama <b>2100</b> MB", split)
 
     def test_source_key_and_best_match(self):
         self.assertEqual(source_key("tldr"), "TLDR")
@@ -367,6 +429,75 @@ class HtmlTests(unittest.TestCase):
             best_match_label([{"source": "tldr", "title": "ls(1)", "dense": 0.2}]),
             "tldr ls(1)",
         )
+        html = best_match_html({
+            "hits": [{"source": "tldr", "title": "ls - List files", "dense": 0.22}],
+            "threshold": 0.30,
+        })
+        self.assertIn("tldr", html)
+        self.assertIn("ls - List files", html)
+        self.assertIn("cosine 0.22 of 0.30 needed", html)
+
+    def test_waiting_is_solid_muted_not_dashed(self):
+        html = waiting_html("full", "BASE")
+        self.assertIn("waiting-card", html)
+        self.assertIn("slot-empty", html)
+        self.assertIn("waiting · runs after BASE finishes", html)
+        self.assertNotIn("dashed", html)
+        self.assertIn("retr off", html)
+
+    def test_compare_slots_match(self):
+        full = {
+            "mode": "full",
+            "answer": "Use tar.\n```bash\ntar -xzf file.tar.gz\n```",
+            "hits": [{
+                "rank": 1, "source": "tldr", "title": "tar (tldr common)",
+                "path": "tldr/common/tar.md", "dense": 0.74, "rrf": 0.05,
+                "bm25": 6.2, "snippet": "tar -xzf",
+            }],
+            "docs": ["tar (tldr common)"],
+            "threshold": 0.30,
+            "retrieval_max_dense": 0.74,
+            "latency_s": 1.8,
+            "app_rss_mb": 420,
+            "ollama_rss_mb": 2100,
+            "total_mb": 2520,
+            "abstained": False,
+        }
+        idk = {
+            "mode": "rag",
+            "answer": ABSTAIN,
+            "hits": [{
+                "rank": 1, "source": "tldr", "title": "ls - List files",
+                "path": "tldr/common/ls.md", "dense": 0.22, "rrf": 0.016,
+                "bm25": 1.1, "snippet": "ls — list files",
+            }],
+            "docs": ["ls - List files"],
+            "threshold": 0.30,
+            "retrieval_max_dense": 0.22,
+            "latency_s": 0.4,
+            "app_rss_mb": 380,
+            "ollama_rss_mb": 1800,
+            "total_mb": 2180,
+            "abstained": True,
+        }
+        left = card_html(full, align_slots=True)
+        right = card_html(idk, align_slots=True)
+        self.assertIn("slot-empty best", left)
+        self.assertIn("best match:", right)
+        self.assertIn("Evidence · 1 source · ", left)
+        self.assertIn("tldr", left)
+        self.assertIn("1.8", left)
+        self.assertIn("2.5 GB", left)
+        self.assertIn("1 source", left)
+        self.assertIn("0.4", right)
+        self.assertIn("2.1 GB", right)
+        self.assertIn("abstain", right)
+        self.assertIn("idk-card", right)
+        self.assertNotIn('class="idk"', right)
+        wait = waiting_html("rag", "FULL")
+        self.assertIn("slot-empty ev", wait)
+        self.assertIn("slot-empty best", wait)
+        self.assertIn("waiting-card", wait)
 
 
 class HelperTests(unittest.TestCase):
@@ -394,6 +525,10 @@ class HelperTests(unittest.TestCase):
         self.assertIn("/app/static/Inter-Regular.woff2", css)
         self.assertNotIn("fonts.googleapis.com", css)
         self.assertNotIn("cdn", css.lower())
+        self.assertIn("--fs-base:15px", css)
+        self.assertIn("1px dashed var(--c-slate)", css)
+        self.assertNotIn("@keyframes", css)
+        self.assertNotIn(".waiting{border:1px dashed", css.replace(" ", ""))
 
 
 class DigestTests(unittest.TestCase):
