@@ -126,10 +126,18 @@ body:not(:has(.screen:target)) #empty{display:grid}
 
 /* header star — the only animated element (hero and IDK stars are static).
    Idle: breathe, sway, glow, an occasional glint. Wrap (.is-wrapping, added by the script once on load in the
-   empty state and on hover/focus/click of the wordmark): anticipation, two coils on offset-path with a lagging
-   trail, follow-through, settle. Path and body keyframes: star-orbit.css. Animated properties: transform,
-   opacity, offset-distance. The rest pose is the un-animated state, so removing the class never jumps. */
+   empty state and on hover/focus/click of the wordmark): anticipation, then one orbit on offset-path —
+   behind the word, out under it, in front across the letters, behind again — with a lagging trail,
+   follow-through, settle. Path, depth and body keyframes: star-orbit.css. Animated properties: transform,
+   opacity, offset-distance. The rest pose is the un-animated state, so removing the class never jumps.
+   Depth: the word is drawn twice, in paint order glow layer → .base → star, trail, sparks → .ink. While the
+   star is behind, .ink shows and covers it; while it is in front, .base shows under it. The swap is a stepped
+   opacity change at two moments the generator proves clear of every glyph, so nothing changes layer over a
+   letter. The glow stays under both copies and never swaps. */
 .band .star-fx{position:absolute;left:50%;top:50%;width:0;height:0;pointer-events:none}
+.band .ink{position:relative}
+.band .base{position:absolute;left:0;top:0;white-space:nowrap;opacity:0;pointer-events:none;user-select:none}
+.band .ink,.band .base{will-change:opacity}
 .band .star-fx b svg{display:block;width:100%;height:100%}
 .band .rig{position:absolute;left:0;top:0;width:1em;height:1em;offset-distance:0%;offset-rotate:0deg;will-change:transform}
 .band .body,.band .breathe,.band .sway{position:absolute;inset:0}
@@ -178,29 +186,20 @@ body:not(:has(.screen:target)) #empty{display:grid}
   95%,100%{opacity:0;transform:scale(.25) rotate(50deg)}
 }
 
-/* Wrap. Every layer shares one 4.4s clock (star-orbit.css: 0.38s anticipation, 3.52s travel, 0.5s settle). */
+/* Wrap. Every layer shares one 4.4s clock (star-orbit.css: 0.38s anticipation, 3.52s orbit, 0.5s settle);
+   the slim band swaps in its own keyframes there. The trail rides the star's layer, so it is hidden and
+   revealed with it. */
 .band .mark.is-wrapping .rig{animation:star-wrap-path 4.4s linear}
 .band .mark.is-wrapping .body{animation:star-wrap-body 4.4s linear}
-.band.slim .mark.is-wrapping .body{animation-name:star-wrap-body-slim}
 .band .mark.is-wrapping .halo{animation:star-halo 4.4s linear}
+.band .mark.is-wrapping .ink{animation:star-depth-ink 4.4s linear}
+.band .mark.is-wrapping .base{animation:star-depth-base 4.4s linear}
 .band .mark.is-wrapping .trail>*{animation:star-wrap-path 4.4s linear var(--d),star-trail 4.4s linear var(--d)}
 .band .mark.is-wrapping .trail b{animation-name:star-wrap-path,star-trail-spark}
 .band .mark.is-wrapping .glints{opacity:0;transition-duration:.2s;transition-delay:0s}
-/* Reactive glow. Anticipation: the light draws in with the dip. Coils: it swells as the star gathers speed.
-   It stretches along the level over/under passes until the last one (squash & stretch), which also keeps
-   it inside the band.
-   Settle: it eases back to idle after the star has landed, so the light lags the motion (follow-through). */
-@keyframes star-halo{
-  0%{opacity:.62;transform:scale(1);animation-timing-function:cubic-bezier(.45,0,.55,1)}
-  8.64%{opacity:.46;transform:scale(.88);animation-timing-function:cubic-bezier(.3,0,.25,1)}
-  45%{opacity:1;transform:scale(1.12,.78);animation-timing-function:cubic-bezier(.4,0,.6,1)}
-  66%{opacity:.96;transform:scale(1.08,.76);animation-timing-function:cubic-bezier(.45,0,.35,1)}
-  90%{opacity:.82;transform:scale(1.04);animation-timing-function:cubic-bezier(.35,0,.25,1)}
-  100%{opacity:.62;transform:scale(1)}
-}
-.tab-hidden .band .star-fx *{animation-play-state:paused}
+.tab-hidden .band .star-fx *,.tab-hidden .band .ink,.tab-hidden .band .base{animation-play-state:paused}
 @media (prefers-reduced-motion:reduce){
-  .band .star-fx *{animation:none!important;transition:none!important}
+  .band .star-fx *,.band .ink,.band .base{animation:none!important;transition:none!important}
   .band .trail,.band .glints{display:none}
 }
 .pill-offline{display:inline-flex;align-items:center;height:20px;padding:0 6px;font:600 var(--fs-xs)/1 var(--f-mono);
