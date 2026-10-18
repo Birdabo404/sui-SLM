@@ -300,7 +300,7 @@ class CompareTests(unittest.TestCase):
                 "threshold": 0.3,
             }
 
-        def render(rec, key):
+        def render(rec, key, align_slots=False):
             events.append(("render", rec["mode"]))
 
         with patch.object(app_mod.st, "container", return_value=Box()), patch.object(
