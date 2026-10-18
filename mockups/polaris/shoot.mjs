@@ -1,4 +1,5 @@
-// Screenshots every route at 1366×768 and checks fonts, network, overflow, 11 px minimum and 4.5:1 text contrast.
+// Screenshots every route at 1366×768 (header star frozen at rest) and checks fonts, network, overflow, 11 px minimum,
+// 4.5:1 text contrast, and that the only animation is the header star: transform-only, layout-free, off under reduced motion.
 //   npm i --no-save playwright-core
 //   CHROME_PATH=/usr/bin/chromium node shoot.mjs [outdir]     (outdir defaults to ./screens)
 import { chromium } from "playwright-core";
@@ -14,6 +15,8 @@ const page_url = pathToFileURL(join(here, "index.html")).href;
 mkdirSync(outDir, { recursive: true });
 const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH });
 const page = await browser.newPage({ viewport: { width: 1366, height: 768 }, deviceScaleFactor: 1 });
+const cdp = await page.context().newCDPSession(page);
+await cdp.send("Performance.enable");
 
 const external = [];
 page.on("request", (r) => { if (!r.url().startsWith("file:")) external.push(r.url()); });
@@ -77,6 +80,29 @@ for (const route of routes) {
   if (report.lowContrast.length) console.log(`  contrast under 4.5:1: ${report.lowContrast.join("; ")}`);
   if (report.scrollY > 0) console.log(`  page scrolls by ${report.scrollY}px`);
 
+  // motion: only the header star animates, only transform/opacity, live without layout, off under reduced motion
+  const anims = () => page.evaluate(() => document.getAnimations().filter((a) => a.playState === "running").map((a) => ({
+    name: a.animationName, inBand: !!a.effect.target.closest(".band"),
+    props: [...new Set(a.effect.getKeyframes().flatMap((k) => Object.keys(k)))]
+      .filter((p) => !["offset", "computedOffset", "easing", "composite"].includes(p)),
+  })));
+  const starTf = () => page.evaluate((id) => getComputedStyle(document.querySelector(`#${id} .band .orbit`)).transform, route);
+  const layoutCount = async () => (await cdp.send("Performance.getMetrics")).metrics.find((m) => m.name === "LayoutCount").value;
+  const running = await anims();
+  const [tf0, l0] = [await starTf(), await layoutCount()];
+  await page.waitForTimeout(1600);
+  const [tf1, l1] = [await starTf(), await layoutCount()];
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const reduced = (await anims()).length;
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  const stray = running.filter((a) => !a.inBand || a.props.some((p) => !["transform", "opacity"].includes(p)));
+  const motionOk = running.length === 2 && stray.length === 0 && tf0 !== tf1 && l1 === l0 && reduced === 0;
+  failed ||= !motionOk;
+  console.log(`  motion ${motionOk ? "ok  " : "FAIL"} ${running.map((a) => `${a.name}(${a.props})`).join(" + ")}; ` +
+    `moved while live: ${tf0 !== tf1}; layouts during 1.6s: ${l1 - l0}; animations under reduced motion: ${reduced}` +
+    (stray.length ? `; outside band or non-transform: ${stray.map((a) => a.name).join(", ")}` : ""));
+
+  await page.evaluate(() => document.getAnimations().forEach((a) => { a.pause(); a.currentTime = 0; }));
   await page.screenshot({ path: join(outDir, `${route}.png`) });
 }
 
