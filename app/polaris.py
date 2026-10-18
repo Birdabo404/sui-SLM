@@ -22,6 +22,30 @@ STAR_SVG = (
     '<path d="M12 0L14.2 9.8 24 12 14.2 14.2 12 24 9.8 14.2 0 12 9.8 9.8Z"/>'
     "</svg>"
 )
+STAR_LUX_SVG = (
+    '<svg viewBox="0 0 24 24" aria-hidden="true">'
+    '<path fill="url(#polaris-star-lux-fill)" d="M12 0C12.45 7.1 14.7 11.2 22 12C14.7 12.8 12.45 16.9 12 24C11.55 16.9 9.3 12.8 2 12C9.3 11.2 11.55 7.1 12 0Z"/>'
+    '<path fill="#FFF9EC" opacity=".55" d="M12 6C12.2 9.6 12.9 11.3 15.5 12C12.9 12.7 12.2 14.4 12 18C11.8 14.4 11.1 12.7 8.5 12C11.1 11.3 11.8 9.6 12 6Z"/>'
+    "</svg>"
+)
+GLINT_SVG = (
+    '<svg viewBox="0 0 24 24" aria-hidden="true">'
+    '<path fill="#FFEBC2" d="M12 0C12.4 9 15 11.6 24 12C15 12.4 12.4 15 12 24C11.6 15 9 12.4 0 12C9 11.6 11.6 9 12 0Z"/>'
+    '<circle cx="12" cy="12" r="2.2" fill="#FFF8EA"/>'
+    "</svg>"
+)
+STAR_DEFS = (
+    '<svg width="0" height="0" aria-hidden="true">'
+    "<defs>"
+    '<radialGradient id="polaris-star-lux-fill" cx="12" cy="12" r="11.5" gradientUnits="userSpaceOnUse">'
+    '<stop offset="0" stop-color="#FFF7E2"/>'
+    '<stop offset=".16" stop-color="#FFE3A2"/>'
+    '<stop offset=".46" stop-color="#F5B942"/>'
+    '<stop offset="1" stop-color="#E29A2E"/>'
+    "</radialGradient>"
+    "</defs>"
+    "</svg>"
+)
 SNIPPET_LEN = 200
 CHIP_CAP = 4
 EXPORT_FIELDS = (
@@ -354,21 +378,45 @@ def empty_slot_html(kind="", label=""):
     return f'<div class="{klass}">{inner}</div>'
 
 
+def _header_star_html():
+    glints = f'<span class="glints"><b>{GLINT_SVG}</b><b>{GLINT_SVG}</b></span>'
+    trail = "<span class=\"trail\">" + ("<i></i>" * 10) + f"<b>{GLINT_SVG}</b>" * 3 + "</span>"
+    glow = (
+        '<span class="star-fx star-glow" aria-hidden="true">'
+        '<span class="rig"><span class="body"><span class="halo"><span class="glow"></span></span></span></span>'
+        "</span>"
+    )
+    star = (
+        f'<span class="star-fx" aria-hidden="true">{glints}{trail}'
+        f'<span class="rig"><span class="body"><span class="breathe"><span class="sway">{STAR_LUX_SVG}</span></span></span></span>'
+        "</span>"
+    )
+    return (
+        glow
+        + '<span class="base" aria-hidden="true">polaris</span>'
+        + star
+        + '<span class="ink">polaris</span>'
+    )
+
+
 def header_band_html(slim=False, animate=False):
     classes = ["band"]
     if slim:
         classes.append("slim")
+        classes.append("rest")
     if animate:
-        classes.append("orbit-on")
+        classes.append("wrap-on")
+    mark_class = "mark is-wrapping" if animate else "mark rest"
     return (
         f'<div class="{" ".join(classes)}">'
-        '<span class="mark"><span class="word">polaris'
-        f'<span class="orbit" aria-hidden="true"><span class="float">{STAR_SVG}</span></span>'
-        "</span></span>"
-        f'<span class="tag">offline help for the linux lab</span>'
-        f'<span class="spacer"></span>'
-        f'<span class="pill-offline">offline</span>'
-        f"</div>"
+        + STAR_DEFS
+        + f'<span class="{mark_class}" tabindex="0"><span class="word">'
+        + _header_star_html()
+        + "</span></span>"
+        '<span class="tag">offline help for the linux lab</span>'
+        '<span class="spacer"></span>'
+        '<span class="pill-offline">offline</span>'
+        "</div>"
     )
 
 

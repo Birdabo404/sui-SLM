@@ -1,8 +1,8 @@
 /* style.css — Polaris v3, spec v3.1 tokens at compact density (13–15 px).
    Inject once with star-orbit.css. Fonts also declared in .streamlit/config.toml [[theme.fontFaces]].
    DARK = :root. DAYLIGHT when the app renders <div class="polaris-daylight"></div>.
-   No shadows, glow, scanlines, images, JS, or network fonts.
-   The header star is the only animation (transform only; off under prefers-reduced-motion). */
+   No scanlines, images, JS, or network fonts. Header star glow is the only exception.
+   The header star is the only animation (transform / offset / opacity; off under prefers-reduced-motion). */
 
 @font-face{font-family:"Inter";src:url("/app/static/Inter-Regular.woff2") format("woff2");font-weight:400;font-style:normal;font-display:block}
 @font-face{font-family:"Inter";src:url("/app/static/Inter-SemiBold.woff2") format("woff2");font-weight:600;font-style:normal;font-display:block}
@@ -67,27 +67,79 @@
 @media (min-width:1600px){[data-testid="stSidebar"]{min-width:320px;max-width:320px}}
 :root:has(.polaris-compare) [data-testid="stMainBlockContainer"]{max-width:none;padding-left:var(--s-4);padding-right:var(--s-4)}
 
-.band{position:relative;display:flex;align-items:center;gap:var(--s-3);min-height:var(--band-h);padding:0 var(--s-4);
+.band{position:relative;overflow:visible;display:flex;align-items:center;gap:var(--s-3);min-height:var(--band-h);padding:0 var(--s-4);
   background:var(--stars),var(--h-bg);border:1px solid var(--h-hair);border-radius:var(--r-lg);color:var(--h-text)}
 .band .mark{position:relative;display:inline-block;padding:0 1.15em 0 .35em;font:600 15px/1 var(--f-mono);color:var(--h-text)}
+.band.wrap-on .mark{cursor:pointer}
+.band .mark:focus{outline:none}
+.band .mark:focus-visible{outline:3px solid var(--c-accent);outline-offset:2px}
 .band .word{position:relative;display:inline-block}
 .band .tag{font:400 var(--fs-sm)/1.3 var(--f-mono);color:var(--h-text-2)}
 .band .spacer{flex:1}
 .band.slim{min-height:40px;padding:0 var(--s-3)}.band.slim .tag{display:none}
 .band.slim .mark{top:-1px;font-size:14px}
-.band .orbit{position:absolute;left:50%;top:50%;width:1em;height:1em;margin:-.5em 0 0 -.5em;pointer-events:none}
-.band .float{display:block;width:100%;height:100%}
-.band .float svg{display:block;width:100%;height:100%;fill:var(--h-accent)}
-.band.orbit-on .orbit{animation:star-orbit 7.2s linear 1 forwards;will-change:transform}
-.band.orbit-on.slim .orbit{animation-name:star-orbit-slim}
-.band.orbit-on .float{animation:star-float 2.4s 3;will-change:transform}
-@keyframes star-float{
-  0%{transform:translateY(0) rotate(0deg);animation-timing-function:cubic-bezier(.61,1,.88,1)}
-  25%{transform:translateY(-.06em) rotate(-4deg);animation-timing-function:cubic-bezier(.37,0,.63,1)}
-  75%{transform:translateY(.06em) rotate(4deg);animation-timing-function:cubic-bezier(.12,0,.39,0)}
-  100%{transform:translateY(0) rotate(0deg)}
+.band .star-fx{position:absolute;left:50%;top:50%;width:0;height:0;pointer-events:none}
+.band .ink{position:relative}
+.band .base{position:absolute;left:0;top:0;white-space:nowrap;opacity:0;pointer-events:none;user-select:none}
+.band .ink,.band .base{will-change:opacity}
+.band .star-fx b svg{display:block;width:100%;height:100%}
+.band .rig{position:absolute;left:0;top:0;width:1em;height:1em;offset-distance:0%;offset-rotate:0deg;will-change:transform}
+.band .body,.band .breathe,.band .sway{position:absolute;inset:0}
+.band .body,.band .breathe,.band .sway,.band .halo,.band .glow{will-change:transform,opacity}
+.band .sway svg{display:block;width:100%;height:100%;overflow:visible}
+.band .halo{position:absolute;left:50%;top:50%;width:2em;height:2em;margin:-1em 0 0 -1em;opacity:.62}
+.band .glow{position:absolute;inset:0;border-radius:50%;background:radial-gradient(closest-side,
+  color-mix(in srgb,#FFE6B0 62%,transparent),color-mix(in srgb,var(--h-accent) 30%,transparent) 38%,
+  color-mix(in srgb,var(--h-accent) 9%,transparent) 66%,transparent)}
+.band .trail>*{position:absolute;left:0;top:0;offset-distance:0%;offset-rotate:0deg;opacity:0;will-change:transform,opacity}
+.band .trail i{width:calc(var(--z) * 2.8);height:var(--z);border-radius:50%;offset-rotate:auto;
+  background:radial-gradient(closest-side,color-mix(in srgb,#FFE2A4 calc(var(--a) * 100%),transparent),
+    color-mix(in srgb,var(--h-accent) calc(var(--a) * 70%),transparent) 60%,transparent)}
+.band .trail i:nth-child(1){--d:.014s;--z:3.2px;--a:.82}
+.band .trail i:nth-child(2){--d:.028s;--z:3px;--a:.72}
+.band .trail i:nth-child(3){--d:.042s;--z:2.8px;--a:.63}
+.band .trail i:nth-child(4){--d:.056s;--z:2.6px;--a:.55}
+.band .trail i:nth-child(5){--d:.07s;--z:2.4px;--a:.47}
+.band .trail i:nth-child(6){--d:.084s;--z:2.2px;--a:.4}
+.band .trail i:nth-child(7){--d:.098s;--z:2px;--a:.33}
+.band .trail i:nth-child(8){--d:.112s;--z:1.8px;--a:.27}
+.band .trail i:nth-child(9){--d:.126s;--z:1.6px;--a:.21}
+.band .trail i:nth-child(10){--d:.14s;--z:1.4px;--a:.15}
+.band .trail b{width:.3em;height:.3em;offset-rotate:auto;transform:scale(1.5,.8)}
+.band .trail b:nth-of-type(1){--d:.07s}.band .trail b:nth-of-type(2){--d:.12s}.band .trail b:nth-of-type(3){--d:.18s}
+.band .glints{transition:opacity .6s cubic-bezier(.3,0,.2,1) .2s}
+.band .glints b{position:absolute;width:.34em;height:.34em;margin:-.17em 0 0 -.17em;opacity:0;will-change:transform,opacity}
+.band .glints b:nth-child(1){left:calc(var(--rest-x) + .46em);top:calc(var(--rest-y) - .48em);animation:star-glint 7.3s linear -5.9s infinite}
+.band .glints b:nth-child(2){left:calc(var(--rest-x) + .4em);top:calc(var(--rest-y) + .52em);animation:star-glint 11.9s linear -2.6s infinite}
+.band .breathe{animation:star-breathe 5.2s cubic-bezier(.45,.05,.55,.95) infinite alternate}
+.band .glow{animation:star-glow 5.2s cubic-bezier(.45,.05,.55,.95) infinite alternate}
+.band .sway{animation:star-sway 8.6s cubic-bezier(.37,0,.63,1) -4.3s infinite alternate}
+@keyframes star-breathe{from{transform:scale(1)}to{transform:scale(1.025)}}
+@keyframes star-glow{from{opacity:.8;transform:scale(.97)}to{opacity:1;transform:scale(1.03)}}
+@keyframes star-sway{from{transform:rotate(-2.5deg)}to{transform:rotate(2.5deg)}}
+@keyframes star-glint{
+  0%,88%{opacity:0;transform:scale(0) rotate(0deg);animation-timing-function:cubic-bezier(.2,.8,.3,1)}
+  90.5%{opacity:1;transform:scale(1) rotate(20deg);animation-timing-function:cubic-bezier(.5,0,.75,.4)}
+  95%,100%{opacity:0;transform:scale(.25) rotate(50deg)}
 }
-@media (prefers-reduced-motion:reduce){.band .orbit,.band .float{animation:none}}
+.band.wrap-on .mark.is-wrapping .rig,.band.wrap-on .mark:is(:hover,:focus-visible,:active) .rig{animation:star-wrap-path 4.4s linear}
+.band.wrap-on .mark.is-wrapping .body,.band.wrap-on .mark:is(:hover,:focus-visible,:active) .body{animation:star-wrap-body 4.4s linear}
+.band.wrap-on .mark.is-wrapping .halo,.band.wrap-on .mark:is(:hover,:focus-visible,:active) .halo{animation:star-halo 4.4s linear}
+.band.wrap-on .mark.is-wrapping .ink,.band.wrap-on .mark:is(:hover,:focus-visible,:active) .ink{animation:star-depth-ink 4.4s linear}
+.band.wrap-on .mark.is-wrapping .base,.band.wrap-on .mark:is(:hover,:focus-visible,:active) .base{animation:star-depth-base 4.4s linear}
+.band.wrap-on .mark.is-wrapping .trail>*,.band.wrap-on .mark:is(:hover,:focus-visible,:active) .trail>*{animation:star-wrap-path 4.4s linear var(--d),star-trail 4.4s linear var(--d)}
+.band.wrap-on .mark.is-wrapping .trail b,.band.wrap-on .mark:is(:hover,:focus-visible,:active) .trail b{animation-name:star-wrap-path,star-trail-spark}
+.band.wrap-on .mark.is-wrapping .glints,.band.wrap-on .mark:is(:hover,:focus-visible,:active) .glints{opacity:0;transition-duration:.2s;transition-delay:0s}
+.band.wrap-on .mark:is(:hover,:focus-visible,:active) .rig,
+.band.wrap-on .mark:is(:hover,:focus-visible,:active) .body,
+.band.wrap-on .mark:is(:hover,:focus-visible,:active) .halo,
+.band.wrap-on .mark:is(:hover,:focus-visible,:active) .ink,
+.band.wrap-on .mark:is(:hover,:focus-visible,:active) .base{animation-duration:4.401s}
+.band.wrap-on .mark:is(:hover,:focus-visible,:active) .trail>*{animation-duration:4.401s,4.401s}
+@media (prefers-reduced-motion:reduce){
+  .band .star-fx *,.band .ink,.band .base{animation:none!important;transition:none!important}
+  .band .trail,.band .glints{display:none}
+}
 .pill-offline{font:600 var(--fs-xs)/1 var(--f-mono);text-transform:uppercase;letter-spacing:var(--track);
   color:var(--h-text);border:1px solid var(--h-text-2);border-radius:var(--r-pill);padding:4px 8px}
 
