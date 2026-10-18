@@ -30,10 +30,16 @@ EVAL_SEED = 42
 WEAK_DENSE = _FROZEN["threshold"]
 RSS_SAMPLE_S = 0.25
 MODE_LABELS = {
-    "base": "base",
-    "cot": "CoT",
+    "base": "BASE",
+    "cot": "COT",
     "rag": "RAG",
-    "full": "RAG+CoT",
+    "full": "FULL",
+}
+MODE_SUBS = {
+    "base": "MODEL ONLY",
+    "cot": "STEP-BY-STEP",
+    "rag": "RETRIEVAL",
+    "full": "RAG + COT",
 }
 MODE_SUFFIX = {
     "base": "",
@@ -50,6 +56,16 @@ THESIS_CONFIGS = (
     ("base", "full"),
     ("distilled", "full"),
 )
+
+
+def mode_choices():
+    """UI mode keys, in THESIS_CONFIGS order. A new mode in both maps is a new entry."""
+    seen = []
+    for _model_key, mode in THESIS_CONFIGS:
+        if mode not in MODE_LABELS or mode in seen:
+            continue
+        seen.append(mode)
+    return seen
 CSV_FIELDS = [
     "ts", "git_commit", "config", "model", "mode", "latency_s",
     "app_rss_mb", "ollama_rss_mb", "total_mb", "system_used_mb",
@@ -172,6 +188,52 @@ def ollama_chat(messages, model, host=None, temperature=0.2, seed=None):
     r = requests.post(url, json=body, timeout=300)
     r.raise_for_status()
     return r.json()["message"]["content"]
+
+
+def _digest_from_details(details):
+    if not isinstance(details, dict):
+        return ""
+    size = str(details.get("parameter_size") or "").strip()
+    quant = str(details.get("quantization_level") or "").strip()
+    return " ".join(part for part in (size, quant) if part)
+
+
+def model_digest(model, host=None, timeout=1.5):
+    """Short size/quant string from /api/show, else /api/tags. Blank on any failure."""
+    if not model:
+        return ""
+    base = (host or OLLAMA_HOST).rstrip("/")
+    try:
+        r = requests.post(base + "/api/show", json={"name": model}, timeout=timeout)
+        if r.ok:
+            text = _digest_from_details((r.json() or {}).get("details") or {})
+            if text:
+                return text
+    except Exception:
+        pass
+    try:
+        r = requests.get(base + "/api/tags", timeout=timeout)
+        if not r.ok:
+            return ""
+        for item in (r.json() or {}).get("models") or []:
+            name = str(item.get("name") or "")
+            if name == model or name.split(":")[0] == str(model).split(":")[0]:
+                text = _digest_from_details(item.get("details") or {})
+                if text:
+                    return text
+    except Exception:
+        return ""
+    return ""
+
+
+def ollama_reachable(host=None, timeout=1.0):
+    """True if /api/tags answers. False on any failure; never raises."""
+    base = (host or OLLAMA_HOST).rstrip("/")
+    try:
+        r = requests.get(base + "/api/tags", timeout=timeout)
+        return bool(r.ok)
+    except Exception:
+        return False
 
 
 class RamSampler:
@@ -331,5 +393,12 @@ def answer_question(
         "latency_s": latency,
         "config": row["config"],
         "cited_sources": row["cited_sources"],
+        "ts": row["ts"],
+        "git_commit": row["git_commit"],
+        "model": model,
+        "mode": mode,
+        "question": question,
+        "threshold": float(threshold),
+        "k": int(k),
         **ram,
     }

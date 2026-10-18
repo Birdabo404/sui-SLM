@@ -82,20 +82,23 @@ def dense_scores(col, qemb, hit_ids, query_result):
 
 def retrieve(question, index="rag-index", k=5, exclude_distro=None, tldr_lane=False,
              rows=None, bm25=None, col=None, model=None):
-    """Return top-k chunk dicts with rrf and dense (MiniLM cosine) scores."""
-    # Heavy deps stay here so tokenize/rrf_fuse can be imported without MiniLM.
-    from rank_bm25 import BM25Okapi
-    from sentence_transformers import SentenceTransformer
-
+    """Return top-k chunk dicts with rrf, dense (MiniLM cosine), and bm25 scores."""
+    # Heavy deps stay behind the None branches so tokenize/rrf_fuse and injected
+    # fakes can run without MiniLM.
     if rows is None:
         rows = load_rows(index, exclude_distro)
     if bm25 is None:
+        from rank_bm25 import BM25Okapi
+
         bm25 = BM25Okapi([tokenize(r["text"]) for r in rows])
     sc = bm25.get_scores(tokenize(question))
+    bm25_by_id = {rows[i]["id"]: float(sc[i]) for i in range(len(rows))}
     bm_ids = [rows[i]["id"] for i in sorted(range(len(rows)), key=lambda i: -sc[i])[:50]]
     if col is None:
         col = _chroma(f"{index}/chroma").get_collection("linux_lab")
     if model is None:
+        from sentence_transformers import SentenceTransformer
+
         model = SentenceTransformer(
             col.metadata.get("embed_model", "sentence-transformers/all-MiniLM-L6-v2"),
             device="cpu",
@@ -117,6 +120,7 @@ def retrieve(question, index="rag-index", k=5, exclude_distro=None, tldr_lane=Fa
         m = dict(byid[i])
         m["rrf"] = fused[i]
         m["dense"] = sim.get(i)
+        m["bm25"] = bm25_by_id.get(i)
         hits.append(m)
     return hits
 

@@ -1,0 +1,47 @@
+# Daylight fallback. Primary switch is the sidebar toggle (CSS). Copy over
+# config.toml and restart only if a native widget stays dark.
+[server]
+enableStaticServing = true
+headless = true
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+
+[[theme.fontFaces]]
+family = "Inter"
+url = "app/static/Inter-Regular.woff2"
+weight = 400
+style = "normal"
+[[theme.fontFaces]]
+family = "Inter"
+url = "app/static/Inter-SemiBold.woff2"
+weight = 600
+style = "normal"
+[[theme.fontFaces]]
+family = "JetBrains Mono"
+url = "app/static/JetBrainsMono-Regular.woff2"
+weight = 400
+style = "normal"
+[[theme.fontFaces]]
+family = "JetBrains Mono"
+url = "app/static/JetBrainsMono-SemiBold.woff2"
+weight = 600
+style = "normal"
+
+[theme]
+base = "light"
+primaryColor = "#92400E"
+backgroundColor = "#FAF8F3"
+secondaryBackgroundColor = "#F1ECE1"
+textColor = "#1B2742"
+font = "Inter, sans-serif"
+headingFont = "'JetBrains Mono', monospace"
+codeFont = "'JetBrains Mono', monospace"
+baseFontSize = 14
+
+[theme.sidebar]
+backgroundColor = "#F1ECE1"
+secondaryBackgroundColor = "#FFFFFF"
