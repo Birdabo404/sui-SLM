@@ -2,8 +2,9 @@
    Colors are the spec's verified tokens (plus --c-text-3); type, controls and spacing replace the old
    16/18 px large-print scale. Layout classes stand in for Streamlit's data-testid hooks
    (.side = stSidebar, .col = stMainBlockContainer, .card = st-key-answer-*, …).
-   Routing is CSS-only (:target), so the mock ships no JS, like the app stylesheet.
-   Rules carried over: no shadows, no glow, no scanlines, no animation, no images. */
+   Routing is CSS-only (:target); the only script pauses the header star while the tab is hidden.
+   Rules carried over: no shadows, no glow, no scanlines, no images. The one animation is the header star
+   (transform only, off under prefers-reduced-motion); everything else, including the IDK star, is static. */
 
 @font-face{font-family:"Inter";src:url("fonts/Inter-Regular.woff2") format("woff2");font-weight:400;font-style:normal;font-display:block}
 @font-face{font-family:"Inter";src:url("fonts/Inter-SemiBold.woff2") format("woff2");font-weight:600;font-style:normal;font-display:block}
@@ -114,11 +115,29 @@ body:not(:has(.screen:target)) #empty{display:grid}
 /* header band — navy in both themes, stars allowed; 56 px, 40 px once messages exist */
 .band{position:relative;flex:none;display:flex;align-items:center;gap:var(--s-3);min-height:var(--band-h);padding:0 var(--s-4);
   background:var(--stars),var(--h-bg);border:1px solid var(--h-hair);border-radius:var(--r-lg);color:var(--h-text)}
-.band .mark{font:600 15px/1 var(--f-mono);color:var(--h-text)}
-.band .mark svg{display:inline-block;width:.6em;height:.6em;margin-left:.15em;vertical-align:.35em;fill:var(--h-accent)}
+/* padding holds the star's loop (star-orbit.css): 0.35em for the left-hand pass, 1.15em for the rest point */
+.band .mark{position:relative;display:inline-block;padding:0 1.15em 0 .35em;font:600 15px/1 var(--f-mono);color:var(--h-text)}
+.band .word{position:relative;display:inline-block}
 .band .tag{font:400 var(--fs-sm)/var(--lh-sm) var(--f-mono);color:var(--h-text-2)}
 .band .spacer{flex:1}
-.band.slim{min-height:var(--band-slim);padding:0 var(--s-3)}.band.slim .mark{font-size:14px}.band.slim .tag{display:none}
+.band.slim{min-height:var(--band-slim);padding:0 var(--s-3)}.band.slim .tag{display:none}
+.band.slim .mark{top:-1px;font-size:14px} /* 1px up centers the ink, and the loop needs that pixel at the bottom */
+
+/* header star — the only animated element. Transform only, on its own layer; rest pose is the static transform. */
+.band .orbit{position:absolute;left:50%;top:50%;width:1em;height:1em;margin:-.5em 0 0 -.5em;pointer-events:none;
+  animation:star-orbit 7.2s linear infinite;will-change:transform}
+.band.slim .orbit{animation-name:star-orbit-slim}
+.band .float{display:block;width:100%;height:100%;animation:star-float 2.4s infinite;will-change:transform}
+.band .float svg{display:block;width:100%;height:100%;fill:var(--h-accent)}
+/* one sine period: 3 floats per orbit cycle, so the two loops never drift apart */
+@keyframes star-float{
+  0%{transform:translateY(0) rotate(0deg);animation-timing-function:cubic-bezier(.61,1,.88,1)}
+  25%{transform:translateY(-.06em) rotate(-4deg);animation-timing-function:cubic-bezier(.37,0,.63,1)}
+  75%{transform:translateY(.06em) rotate(4deg);animation-timing-function:cubic-bezier(.12,0,.39,0)}
+  100%{transform:translateY(0) rotate(0deg)}
+}
+.tab-hidden .band .orbit,.tab-hidden .band .float{animation-play-state:paused}
+@media (prefers-reduced-motion:reduce){.band .orbit,.band .float{animation:none}}
 .pill-offline{display:inline-flex;align-items:center;height:20px;padding:0 6px;font:600 var(--fs-xs)/1 var(--f-mono);
   color:var(--h-text-2);border:1px solid var(--h-ctrl);border-radius:var(--r-xs)}
 
