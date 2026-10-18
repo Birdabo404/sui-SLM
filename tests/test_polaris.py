@@ -28,12 +28,16 @@ from app.polaris import (
     evidence_block_html,
     evidence_panel_html,
     evidence_rows_html,
+    empty_hero_html,
     evidence_summary_text,
     format_total_ram,
+    header_band_html,
     idk_card_html,
     index_chunk_count,
+    injected_css,
     max_dense,
     metrics_html,
+    orbit_style_path,
     pair_compare_modes,
     polaris_on,
     ram_split_html,
@@ -187,7 +191,11 @@ class RunRecordTests(unittest.TestCase):
         self.assertIn("idk-card", card)
         self.assertIn("retr low", card)
         self.assertIn("best match:", card)
-        self.assertIn("cosine 0.10 of 0.30 needed", card)
+        self.assertIn("best match: tldr ls", card)
+        self.assertNotIn("cosine 0.10 of 0.30 needed", card)
+        self.assertIn("1 candidate checked", card)
+        self.assertIn("abstain", card)
+        self.assertNotIn("1 source · abstain", card.replace(" · ", " · "))
         self.assertIn("Evidence · 1 source", card)
         self.assertNotIn(" open", card.split("ev-box", 1)[1][:20])
 
@@ -422,6 +430,15 @@ class HtmlTests(unittest.TestCase):
         split = ram_split_html(rec)
         self.assertIn("app <b>420</b> MB", split)
         self.assertIn("ollama <b>2100</b> MB", split)
+        idk = dict(rec)
+        idk["abstained"] = True
+        idk["docs"] = ["a"]
+        idk["hits"] = [{"rank": 1, "source": "tldr", "dense": 0.2}]
+        idk["mode"] = "rag"
+        idk_html = metrics_html(idk)
+        self.assertIn("1 candidate checked", idk_html)
+        self.assertIn("abstain", idk_html)
+        self.assertNotIn("1 source", idk_html)
 
     def test_source_key_and_best_match(self):
         self.assertEqual(source_key("tldr"), "TLDR")
@@ -436,7 +453,8 @@ class HtmlTests(unittest.TestCase):
         })
         self.assertIn("tldr", html)
         self.assertIn("ls - List files", html)
-        self.assertIn("cosine 0.22 of 0.30 needed", html)
+        self.assertNotIn("0.22", html)
+        self.assertNotIn("cosine", html)
 
     def test_waiting_is_solid_muted_not_dashed(self):
         html = waiting_html("full", "BASE")
@@ -445,10 +463,30 @@ class HtmlTests(unittest.TestCase):
         self.assertIn("waiting · runs after BASE finishes", html)
         self.assertNotIn("dashed", html)
         self.assertIn("retr off", html)
+        self.assertIn("slot-line", html)
+        css = style_path().read_text(encoding="utf-8")
+        self.assertIn(".card.waiting-card{border:var(--hair)", css.replace(" ", ""))
+        self.assertIn("1px dashed var(--c-slate)", css)
 
-    def test_compare_slots_match(self):
+    def test_compare_base_vs_full_slots(self):
+        question = "how do I extract a .tar.gz file?"
+        base = {
+            "mode": "base",
+            "question": question,
+            "answer": "Use tar with -xzf.",
+            "hits": [],
+            "docs": [],
+            "threshold": 0.30,
+            "retrieval_max_dense": None,
+            "latency_s": 1.2,
+            "app_rss_mb": 400,
+            "ollama_rss_mb": 1800,
+            "total_mb": 2200,
+            "abstained": False,
+        }
         full = {
             "mode": "full",
+            "question": question,
             "answer": "Use tar.\n```bash\ntar -xzf file.tar.gz\n```",
             "hits": [{
                 "rank": 1, "source": "tldr", "title": "tar (tldr common)",
@@ -464,41 +502,25 @@ class HtmlTests(unittest.TestCase):
             "total_mb": 2520,
             "abstained": False,
         }
-        idk = {
-            "mode": "rag",
-            "answer": ABSTAIN,
-            "hits": [{
-                "rank": 1, "source": "tldr", "title": "ls - List files",
-                "path": "tldr/common/ls.md", "dense": 0.22, "rrf": 0.016,
-                "bm25": 1.1, "snippet": "ls — list files",
-            }],
-            "docs": ["ls - List files"],
-            "threshold": 0.30,
-            "retrieval_max_dense": 0.22,
-            "latency_s": 0.4,
-            "app_rss_mb": 380,
-            "ollama_rss_mb": 1800,
-            "total_mb": 2180,
-            "abstained": True,
-        }
-        left = card_html(full, align_slots=True)
-        right = card_html(idk, align_slots=True)
+        left = card_html(base, align_slots=True)
+        right = card_html(full, align_slots=True)
+        self.assertIn("[ BASE ]", left)
+        self.assertIn("MODEL ONLY", left)
+        self.assertIn("[ FULL ]", right)
+        self.assertIn("RAG + COT", right)
+        self.assertIn("slot-empty ev", left)
+        self.assertIn("retr off", left)
+        self.assertIn("Evidence · 1 source", right)
+        self.assertIn("retr ok", right)
         self.assertIn("slot-empty best", left)
-        self.assertIn("best match:", right)
-        self.assertIn("Evidence · 1 source · ", left)
-        self.assertIn("tldr", left)
-        self.assertIn("1.8", left)
-        self.assertIn("2.5 GB", left)
-        self.assertIn("1 source", left)
-        self.assertIn("0.4", right)
-        self.assertIn("2.1 GB", right)
-        self.assertIn("abstain", right)
-        self.assertIn("idk-card", right)
-        self.assertNotIn('class="idk"', right)
-        wait = waiting_html("rag", "FULL")
-        self.assertIn("slot-empty ev", wait)
-        self.assertIn("slot-empty best", wait)
+        self.assertIn("slot-empty best", right)
+        self.assertNotIn("idk-card", left)
+        self.assertNotIn("idk-card", right)
+        wait = waiting_html("full", "BASE")
         self.assertIn("waiting-card", wait)
+        self.assertIn("slot-empty ev", wait)
+        self.assertIn("[ FULL ]", wait)
+        self.assertNotIn("dashed", wait)
 
 
 class HelperTests(unittest.TestCase):
@@ -528,8 +550,23 @@ class HelperTests(unittest.TestCase):
         self.assertNotIn("cdn", css.lower())
         self.assertIn("--fs-base:15px", css)
         self.assertIn("1px dashed var(--c-slate)", css)
-        self.assertNotIn("@keyframes", css)
+        self.assertNotIn('content:"▸', css)
+        self.assertIn("@keyframes star-float", css)
+        self.assertIn("prefers-reduced-motion", css)
+        self.assertIn(".idk-star svg{width:20px;height:20px;fill:var(--c-slate-dim);animation:none}", css.replace("\n", ""))
         self.assertNotIn(".waiting{border:1px dashed", css.replace(" ", ""))
+        orbit = orbit_style_path().read_text(encoding="utf-8")
+        self.assertIn("@keyframes star-orbit", orbit)
+        self.assertIn("@keyframes star-orbit-slim", orbit)
+        self.assertNotIn("cdn", orbit.lower())
+        all_css = injected_css()
+        self.assertIn("star-orbit 7.2s", all_css)
+        band = header_band_html(slim=True)
+        self.assertIn('class="orbit"', band)
+        self.assertIn('class="float"', band)
+        self.assertIn("polaris", band)
+        hero = empty_hero_html()
+        self.assertNotIn('class="orbit"', hero)
 
 
 class DigestTests(unittest.TestCase):

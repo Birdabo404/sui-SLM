@@ -1,7 +1,8 @@
 /* style.css — Polaris v3, spec v3.1 tokens at compact density (13–15 px).
-   Inject once. Fonts also declared in .streamlit/config.toml [[theme.fontFaces]].
+   Inject once with star-orbit.css. Fonts also declared in .streamlit/config.toml [[theme.fontFaces]].
    DARK = :root. DAYLIGHT when the app renders <div class="polaris-daylight"></div>.
-   No shadows, glow, scanlines, animation, images, JS, or network fonts. */
+   No shadows, glow, scanlines, images, JS, or network fonts.
+   The header star is the only animation (transform only; off under prefers-reduced-motion). */
 
 @font-face{font-family:"Inter";src:url("/app/static/Inter-Regular.woff2") format("woff2");font-weight:400;font-style:normal;font-display:block}
 @font-face{font-family:"Inter";src:url("/app/static/Inter-SemiBold.woff2") format("woff2");font-weight:600;font-style:normal;font-display:block}
@@ -68,11 +69,24 @@
 
 .band{position:relative;display:flex;align-items:center;gap:var(--s-3);min-height:var(--band-h);padding:0 var(--s-4);
   background:var(--stars),var(--h-bg);border:1px solid var(--h-hair);border-radius:var(--r-lg);color:var(--h-text)}
-.band .mark{font:600 var(--fs-xl)/1 var(--f-mono);color:var(--h-text)}
-.band .mark svg{width:.6em;height:.6em;margin-left:.15em;vertical-align:.35em;fill:var(--h-accent);animation:none}
+.band .mark{position:relative;display:inline-block;padding:0 1.15em 0 .35em;font:600 15px/1 var(--f-mono);color:var(--h-text)}
+.band .word{position:relative;display:inline-block}
 .band .tag{font:400 var(--fs-sm)/1.3 var(--f-mono);color:var(--h-text-2)}
 .band .spacer{flex:1}
-.band.slim{min-height:40px}.band.slim .mark{font-size:var(--fs-ui)}.band.slim .tag{display:none}
+.band.slim{min-height:40px;padding:0 var(--s-3)}.band.slim .tag{display:none}
+.band.slim .mark{top:-1px;font-size:14px}
+.band .orbit{position:absolute;left:50%;top:50%;width:1em;height:1em;margin:-.5em 0 0 -.5em;pointer-events:none;
+  animation:star-orbit 7.2s linear infinite;will-change:transform}
+.band.slim .orbit{animation-name:star-orbit-slim}
+.band .float{display:block;width:100%;height:100%;animation:star-float 2.4s infinite;will-change:transform}
+.band .float svg{display:block;width:100%;height:100%;fill:var(--h-accent)}
+@keyframes star-float{
+  0%{transform:translateY(0) rotate(0deg);animation-timing-function:cubic-bezier(.61,1,.88,1)}
+  25%{transform:translateY(-.06em) rotate(-4deg);animation-timing-function:cubic-bezier(.37,0,.63,1)}
+  75%{transform:translateY(.06em) rotate(4deg);animation-timing-function:cubic-bezier(.12,0,.39,0)}
+  100%{transform:translateY(0) rotate(0deg)}
+}
+@media (prefers-reduced-motion:reduce){.band .orbit,.band .float{animation:none}}
 .pill-offline{font:600 var(--fs-xs)/1 var(--f-mono);text-transform:uppercase;letter-spacing:var(--track);
   color:var(--h-text);border:1px solid var(--h-text-2);border-radius:var(--r-pill);padding:4px 8px}
 
@@ -103,7 +117,7 @@
 .card.waiting-card{border:var(--hair);color:var(--c-text-2)}
 .card-head{display:flex;gap:var(--s-2);align-items:baseline;padding:var(--s-2) 0;border-bottom:var(--hair);margin-bottom:var(--s-3);
   font:var(--fs-xs)/1.2 var(--f-mono);color:var(--c-text-2)}
-.card-head .mode{font-weight:600;color:var(--c-text)}
+.card-head .mode{font-weight:600;color:var(--c-accent)}
 .card-head .sub{font-size:var(--fs-label)}
 .metrics{display:flex;flex-wrap:wrap;gap:0 var(--s-2);padding:var(--s-2) 0;margin-top:auto;border-top:var(--hair);
   font:400 var(--fs-xs)/var(--lh-snug) var(--f-mono);color:var(--c-text-2);min-height:28px}
@@ -119,6 +133,7 @@
 .bar .tick{position:absolute;top:-5px;width:2px;height:20px;background:var(--c-text);transform:translateX(-50%)}
 .bar .knob{position:absolute;top:50%;width:10px;height:10px;border-radius:50%;background:var(--c-ok);transform:translate(-50%,-50%)}
 .retr.low .fill,.retr.low .knob{background:var(--c-slate)}
+.retr.off .slot-line{display:block;height:1px;margin-top:22px;background:var(--c-slate-dim)}
 .retr.ok .lbl{color:var(--c-ok)}
 .scale{position:relative;height:16px;margin-top:8px;color:var(--c-text-2)}
 .scale .mark{position:absolute;transform:translateX(-50%)}
@@ -131,7 +146,7 @@
 .chips{display:flex;flex-wrap:wrap;gap:var(--s-2);margin-top:var(--s-3)}
 .chip{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 var(--s-2);border:var(--hair);border-radius:var(--r-pill);
   background:var(--c-field);font:400 var(--fs-xs)/1 var(--f-mono);white-space:nowrap}
-.chip .k{font-weight:600;color:var(--c-accent)}
+.chip .k{font-weight:600;color:var(--c-text-2)}
 .chip .n{color:var(--c-text)}
 .no-sources{font:400 var(--fs-xs)/1.4 var(--f-mono);color:var(--c-text-2);margin-top:var(--s-3)}
 
@@ -142,7 +157,7 @@
 .idk-body h4{font:600 var(--fs-lg)/var(--lh-tight) var(--f-mono);color:var(--c-slate-ink)}
 .idk-body p{font:400 var(--fs-base)/var(--lh-body) var(--f-sans);color:var(--c-text)}
 .best,.best-panel{min-height:18px;margin:var(--s-2) 0 0;font:400 var(--fs-xs)/var(--lh-snug) var(--f-mono);color:var(--c-text-2)}
-.best .src,.best-panel .src,.ev-box > summary .src{color:var(--c-accent);font-weight:600}
+.ev-box > summary .src{color:var(--c-accent);font-weight:600}
 
 .prose{font:400 var(--fs-base)/var(--lh-body) var(--f-sans);color:var(--c-text);margin:0 0 var(--s-3)}
 .cmd{margin:0 0 var(--s-3);padding:var(--s-3);background:var(--c-field);border:var(--hair);border-radius:var(--r-md);
@@ -151,8 +166,6 @@
 .ev-box{margin-top:var(--s-2);font:400 var(--fs-xs)/var(--lh-snug) var(--f-mono);color:var(--c-text-2);min-height:28px}
 .ev-box > summary{cursor:pointer;list-style:none}
 .ev-box > summary::-webkit-details-marker{display:none}
-.ev-box > summary::before{content:"▸ ";color:var(--c-text-2)}
-.ev-box[open] > summary::before{content:"▾ "}
 .ram-split{margin:var(--s-2) 0 0;font:400 var(--fs-xs)/1.4 var(--f-mono);color:var(--c-text-2)}
 .dbg{margin-top:var(--s-2);font:400 var(--fs-xs)/var(--lh-snug) var(--f-mono);color:var(--c-text-2)}
 .dbg > summary{cursor:pointer}
@@ -164,7 +177,7 @@
 .ev li{padding:var(--s-2) 0;border-bottom:var(--hair)}
 .ev li:last-child{border-bottom:0}
 .ev .rank{font-weight:600;margin-right:var(--s-2)}
-.ev .src{text-transform:uppercase;letter-spacing:var(--track);color:var(--c-accent);margin-right:var(--s-2)}
+.ev .src{text-transform:uppercase;letter-spacing:var(--track);color:var(--c-text-2);margin-right:var(--s-2)}
 .ev .title{color:var(--c-text)}
 .ev .sc{display:block;color:var(--c-text-2);font-size:var(--fs-xs)}
 .ev .snip{margin:var(--s-1) 0 0;font:400 var(--fs-sm)/var(--lh-snug) var(--f-sans);color:var(--c-text-2)}

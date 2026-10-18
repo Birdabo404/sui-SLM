@@ -46,6 +46,7 @@ from app.polaris import (
     header_band_html,
     idk_card_html,
     index_chunk_count,
+    injected_css,
     metrics_html,
     pair_compare_modes,
     polaris_on,
@@ -55,7 +56,6 @@ from app.polaris import (
     sidebar_kv_html,
     split_code_blocks,
     split_reasoning,
-    style_path,
     user_turn_html,
     waiting_html,
     warm_label,
@@ -201,8 +201,7 @@ def _show_sources(sources):
 
 
 def _inject_css():
-    css = style_path().read_text(encoding="utf-8")
-    st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
+    st.markdown(f"<style>{injected_css()}</style>", unsafe_allow_html=True)
 
 
 def _init_session():

@@ -357,7 +357,9 @@ def header_band_html(slim=False):
     klass = "band slim" if slim else "band"
     return (
         f'<div class="{klass}">'
-        f'<span class="mark">polaris{STAR_SVG}</span>'
+        '<span class="mark"><span class="word">polaris'
+        f'<span class="orbit" aria-hidden="true"><span class="float">{STAR_SVG}</span></span>'
+        "</span></span>"
         f'<span class="tag">offline help for the linux lab</span>'
         f'<span class="spacer"></span>'
         f'<span class="pill-offline">offline</span>'
@@ -448,10 +450,13 @@ def metrics_html(record):
     bits = [
         f'<b>{float(record.get("latency_s") or 0):.1f}</b> s',
         f'<b>{format_total_ram(record.get("total_mb"))}</b> total',
-        source_count_label(n),
     ]
     if record.get("abstained"):
+        unit = "candidate checked" if n == 1 else "candidates checked"
+        bits.append(f"{n} {unit}")
         bits.append("abstain")
+    else:
+        bits.append(source_count_label(n))
     return f'<div class="metrics">{" · ".join(bits)}</div>'
 
 
@@ -487,17 +492,8 @@ def best_match_html(record):
         name = title
     else:
         name = short_doc_name(top)
-    dense = _fmt_score(top.get("dense"))
-    thr_raw = record.get("threshold")
-    thr = format_threshold(0.30 if thr_raw is None else thr_raw)
-    d = _opt_float(top.get("dense"))
-    t = 0.30 if thr_raw is None else float(thr_raw)
-    needed = " needed" if d is None or d < t else ""
     gap = " " if name else ""
-    return (
-        f'<p class="best">best match: <span class="src">{escape(src)}</span>'
-        f"{gap}{escape(name)} · cosine {dense} of {thr}{needed}</p>"
-    )
+    return f'<p class="best">best match: {escape(src)}{gap}{escape(name)}</p>'
 
 
 def evidence_summary_text(record):
@@ -644,7 +640,7 @@ def waiting_html(mode, after_label):
         + card_head_html(mode)
         + f'<div class="slot-empty body">waiting · runs after {escape(after_label)} finishes</div>'
         + empty_slot_html("ev")
-        + '<div class="retr off"><span class="lbl">retrieval</span></div>'
+        + '<div class="retr off"><span class="slot-line"></span></div>'
         + empty_slot_html("best")
         + '<div class="metrics slot-empty foot"></div>'
         + "</div>"
@@ -710,3 +706,15 @@ def warm_label(warmed):
 
 def style_path():
     return Path(__file__).with_name("style.css")
+
+
+def orbit_style_path():
+    return Path(__file__).with_name("star-orbit.css")
+
+
+def injected_css():
+    return (
+        style_path().read_text(encoding="utf-8")
+        + "\n"
+        + orbit_style_path().read_text(encoding="utf-8")
+    )
