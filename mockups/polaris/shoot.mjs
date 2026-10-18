@@ -1,5 +1,5 @@
 // Screenshots every route at 1366×768 (header star frozen at rest) and checks fonts, network, overflow, 11 px minimum,
-// 4.5:1 text contrast, and that the only animation is the header star: transform-only, layout-free, off under reduced motion.
+// 4.5:1 text contrast, and the header star's motion contract (see the motion block below).
 //   npm i --no-save playwright-core
 //   CHROME_PATH=/usr/bin/chromium node shoot.mjs [outdir]     (outdir defaults to ./screens)
 import { chromium } from "playwright-core";
@@ -80,27 +80,53 @@ for (const route of routes) {
   if (report.lowContrast.length) console.log(`  contrast under 4.5:1: ${report.lowContrast.join("; ")}`);
   if (report.scrollY > 0) console.log(`  page scrolls by ${report.scrollY}px`);
 
-  // motion: only the header star animates, only transform/opacity, live without layout, off under reduced motion
+  // motion: only the header star animates (transform, opacity, offset-distance) and never triggers layout; the wrap
+  // runs once on load in the empty state and never by itself during answers; hover starts one; it settles
+  // exactly on the rest pose; nothing runs, and hover does nothing, under reduced motion
+  const sel = `#${route} .band .mark`;
   const anims = () => page.evaluate(() => document.getAnimations().filter((a) => a.playState === "running").map((a) => ({
-    name: a.animationName, inBand: !!a.effect.target.closest(".band"),
+    name: a.animationName ?? `transition:${a.transitionProperty}`, inBand: !!a.effect.target.closest(".band"),
     props: [...new Set(a.effect.getKeyframes().flatMap((k) => Object.keys(k)))]
       .filter((p) => !["offset", "computedOffset", "easing", "composite"].includes(p)),
   })));
-  const starTf = () => page.evaluate((id) => getComputedStyle(document.querySelector(`#${id} .band .orbit`)).transform, route);
+  const starBox = () => page.evaluate((s) => JSON.stringify(document.querySelector(`${s} .sway svg`).getBoundingClientRect()), sel);
+  const isWrapping = () => page.evaluate((s) => document.querySelector(s).classList.contains("is-wrapping"), sel);
   const layoutCount = async () => (await cdp.send("Performance.getMetrics")).metrics.find((m) => m.name === "LayoutCount").value;
   const running = await anims();
-  const [tf0, l0] = [await starTf(), await layoutCount()];
+  const wrapped = running.some((a) => a.name === "star-wrap-path");
+  const [box0, l0] = [await starBox(), await layoutCount()];
   await page.waitForTimeout(1600);
-  const [tf1, l1] = [await starTf(), await layoutCount()];
+  const [box1, l1] = [await starBox(), await layoutCount()];
   await page.emulateMedia({ reducedMotion: "reduce" });
   const reduced = (await anims()).length;
+  if (!wrapped) { await page.hover(sel); await page.mouse.move(1360, 760); }
+  const reducedHover = !wrapped && (await isWrapping());
   await page.emulateMedia({ reducedMotion: "no-preference" });
-  const stray = running.filter((a) => !a.inBand || a.props.some((p) => !["transform", "opacity"].includes(p)));
-  const motionOk = running.length === 2 && stray.length === 0 && tf0 !== tf1 && l1 === l0 && reduced === 0;
+  let hovered = null;
+  if (route === "answer") {
+    await page.hover(sel); await page.mouse.move(1360, 760);
+    hovered = (await anims()).some((a) => a.name === "star-wrap-path");
+  }
+  if (await isWrapping()) await page.waitForFunction((s) => !document.querySelector(s).classList.contains("is-wrapping"), sel, { timeout: 8000 });
+  const rest = await page.evaluate((s) => {
+    const m = document.querySelector(s), w = m.querySelector(".word").getBoundingClientRect(), g = m.querySelector(".rig").getBoundingClientRect();
+    const v = getComputedStyle(m.querySelector(".star-fx")), px = (n) => parseFloat(v.getPropertyValue(n));
+    return { off: Math.hypot(g.x + g.width / 2 - (w.x + w.width / 2) - px("--rest-x"), g.y + g.height / 2 - (w.y + w.height / 2) - px("--rest-y")),
+      body: getComputedStyle(m.querySelector(".body")).transform,
+      trail: Math.max(...[...m.querySelectorAll(".trail>*")].map((e) => +getComputedStyle(e).opacity)) };
+  }, sel);
+  const settled = rest.off < 0.01 && rest.body === "none" && rest.trail === 0;
+  const stray = running.filter((a) => !a.inBand || a.props.some((p) => !["transform", "opacity", "offsetDistance"].includes(p)));
+  const expectWrap = route === "empty";
+  const motionOk = stray.length === 0 && box0 !== box1 && l1 === l0 && reduced === 0 && !reducedHover &&
+    wrapped === expectWrap && hovered !== false && settled;
   failed ||= !motionOk;
-  console.log(`  motion ${motionOk ? "ok  " : "FAIL"} ${running.map((a) => `${a.name}(${a.props})`).join(" + ")}; ` +
-    `moved while live: ${tf0 !== tf1}; layouts during 1.6s: ${l1 - l0}; animations under reduced motion: ${reduced}` +
-    (stray.length ? `; outside band or non-transform: ${stray.map((a) => a.name).join(", ")}` : ""));
+  const names = [...new Set(running.map((a) => `${a.name}(${a.props})`))];
+  console.log(`  motion ${motionOk ? "ok  " : "FAIL"} ${running.length} running: ${names.join(" ")}`);
+  console.log(`         wrap on arrival: ${wrapped} (want ${expectWrap})${hovered === null ? "" : `; hover starts a wrap: ${hovered}`}; ` +
+    `settled on rest: ${settled} (off by ${rest.off.toFixed(3)}px, body ${rest.body}, trail opacity ${rest.trail}); moved while live: ${box0 !== box1}; ` +
+    `layouts during 1.6s: ${l1 - l0}; under reduced motion: ${reduced} animations, hover wraps: ${reducedHover}` +
+    (stray.length ? `; outside band or other properties: ${stray.map((a) => a.name).join(", ")}` : ""));
 
   await page.evaluate(() => document.getAnimations().forEach((a) => { a.pause(); a.currentTime = 0; }));
   await page.screenshot({ path: join(outDir, `${route}.png`) });
