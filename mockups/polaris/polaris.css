@@ -2,9 +2,10 @@
    Colors are the spec's verified tokens (plus --c-text-3); type, controls and spacing replace the old
    16/18 px large-print scale. Layout classes stand in for Streamlit's data-testid hooks
    (.side = stSidebar, .col = stMainBlockContainer, .card = st-key-answer-*, …).
-   Routing is CSS-only (:target); the only script pauses the header star while the tab is hidden.
-   Rules carried over: no shadows, no glow, no scanlines, no images. The one animation is the header star
-   (transform only, off under prefers-reduced-motion); everything else, including the IDK star, is static. */
+   Routing is CSS-only (:target); the one script triggers and pauses the header star.
+   Rules carried over: no shadows, no glow, no scanlines, no images — except the header star, the only
+   animated element, which carries a soft glow and shadow (off under prefers-reduced-motion: static star).
+   Everything else, including the hero and IDK stars, is static. */
 
 @font-face{font-family:"Inter";src:url("fonts/Inter-Regular.woff2") format("woff2");font-weight:400;font-style:normal;font-display:block}
 @font-face{font-family:"Inter";src:url("fonts/Inter-SemiBold.woff2") format("woff2");font-weight:600;font-style:normal;font-display:block}
@@ -123,21 +124,85 @@ body:not(:has(.screen:target)) #empty{display:grid}
 .band.slim{min-height:var(--band-slim);padding:0 var(--s-3)}.band.slim .tag{display:none}
 .band.slim .mark{top:-1px;font-size:14px} /* 1px up centers the ink, and the loop needs that pixel at the bottom */
 
-/* header star — the only animated element. Transform only, on its own layer; rest pose is the static transform. */
-.band .orbit{position:absolute;left:50%;top:50%;width:1em;height:1em;margin:-.5em 0 0 -.5em;pointer-events:none;
-  animation:star-orbit 7.2s linear infinite;will-change:transform}
-.band.slim .orbit{animation-name:star-orbit-slim}
-.band .float{display:block;width:100%;height:100%;animation:star-float 2.4s infinite;will-change:transform}
-.band .float svg{display:block;width:100%;height:100%;fill:var(--h-accent)}
-/* one sine period: 3 floats per orbit cycle, so the two loops never drift apart */
-@keyframes star-float{
-  0%{transform:translateY(0) rotate(0deg);animation-timing-function:cubic-bezier(.61,1,.88,1)}
-  25%{transform:translateY(-.06em) rotate(-4deg);animation-timing-function:cubic-bezier(.37,0,.63,1)}
-  75%{transform:translateY(.06em) rotate(4deg);animation-timing-function:cubic-bezier(.12,0,.39,0)}
-  100%{transform:translateY(0) rotate(0deg)}
+/* header star — the only animated element (hero and IDK stars are static).
+   Idle: breathe, sway, glow, an occasional glint. Wrap (.is-wrapping, added by the script once on load in the
+   empty state and on hover/focus/click of the wordmark): anticipation, two coils on offset-path with a lagging
+   trail, follow-through, settle. Path and body keyframes: star-orbit.css. Animated properties: transform,
+   opacity, offset-distance. The rest pose is the un-animated state, so removing the class never jumps. */
+.band .star-fx{position:absolute;left:50%;top:50%;width:0;height:0;pointer-events:none}
+.band .star-fx b svg{display:block;width:100%;height:100%}
+.band .rig{position:absolute;left:0;top:0;width:1em;height:1em;offset-distance:0%;offset-rotate:0deg;will-change:transform}
+.band .body,.band .breathe,.band .sway{position:absolute;inset:0}
+.band .body,.band .breathe,.band .sway,.band .halo,.band .glow{will-change:transform,opacity}
+.band .sway svg{display:block;width:100%;height:100%;overflow:visible}
+.band .halo{position:absolute;left:50%;top:50%;width:2em;height:2em;margin:-1em 0 0 -1em;opacity:.62}
+.band .glow{position:absolute;inset:0;border-radius:50%;background:radial-gradient(closest-side,
+  color-mix(in srgb,#FFE6B0 62%,transparent),color-mix(in srgb,var(--h-accent) 30%,transparent) 38%,
+  color-mix(in srgb,var(--h-accent) 9%,transparent) 66%,transparent)}
+.band .trail>*{position:absolute;left:0;top:0;offset-distance:0%;offset-rotate:0deg;opacity:0;will-change:transform,opacity}
+.band .trail i{width:calc(var(--z) * 2.8);height:var(--z);border-radius:50%;offset-rotate:auto;
+  background:radial-gradient(closest-side,color-mix(in srgb,#FFE2A4 calc(var(--a) * 100%),transparent),
+    color-mix(in srgb,var(--h-accent) calc(var(--a) * 70%),transparent) 60%,transparent)}
+/* tail: 14ms apart and drawn out along the path, so neighbours overlap into one tapered streak that
+   lengthens with speed */
+.band .trail i:nth-child(1){--d:.014s;--z:3.2px;--a:.82}
+.band .trail i:nth-child(2){--d:.028s;--z:3px;--a:.72}
+.band .trail i:nth-child(3){--d:.042s;--z:2.8px;--a:.63}
+.band .trail i:nth-child(4){--d:.056s;--z:2.6px;--a:.55}
+.band .trail i:nth-child(5){--d:.07s;--z:2.4px;--a:.47}
+.band .trail i:nth-child(6){--d:.084s;--z:2.2px;--a:.4}
+.band .trail i:nth-child(7){--d:.098s;--z:2px;--a:.33}
+.band .trail i:nth-child(8){--d:.112s;--z:1.8px;--a:.27}
+.band .trail i:nth-child(9){--d:.126s;--z:1.6px;--a:.21}
+.band .trail i:nth-child(10){--d:.14s;--z:1.4px;--a:.15}
+/* trailing sparks point along the path (offset-rotate:auto) and are drawn out along it */
+.band .trail b{width:.3em;height:.3em;offset-rotate:auto;transform:scale(1.5,.8)}
+.band .trail b:nth-of-type(1){--d:.07s}.band .trail b:nth-of-type(2){--d:.12s}.band .trail b:nth-of-type(3){--d:.18s}
+.band .glints{transition:opacity .6s cubic-bezier(.3,0,.2,1) .2s}
+.band .glints b{position:absolute;width:.34em;height:.34em;margin:-.17em 0 0 -.17em;opacity:0;will-change:transform,opacity}
+.band .glints b:nth-child(1){left:calc(var(--rest-x) + .46em);top:calc(var(--rest-y) - .48em);animation:star-glint 7.3s linear -5.9s infinite}
+.band .glints b:nth-child(2){left:calc(var(--rest-x) + .4em);top:calc(var(--rest-y) + .52em);animation:star-glint 11.9s linear -2.6s infinite}
+
+/* Idle. Breath and glow share a period, so the light swells as the star does; sway runs on its own longer
+   period so the pose never visibly repeats. Slow sine-like curves, small amplitudes: alive, not busy. */
+.band .breathe{animation:star-breathe 5.2s cubic-bezier(.45,.05,.55,.95) infinite alternate}
+.band .glow{animation:star-glow 5.2s cubic-bezier(.45,.05,.55,.95) infinite alternate}
+.band .sway{animation:star-sway 8.6s cubic-bezier(.37,0,.63,1) -4.3s infinite alternate}
+@keyframes star-breathe{from{transform:scale(1)}to{transform:scale(1.025)}}
+@keyframes star-glow{from{opacity:.8;transform:scale(.97)}to{opacity:1;transform:scale(1.03)}}
+@keyframes star-sway{from{transform:rotate(-2.5deg)}to{transform:rotate(2.5deg)}}
+/* Glint: a quick ease-out bloom and a slower fade, turning as it goes; most of the cycle is empty */
+@keyframes star-glint{
+  0%,88%{opacity:0;transform:scale(0) rotate(0deg);animation-timing-function:cubic-bezier(.2,.8,.3,1)}
+  90.5%{opacity:1;transform:scale(1) rotate(20deg);animation-timing-function:cubic-bezier(.5,0,.75,.4)}
+  95%,100%{opacity:0;transform:scale(.25) rotate(50deg)}
 }
-.tab-hidden .band .orbit,.tab-hidden .band .float{animation-play-state:paused}
-@media (prefers-reduced-motion:reduce){.band .orbit,.band .float{animation:none}}
+
+/* Wrap. Every layer shares one 4.4s clock (star-orbit.css: 0.38s anticipation, 3.52s travel, 0.5s settle). */
+.band .mark.is-wrapping .rig{animation:star-wrap-path 4.4s linear}
+.band .mark.is-wrapping .body{animation:star-wrap-body 4.4s linear}
+.band.slim .mark.is-wrapping .body{animation-name:star-wrap-body-slim}
+.band .mark.is-wrapping .halo{animation:star-halo 4.4s linear}
+.band .mark.is-wrapping .trail>*{animation:star-wrap-path 4.4s linear var(--d),star-trail 4.4s linear var(--d)}
+.band .mark.is-wrapping .trail b{animation-name:star-wrap-path,star-trail-spark}
+.band .mark.is-wrapping .glints{opacity:0;transition-duration:.2s;transition-delay:0s}
+/* Reactive glow. Anticipation: the light draws in with the dip. Coils: it swells as the star gathers speed.
+   It stretches along the level over/under passes until the last one (squash & stretch), which also keeps
+   it inside the band.
+   Settle: it eases back to idle after the star has landed, so the light lags the motion (follow-through). */
+@keyframes star-halo{
+  0%{opacity:.62;transform:scale(1);animation-timing-function:cubic-bezier(.45,0,.55,1)}
+  8.64%{opacity:.46;transform:scale(.88);animation-timing-function:cubic-bezier(.3,0,.25,1)}
+  45%{opacity:1;transform:scale(1.12,.78);animation-timing-function:cubic-bezier(.4,0,.6,1)}
+  66%{opacity:.96;transform:scale(1.08,.76);animation-timing-function:cubic-bezier(.45,0,.35,1)}
+  90%{opacity:.82;transform:scale(1.04);animation-timing-function:cubic-bezier(.35,0,.25,1)}
+  100%{opacity:.62;transform:scale(1)}
+}
+.tab-hidden .band .star-fx *{animation-play-state:paused}
+@media (prefers-reduced-motion:reduce){
+  .band .star-fx *{animation:none!important;transition:none!important}
+  .band .trail,.band .glints{display:none}
+}
 .pill-offline{display:inline-flex;align-items:center;height:20px;padding:0 6px;font:600 var(--fs-xs)/1 var(--f-mono);
   color:var(--h-text-2);border:1px solid var(--h-ctrl);border-radius:var(--r-xs)}
 
