@@ -59,38 +59,11 @@ SOURCE_KEY_RULES = (
 )
 
 
-def _env_flag(name, default=True):
-    raw = os.environ.get(name)
+def polaris_on():
+    raw = os.environ.get("POLARIS_ENABLED")
     if raw is None:
-        return default
+        return True
     return raw.strip().lower() not in ("0", "false", "off", "no")
-
-
-# Flip a key to hide one piece without rewriting the page.
-POLARIS = {
-    "enabled": _env_flag("POLARIS_ENABLED", True),
-    "header_band": True,
-    "empty_state": True,
-    "mode_pills": True,
-    "answer_card": True,
-    "reasoning": True,
-    "retrieval_bar": True,
-    "source_chips": True,
-    "idk_card": True,
-    "evidence_panel": True,
-    "run_records": True,
-    "export": True,
-    "read_only_sidebar": True,
-    "compare": True,
-    "daylight": True,
-    "model_digest": True,
-}
-
-
-def feature(name):
-    if name == "enabled":
-        return bool(POLARIS.get("enabled"))
-    return bool(POLARIS.get("enabled")) and bool(POLARIS.get(name, False))
 
 
 class HitScore(TypedDict):
@@ -170,7 +143,7 @@ def build_run_record(result, index_path=""):
     scored = hit_scores(hits)
     rag = uses_rag(result.get("mode") or "")
     abstained = bool(result.get("weak")) if rag else False
-    docs = [h["title"] or h["path"] or h["source"] for h in scored if h["title"] or h["path"]]
+    docs = [label for h in scored if (label := doc_label(h))]
     return {
         "ts": str(result.get("ts") or ""),
         "question": str(result.get("question") or ""),
@@ -235,12 +208,20 @@ def pair_compare_modes(left, right):
     return left, right
 
 
-def run_compare_pair(question, left_mode, right_mode, answer_fn, **kwargs):
-    """Run left then right through answer_fn. Never overlapping."""
-    left_mode, right_mode = pair_compare_modes(left_mode, right_mode)
-    left = answer_fn(question, left_mode, **kwargs)
-    right = answer_fn(question, right_mode, **kwargs)
-    return left, right
+def doc_label(hit):
+    title = str(hit.get("title") or "").strip()
+    if title:
+        return title
+    path = str(hit.get("path") or "").strip()
+    if path:
+        return path
+    source = str(hit.get("source") or "").strip()
+    if source:
+        return source
+    rank = hit.get("rank")
+    if rank is not None and rank != "":
+        return f"hit {rank}"
+    return ""
 
 
 def source_key(source):

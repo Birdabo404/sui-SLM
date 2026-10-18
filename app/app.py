@@ -41,12 +41,12 @@ from app.polaris import (
     default_compare_modes,
     empty_hero_html,
     evidence_rows_html,
-    feature,
     header_band_html,
     idk_card_html,
     index_chunk_count,
     metrics_html,
     pair_compare_modes,
+    polaris_on,
     records_to_csv,
     records_to_json,
     retrieval_bar_html,
@@ -77,8 +77,6 @@ def _ollama_up():
 
 @st.cache_data(ttl=30)
 def _model_digest(model):
-    if not feature("model_digest"):
-        return ""
     return model_digest(model)
 
 
@@ -88,7 +86,7 @@ def _chunk_count(index_dir):
 
 
 def main():
-    if feature("enabled"):
+    if polaris_on():
         st.set_page_config(page_title="Polaris", layout="centered")
         run_polaris()
         return
@@ -225,21 +223,20 @@ def run_polaris():
 
     _render_sidebar(model, index_dir, frozen)
 
-    if feature("daylight") and st.session_state.get("daylight"):
+    if st.session_state.get("daylight"):
         st.markdown('<div class="polaris-daylight"></div>', unsafe_allow_html=True)
-    compare_on = bool(feature("compare") and st.session_state.get("compare"))
+    compare_on = bool(st.session_state.get("compare"))
     if compare_on:
         st.markdown('<div class="polaris-compare"></div>', unsafe_allow_html=True)
 
     slim = bool(st.session_state.messages)
-    if feature("header_band"):
-        st.markdown(header_band_html(slim=slim), unsafe_allow_html=True)
+    st.markdown(header_band_html(slim=slim), unsafe_allow_html=True)
 
     for i, msg in enumerate(st.session_state.messages):
         _replay_message(msg, i, compact_compare=True)
 
     empty = not st.session_state.messages
-    if empty and feature("empty_state"):
+    if empty:
         st.markdown(empty_hero_html(), unsafe_allow_html=True)
 
     mode = "full"
@@ -249,10 +246,10 @@ def run_polaris():
             st.session_state.get("cmp_left"),
             st.session_state.get("cmp_right"),
         )
-    elif feature("mode_pills"):
+    else:
         mode = _render_mode_pills()
 
-    if empty and feature("empty_state"):
+    if empty:
         _render_examples()
         with st.container(key="composer-empty"):
             typed = st.chat_input("ask a linux or lab question…")
@@ -294,41 +291,36 @@ def run_polaris():
 
 def _render_sidebar(model, index_dir, frozen):
     with st.sidebar:
-        if feature("read_only_sidebar"):
-            digest = _model_digest(model) if feature("model_digest") else ""
-            model_value = model if not digest else f"{model} · {digest}"
-            loaded = index_ok(index_dir)
-            chunks = _chunk_count(index_dir) if loaded else 0
-            index_value = Path(index_dir).name
-            if loaded:
-                index_value = f"{index_value} · {chunks} chunks"
-            sha = git_commit()
-            st.markdown('<div class="chrome">STATUS</div>', unsafe_allow_html=True)
-            st.markdown(
-                sidebar_kv_html(
-                    [
-                        ("model", model_value),
-                        ("index", index_value),
-                        ("threshold", f"cos {format_threshold(frozen['threshold'])}"),
-                        ("k", str(frozen["k"])),
-                        ("git", sha[:7] if sha else "—"),
-                        ("ollama", yn(_ollama_up())),
-                        ("index loaded", yn(loaded)),
-                        ("warm-up", warm_label(st.session_state.get("warmed"))),
-                    ]
-                ),
-                unsafe_allow_html=True,
-            )
-        else:
-            st.header("Settings")
+        digest = _model_digest(model)
+        model_value = model if not digest else f"{model} · {digest}"
+        loaded = index_ok(index_dir)
+        chunks = _chunk_count(index_dir) if loaded else 0
+        index_value = Path(index_dir).name
+        if loaded:
+            index_value = f"{index_value} · {chunks} chunks"
+        sha = git_commit()
+        st.markdown('<div class="chrome">STATUS</div>', unsafe_allow_html=True)
+        st.markdown(
+            sidebar_kv_html(
+                [
+                    ("model", model_value),
+                    ("index", index_value),
+                    ("threshold", f"cos {format_threshold(frozen['threshold'])}"),
+                    ("k", str(frozen["k"])),
+                    ("git", sha[:7] if sha else "—"),
+                    ("ollama", yn(_ollama_up())),
+                    ("index loaded", yn(loaded)),
+                    ("warm-up", warm_label(st.session_state.get("warmed"))),
+                ]
+            ),
+            unsafe_allow_html=True,
+        )
 
         st.markdown('<div class="chrome">VIEW</div>', unsafe_allow_html=True)
-        if feature("compare"):
-            st.toggle("Compare modes", key="compare")
-        if feature("daylight"):
-            st.toggle("Daylight", key="daylight")
+        st.toggle("Compare modes", key="compare")
+        st.toggle("Daylight", key="daylight")
 
-        if feature("compare") and st.session_state.get("compare"):
+        if st.session_state.get("compare"):
             st.markdown('<div class="chrome">COMPARE</div>', unsafe_allow_html=True)
             modes = mode_choices()
             st.selectbox(
@@ -355,7 +347,7 @@ def _render_sidebar(model, index_dir, frozen):
         st.markdown('<div class="chrome">SESSION</div>', unsafe_allow_html=True)
         avg = avg_latency(records)
         st.caption("avg —" if avg is None else f"avg {avg:.1f} s · {len(records)} runs")
-        if feature("export") and feature("run_records") and records:
+        if records:
             st.download_button(
                 "CSV",
                 data=records_to_csv(records),
@@ -421,8 +413,7 @@ def _answer_record(question, mode, model, retriever, index_dir):
         )
         return None
     rec = build_run_record(result, index_path=index_dir)
-    if feature("run_records"):
-        st.session_state.run_records.append(rec)
+    st.session_state.run_records.append(rec)
     st.session_state.warmed = True
     return rec
 
@@ -441,8 +432,8 @@ def _run_compare(question, left_mode, right_mode, model, retriever, index_dir):
             rec_l = _answer_record(question, left_mode, model, retriever, index_dir)
             if rec_l is not None:
                 _render_card(rec_l, key="answer-cmp-left")
-        rec_r = _answer_record(question, right_mode, model, retriever, index_dir)
         wait.empty()
+        rec_r = _answer_record(question, right_mode, model, retriever, index_dir)
         with col_r:
             if rec_r is not None:
                 _render_card(rec_r, key="answer-cmp-right")
@@ -476,18 +467,15 @@ def _replay_message(msg, index, compact_compare=False):
 
 
 def _render_card(record, key):
-    if not feature("answer_card"):
-        st.markdown(record.get("answer") or "")
-        return
     mode = record.get("mode") or ""
     rag = uses_rag(mode)
     with st.container(key=key):
         st.markdown(card_head_html(mode), unsafe_allow_html=True)
-        if record.get("abstained") and feature("idk_card"):
+        if record.get("abstained"):
             st.markdown(idk_card_html(record), unsafe_allow_html=True)
             _render_evidence(record)
         else:
-            if feature("reasoning") and mode in ("cot", "full"):
+            if mode in ("cot", "full"):
                 reason, answer = split_reasoning(record.get("answer") or "")
                 if reason:
                     with st.expander("REASONING", expanded=False):
@@ -497,21 +485,19 @@ def _render_card(record, key):
                     _render_answer_body(record.get("answer") or "")
             else:
                 _render_answer_body(record.get("answer") or "")
-            if feature("retrieval_bar"):
-                st.markdown(
-                    retrieval_bar_html(
-                        record.get("retrieval_max_dense"),
-                        record.get("threshold"),
-                        retrieval_off=not rag,
-                    ),
-                    unsafe_allow_html=True,
-                )
-            if feature("source_chips"):
-                raw_hits = record.get("hits") or []
-                st.markdown(
-                    source_chips_html(raw_hits, retrieval_off=not rag),
-                    unsafe_allow_html=True,
-                )
+            st.markdown(
+                retrieval_bar_html(
+                    record.get("retrieval_max_dense"),
+                    record.get("threshold"),
+                    retrieval_off=not rag,
+                ),
+                unsafe_allow_html=True,
+            )
+            raw_hits = record.get("hits") or []
+            st.markdown(
+                source_chips_html(raw_hits, retrieval_off=not rag),
+                unsafe_allow_html=True,
+            )
             if rag:
                 _render_evidence(record)
         st.markdown(metrics_html(record), unsafe_allow_html=True)
@@ -530,8 +516,6 @@ def _render_answer_body(text):
 
 
 def _render_evidence(record):
-    if not feature("evidence_panel"):
-        return
     hits = record.get("hits") or []
     with st.expander("Evidence", expanded=False):
         st.markdown(evidence_rows_html(hits), unsafe_allow_html=True)

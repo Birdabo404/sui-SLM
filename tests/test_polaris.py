@@ -17,22 +17,21 @@ from shared.prompt import ABSTAIN
 from app.engine import WEAK_DENSE, answer_question, is_weak, model_digest, ollama_reachable
 from app.polaris import (
     EXPORT_FIELDS,
-    POLARIS,
     best_match_label,
     build_run_record,
     card_head_html,
     default_compare_modes,
+    doc_label,
     evidence_rows_html,
-    feature,
     idk_card_html,
     index_chunk_count,
     max_dense,
     metrics_html,
     pair_compare_modes,
+    polaris_on,
     records_to_csv,
     records_to_json,
     retrieval_bar_html,
-    run_compare_pair,
     source_chips_html,
     source_key,
     split_code_blocks,
@@ -50,23 +49,20 @@ class FakeRetriever:
 
 
 class FlagTests(unittest.TestCase):
-    def test_flags_are_a_dict(self):
-        self.assertIsInstance(POLARIS, dict)
-        self.assertIn("enabled", POLARIS)
-        self.assertIn("compare", POLARIS)
-        self.assertIn("evidence_panel", POLARIS)
-        self.assertIn("run_records", POLARIS)
+    def test_polaris_enabled_env(self):
+        with patch.dict(os.environ, {"POLARIS_ENABLED": "0"}):
+            self.assertFalse(polaris_on())
+        with patch.dict(os.environ, {"POLARIS_ENABLED": "false"}):
+            self.assertFalse(polaris_on())
+        with patch.dict(os.environ, {"POLARIS_ENABLED": "1"}):
+            self.assertTrue(polaris_on())
+        with patch.dict(os.environ, {"POLARIS_ENABLED": "yes"}):
+            self.assertTrue(polaris_on())
 
-    def test_feature_respects_master_switch(self):
-        old = POLARIS["enabled"]
-        try:
-            POLARIS["enabled"] = False
-            self.assertFalse(feature("compare"))
-            self.assertFalse(feature("enabled"))
-            POLARIS["enabled"] = True
-            self.assertTrue(feature("compare"))
-        finally:
-            POLARIS["enabled"] = old
+    def test_polaris_enabled_defaults_on(self):
+        env = {k: v for k, v in os.environ.items() if k != "POLARIS_ENABLED"}
+        with patch.dict(os.environ, env, clear=True):
+            self.assertTrue(polaris_on())
 
 
 class RunRecordTests(unittest.TestCase):
@@ -123,6 +119,33 @@ class RunRecordTests(unittest.TestCase):
         self.assertGreaterEqual(rec["total_mb"], rec["app_rss_mb"])
         self.assertEqual(rec["docs"], ["tar (tldr common)"])
 
+    def test_docs_keep_source_only_hits(self):
+        rec = build_run_record(
+            {
+                "ts": "t",
+                "question": "q",
+                "config": "base+RAG",
+                "mode": "rag",
+                "model": "qwen3.5:2b",
+                "text": "x",
+                "latency_s": 0.1,
+                "app_rss_mb": 1,
+                "ollama_rss_mb": 2,
+                "total_mb": 3,
+                "hits": [
+                    {"source": "tldr", "title": "", "path": "", "text": "a", "dense": 0.4},
+                    {"source": "", "title": "", "path": "man1/ls.1", "text": "b", "dense": 0.5},
+                ],
+                "weak": False,
+                "threshold": 0.30,
+                "k": 5,
+                "git_commit": "abc",
+            },
+            index_path="rag/rag-index-v2",
+        )
+        self.assertEqual(rec["docs"], ["tldr", "man1/ls.1"])
+        self.assertEqual(doc_label({"source": "man", "title": "", "path": ""}), "man")
+
     def test_idk_reuses_is_weak_and_abstain(self):
         hits = [{
             "id": "weak", "title": "ls (tldr common)", "text": "ls -l",
@@ -148,6 +171,8 @@ class RunRecordTests(unittest.TestCase):
         self.assertIn("no fix on this one", html)
         self.assertIn("best match:", html)
         self.assertIn("retr low", html)
+        self.assertIn(ABSTAIN.splitlines()[0], html)
+        self.assertIn("Please ask the lab technician", html)
 
     def test_base_record_has_no_retrieval_max(self):
         result = answer_question(
@@ -204,21 +229,78 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(pair_compare_modes("full", "full"), ("full", "base"))
         self.assertEqual(pair_compare_modes("base", "full"), ("base", "full"))
 
-    def test_runs_sequentially_never_nested(self):
-        order = []
-        inflight = []
+    def test_run_compare_clears_waiting_before_right_starts(self):
+        st = MagicMock()
+        st.cache_resource = lambda fn: fn
+        st.cache_data = lambda *a, **k: (lambda fn: fn)
+        sys.modules["streamlit"] = st
+        import importlib
 
-        def answer_fn(question, mode, **kwargs):
-            self.assertEqual(inflight, [])
-            inflight.append(mode)
-            order.append(mode)
-            inflight.pop()
-            return {"mode": mode, "question": question}
+        if "app.app" in sys.modules:
+            del sys.modules["app.app"]
+        app_mod = importlib.import_module("app.app")
 
-        left, right = run_compare_pair("q", "base", "full", answer_fn, model="qwen3.5:2b")
-        self.assertEqual(order, ["base", "full"])
+        events = []
+
+        class Slot:
+            def markdown(self, *a, **k):
+                events.append("waiting")
+
+            def empty(self):
+                events.append("clear_wait")
+
+        class Col:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+            def empty(self):
+                events.append("placeholder")
+                return Slot()
+
+        class Box:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def answer(question, mode, *a, **k):
+            events.append(("start", mode))
+            return {
+                "mode": mode,
+                "answer": "x",
+                "abstained": False,
+                "hits": [],
+                "docs": [],
+                "latency_s": 0.1,
+                "app_rss_mb": 1,
+                "ollama_rss_mb": 1,
+                "total_mb": 2,
+                "retrieval_max_dense": None,
+                "threshold": 0.3,
+            }
+
+        def render(rec, key):
+            events.append(("render", rec["mode"]))
+
+        with patch.object(app_mod.st, "container", return_value=Box()), patch.object(
+            app_mod.st, "columns", return_value=(Col(), Col())
+        ), patch.object(app_mod, "_answer_record", side_effect=answer), patch.object(
+            app_mod, "_render_card", side_effect=render
+        ):
+            left, right = app_mod._run_compare("q", "base", "full", "m", None, "idx")
+
         self.assertEqual(left["mode"], "base")
         self.assertEqual(right["mode"], "full")
+        self.assertLess(events.index(("start", "base")), events.index("clear_wait"))
+        self.assertLess(events.index("clear_wait"), events.index(("start", "full")))
+        self.assertEqual(
+            [e for e in events if isinstance(e, tuple) and e[0] == "start"],
+            [("start", "base"), ("start", "full")],
+        )
 
 
 class HtmlTests(unittest.TestCase):
