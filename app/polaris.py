@@ -74,6 +74,20 @@ EXAMPLES = (
     "connect to the lab printer",
     "what's the lab wi-fi password?",
 )
+MODE_NAMES = {
+    "base": "Base",
+    "cot": "CoT",
+    "rag": "RAG",
+    "full": "Full",
+}
+MODE_HINTS = {
+    "base": "Model only",
+    "cot": "Reasons step by step",
+    "rag": "Answers from the lab docs",
+    "full": "Lab docs, reasoned step by step",
+}
+TAGLINE = "Offline help for the Linux lab"
+STILL_WORKING = "Still working. The model runs on this machine."
 SOURCE_KEY_RULES = (
     ("tldr", "TLDR"),
     ("man", "MAN"),
@@ -366,6 +380,18 @@ def mode_sub(mode):
     return MODE_SUBS.get(mode, "")
 
 
+def mode_name(mode):
+    return MODE_NAMES.get(mode, mode_label(mode))
+
+
+def mode_hint(mode):
+    return MODE_HINTS.get(mode, "")
+
+
+def mode_from_name(name, fallback="full"):
+    return next((m for m, n in MODE_NAMES.items() if n == name), fallback)
+
+
 def _fmt_score(value, digits=2):
     if value is None:
         return "—"
@@ -399,7 +425,17 @@ def _header_star_html():
     )
 
 
-def header_band_html(slim=False, animate=False):
+def status_html(model, up):
+    state = "up" if up else "down"
+    text = escape(model) if up else "Ollama is not running"
+    title = "Ollama is answering" if up else "Start it with: ollama serve"
+    return (
+        f'<span class="status {state}" title="{title}">'
+        f'<span class="dot" aria-hidden="true"></span>{text}</span>'
+    )
+
+
+def header_band_html(slim=False, animate=False, status=""):
     classes = ["band"]
     if slim:
         classes.append("slim")
@@ -407,25 +443,23 @@ def header_band_html(slim=False, animate=False):
     if animate:
         classes.append("wrap-on")
     mark_class = "mark is-wrapping" if animate else "mark rest"
+    label = "polaris, replay the star" if animate else "polaris"
     return (
         f'<div class="{" ".join(classes)}">'
         + STAR_DEFS
-        + f'<span class="{mark_class}" tabindex="0"><span class="word">'
+        + f'<span class="{mark_class}" tabindex="0" role="img" aria-label="{label}"><span class="word">'
         + _header_star_html()
         + "</span></span>"
-        '<span class="tag">offline help for the linux lab</span>'
-        '<span class="spacer"></span>'
-        '<span class="pill-offline">offline</span>'
-        "</div>"
+        + (f'<span class="spacer"></span>{status}' if status else "")
+        + "</div>"
     )
 
 
 def empty_hero_html():
     return (
-        '<div class="empty">'
-        f'<div class="mark">polaris{STAR_SVG}</div>'
-        '<div class="const"></div>'
-        '<p class="tag">offline help for the linux lab</p>'
+        '<div class="hero">'
+        + header_band_html(animate=True)
+        + f'<p class="tagline">{escape(TAGLINE)}</p>'
         "</div>"
     )
 
@@ -433,16 +467,15 @@ def empty_hero_html():
 def card_head_html(mode):
     return (
         '<div class="card-head">'
-        f'<span class="mode">[ {escape(mode_label(mode))} ]</span>'
-        f'<span class="sub">{escape(mode_sub(mode))}</span>'
+        f'<span class="mode">{escape(mode_name(mode))}</span>'
+        f'<span class="sub">{escape(mode_hint(mode))}</span>'
         "</div>"
     )
 
 
 def retrieval_bar_html(score, threshold, retrieval_off=False, mode=""):
     if retrieval_off:
-        name = mode_label(mode)
-        text = f"no retrieval in {name}" if mode else "no retrieval"
+        text = f"No retrieval in {mode_name(mode)}" if mode else "No retrieval"
         return f'<div class="retr off">{escape(text)}</div>'
     n = 0.0 if score is None else max(0.0, min(1.0, float(score)))
     t = 0.30 if threshold is None else float(threshold)
@@ -451,22 +484,17 @@ def retrieval_bar_html(score, threshold, retrieval_off=False, mode=""):
     klass = "retr ok" if ok else "retr low"
     width = f"{n * 100:.1f}%"
     tick = f"{t * 100:.1f}%"
-    score_lbl = _fmt_score(score)
+    verdict = "clears" if ok else "below"
     return (
         f'<div class="{klass}">'
-        f'<div class="retr-top"><span class="lbl">retrieval</span> <b>{score_lbl}</b></div>'
-        f'<div class="bar">'
+        '<span class="lbl">Retrieval</span>'
+        f'<span class="bar" role="meter" aria-valuemin="0" aria-valuemax="1" aria-valuenow="{n:.2f}"'
+        f' aria-label="Best match {_fmt_score(score)}, threshold {format_threshold(t)}">'
         f'<span class="fill" style="width:{width}"></span>'
         f'<span class="tick" style="left:{tick}"></span>'
-        f'<span class="knob" style="left:{width}"></span>'
-        f"</div>"
-        f'<div class="scale">'
-        f'<span class="mark start" style="left:0%">0</span>'
-        f'<span class="mark thr" style="left:{tick}">{format_threshold(t)}</span>'
-        f'<span class="mark score" style="left:{width}">{score_lbl}</span>'
-        f'<span class="mark end" style="left:100%">1</span>'
-        f"</div>"
-        f"</div>"
+        "</span>"
+        f'<span class="val"><b>{_fmt_score(score)}</b> {verdict} {format_threshold(t)}</span>'
+        "</div>"
     )
 
 
@@ -500,15 +528,16 @@ def metrics_html(record):
     n = source_count(record)
     bits = [
         f'<b>{float(record.get("latency_s") or 0):.1f}</b> s',
-        f'<b>{format_total_ram(record.get("total_mb"))}</b> total',
+        f'<b>{format_total_ram(record.get("total_mb"))}</b> RAM total',
     ]
     if record.get("abstained"):
         unit = "candidate checked" if n == 1 else "candidates checked"
-        bits.append(f"{n} {unit}")
-        bits.append("abstain")
+        bits.append(f"<b>{n}</b> {unit}")
+        bits.append("abstained")
     else:
-        bits.append(source_count_label(n))
-    return f'<div class="metrics">{" · ".join(bits)}</div>'
+        count, _, unit = source_count_label(n).partition(" ")
+        bits.append(f"<b>{count}</b> {unit}")
+    return '<div class="metrics">' + "".join(f"<span>{b}</span>" for b in bits) + "</div>"
 
 
 def ram_split_html(record):
@@ -520,12 +549,16 @@ def ram_split_html(record):
     )
 
 
+_TICK_RE = re.compile(r"`([^`\n]+)`")
+
+
 def idk_card_html(record):
-    body = escape(record.get("answer") or "").replace("\n", "<br>")
+    _, answer = split_reasoning(record.get("answer") or "")
+    body = _TICK_RE.sub(r"<code>\1</code>", escape(answer)).replace("\n", "<br>")
     return (
         '<div class="idk-body">'
         f'<span class="idk-star">{STAR_SVG}</span>'
-        "<h4>no fix on this one</h4>"
+        "<h4>No fix on this one</h4>"
         f"<p>{body}</p>"
         "</div>"
         '<div class="polaris-idk-flag" hidden></div>'
@@ -544,28 +577,26 @@ def best_match_html(record):
     else:
         name = short_doc_name(top)
     gap = " " if name else ""
-    return f'<p class="best">best match: {escape(src)}{gap}{escape(name)}</p>'
+    return f'<p class="best">Best match: <code>{escape(src)}{gap}{escape(name)}</code></p>'
 
 
 def evidence_summary_text(record):
     n = source_count(record)
     phrase = evidence_source_phrase(record.get("hits") or [])
-    label = f"Evidence · {source_count_label(n)}"
+    label = f"Evidence, {source_count_label(n)}"
     if phrase:
-        label += f" · {phrase}"
+        label += f", best {phrase}"
     return label
 
 
 def evidence_summary_html(record):
     n = source_count(record)
     phrase = evidence_source_phrase(record.get("hits") or [])
-    src_html = ""
-    if phrase:
-        key, _, rest = phrase.partition(" ")
-        src_html = f' · <span class="src">{escape(key)}</span>'
-        if rest:
-            src_html += f" {escape(rest)}"
-    return f"Evidence · {source_count_label(n)}{src_html}"
+    src_html = f' <span class="best-src">{escape(phrase)}</span>' if phrase else ""
+    return (
+        '<span class="chev" aria-hidden="true"></span>'
+        f'<span class="ev-title">Evidence</span> <span class="count">{source_count_label(n)}</span>{src_html}'
+    )
 
 
 def evidence_rows_html(hits):
@@ -616,9 +647,8 @@ def evidence_panel_html(record):
         src = source_key(top.get("source")).lower()
         dense = _fmt_score(top.get("dense"))
         parts.append(
-            f'<p class="best-panel">best match: '
-            f'<span class="src">{escape(src)}</span>'
-            f" · cosine {dense} of {thr}</p>"
+            f'<p class="best-panel">Best match <span class="src">{escape(src)}</span>'
+            f" scored cosine {dense}, threshold {thr}</p>"
         )
         parts.append(evidence_rows_html(hits))
     else:
@@ -668,7 +698,7 @@ def card_html(record, align_slots=False):
     if rag:
         parts.append(evidence_block_html(record, collapsed=True))
     elif align_slots:
-        parts.append(empty_slot_html("ev", f"no sources in {mode_label(mode)}"))
+        parts.append(empty_slot_html("ev", f"No sources in {mode_name(mode)}"))
     parts.append(
         retrieval_bar_html(
             record.get("retrieval_max_dense"),
@@ -686,13 +716,46 @@ def card_html(record, align_slots=False):
     return "".join(parts)
 
 
+def _dots_html():
+    return '<span class="dots" aria-hidden="true">' + "<i></i>" * 9 + "</span>"
+
+
+def thinking_html(label, still=STILL_WORKING):
+    """Loader for a running answer: a 3x3 constellation breathing out from its center star."""
+    return (
+        '<div class="thinking" role="status">'
+        + _dots_html()
+        + '<span class="thinking-label">'
+        f'<span class="now">{escape(label)}</span>'
+        f'<span class="later" aria-hidden="true">{escape(still)}</span>'
+        "</span></div>"
+    )
+
+
+def running_card_html(mode, label):
+    return '<div class="card running-card">' + card_head_html(mode) + thinking_html(label) + "</div>"
+
+
+def thinking_label(mode, loading_index=False):
+    if loading_index:
+        return "Loading the lab docs index"
+    if uses_rag(mode):
+        return "Searching the lab docs"
+    if mode == "cot":
+        return "Thinking it through"
+    return "Writing an answer"
+
+
 def waiting_html(mode, after_label):
     return (
         '<div class="card waiting-card">'
         + card_head_html(mode)
-        + f'<div class="slot-empty body">waiting · runs after {escape(after_label)} finishes</div>'
-        + empty_slot_html("ev", "no sources yet")
-        + '<div class="retr off">no retrieval yet</div>'
+        + '<div class="slot-empty body"><div class="thinking queued">'
+        + _dots_html()
+        + f'<span class="thinking-label"><span class="now">Starts when {escape(after_label)} finishes</span></span>'
+        + "</div></div>"
+        + empty_slot_html("ev", "No sources yet")
+        + '<div class="retr off">No retrieval yet</div>'
         + empty_slot_html("best")
         + '<div class="metrics slot-empty foot"></div>'
         + "</div>"
@@ -700,17 +763,21 @@ def waiting_html(mode, after_label):
 
 
 def user_turn_html(question):
-    return (
-        f'<div class="you"><span class="who">you ›</span> {escape(question)}</div>'
-    )
+    return f'<div class="q" role="heading" aria-level="2">{escape(question)}</div>'
+
+
+def preview_text(answer):
+    _, body = split_reasoning(answer or "")
+    prose = " ".join(chunk for kind, chunk in split_code_blocks(body) if kind == "md")
+    return first_line(prose.replace("`", ""))
 
 
 def compare_compact_html(left, right):
     def block(rec):
         mode = rec.get("mode") or ""
-        preview = first_line(rec.get("answer") or "")
+        preview = preview_text(rec.get("answer") or "")
         return (
-            "<div>"
+            '<div class="cmp-cell">'
             + card_head_html(mode)
             + f'<p class="preview">{escape(preview)}</p>'
             + "</div>"

@@ -2,6 +2,7 @@
 """Offline Streamlit chat app for the CCIS Linux lab assistant."""
 import os
 import sys
+from html import escape
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -48,40 +49,46 @@ from app.polaris import (
     index_chunk_count,
     injected_css,
     metrics_html,
+    mode_from_name,
+    mode_hint,
+    mode_name,
     pair_compare_modes,
     polaris_on,
     records_to_csv,
     records_to_json,
     retrieval_bar_html,
+    running_card_html,
     sidebar_kv_html,
     split_code_blocks,
     split_reasoning,
+    status_html,
+    thinking_html,
+    thinking_label,
     user_turn_html,
     waiting_html,
     warm_label,
-    yn,
 )
 from shared.frozen import format_threshold, load_frozen
 
 
-@st.cache_resource
+@st.cache_resource(show_spinner=False)
 def load_retriever(index_dir):
     from rag.query_hybrid import HybridRetriever
 
     return HybridRetriever(index_dir)
 
 
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=15, show_spinner=False)
 def _ollama_up():
     return ollama_reachable()
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=30, show_spinner=False)
 def _model_digest(model):
     return model_digest(model)
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=60, show_spinner=False)
 def _chunk_count(index_dir):
     return index_chunk_count(index_dir)
 
@@ -208,10 +215,16 @@ def _init_session():
     st.session_state.setdefault("messages", [])
     st.session_state.setdefault("run_records", [])
     st.session_state.setdefault("warmed", False)
+    st.session_state.setdefault("mode", "full")
     if "cmp_left" not in st.session_state or "cmp_right" not in st.session_state:
         left, right = default_compare_modes()
         st.session_state.setdefault("cmp_left", left)
         st.session_state.setdefault("cmp_right", right)
+
+
+@st.cache_resource
+def _loaded_indexes():
+    return set()
 
 
 def run_polaris():
@@ -220,52 +233,58 @@ def run_polaris():
     index_dir = DEFAULT_INDEX
     model = BASE_MODEL
     frozen = load_frozen()
+    up = _ollama_up()
 
-    _render_sidebar(model, index_dir, frozen)
+    _render_sidebar(model, index_dir, frozen, up)
 
-    if st.session_state.get("daylight"):
-        st.markdown('<div class="polaris-daylight"></div>', unsafe_allow_html=True)
     compare_on = bool(st.session_state.get("compare"))
+    flags = ["polaris-flags"]
+    if st.session_state.get("daylight"):
+        flags.append("polaris-daylight")
     if compare_on:
-        st.markdown('<div class="polaris-compare"></div>', unsafe_allow_html=True)
+        flags.append("polaris-compare")
+    st.markdown(f'<div class="{" ".join(flags)}"></div>', unsafe_allow_html=True)
 
-    empty = not st.session_state.messages
-    st.markdown(header_band_html(slim=not empty, animate=empty), unsafe_allow_html=True)
+    left_mode, right_mode = pair_compare_modes(
+        st.session_state.get("cmp_left"),
+        st.session_state.get("cmp_right"),
+    )
+    status = status_html(model, up)
 
-    for i, msg in enumerate(st.session_state.messages):
-        _replay_message(msg, i, compact_compare=True)
-
-    if empty:
-        st.markdown(empty_hero_html(), unsafe_allow_html=True)
-
-    mode = "full"
-    left_mode, right_mode = default_compare_modes()
-    if compare_on:
-        left_mode, right_mode = pair_compare_modes(
-            st.session_state.get("cmp_left"),
-            st.session_state.get("cmp_right"),
-        )
+    if not st.session_state.messages:
+        landing = st.empty()
+        with landing.container(key="landing"):
+            st.markdown(empty_hero_html(), unsafe_allow_html=True)
+            typed = _render_composer("landing", compare_on, left_mode, right_mode, status)
+            _render_examples()
+        question = st.session_state.pop("pending_q", None) or typed
+        if not question:
+            return
+        landing.empty()
+        st.markdown(header_band_html(slim=True, status=status), unsafe_allow_html=True)
+        thread = st.container(key="thread")
+        _render_composer("dock", compare_on, left_mode, right_mode)
     else:
-        mode = _render_mode_pills()
+        st.markdown(header_band_html(slim=True, status=status), unsafe_allow_html=True)
+        thread = st.container(key="thread")
+        with thread:
+            for i, msg in enumerate(st.session_state.messages):
+                _replay_message(msg, i, compact_compare=True)
+        typed = _render_composer("dock", compare_on, left_mode, right_mode)
+        question = st.session_state.pop("pending_q", None) or typed
+        if not question:
+            return
 
-    if empty:
-        _render_examples()
-        with st.container(key="composer-empty"):
-            typed = st.chat_input("ask a linux or lab question…")
-    else:
-        typed = st.chat_input("ask a linux or lab question…")
-
-    question = st.session_state.pop("pending_q", None) or typed
-    if not question:
-        return
-
+    mode = st.session_state.get("mode", "full")
     st.session_state.messages.append({"role": "user", "content": question})
+    with thread:
+        _answer_turn(question, mode, compare_on, left_mode, right_mode, model, index_dir)
+
+
+def _answer_turn(question, mode, compare_on, left_mode, right_mode, model, index_dir):
     st.markdown(user_turn_html(question), unsafe_allow_html=True)
 
-    if compare_on:
-        need_rag = uses_rag(left_mode) or uses_rag(right_mode)
-    else:
-        need_rag = uses_rag(mode)
+    need_rag = (uses_rag(left_mode) or uses_rag(right_mode)) if compare_on else uses_rag(mode)
     retriever = None
     if need_rag:
         if not index_ok(index_dir):
@@ -273,7 +292,7 @@ def run_polaris():
                 f"No index at {index_dir}. Fetch the corpus and run rag/build_index.py first."
             )
             return
-        retriever = load_retriever(index_dir)
+        retriever = _retriever_with_loader(index_dir)
 
     if compare_on:
         recs = _run_compare(question, left_mode, right_mode, model, retriever, index_dir)
@@ -288,129 +307,182 @@ def run_polaris():
     st.session_state.messages.append({"role": "assistant", "record": rec})
 
 
-def _render_sidebar(model, index_dir, frozen):
+def _retriever_with_loader(index_dir):
+    loaded = _loaded_indexes()
+    if index_dir in loaded:
+        return load_retriever(index_dir)
+    slot = st.empty()
+    slot.markdown(thinking_html(thinking_label("", loading_index=True)), unsafe_allow_html=True)
+    retriever = load_retriever(index_dir)
+    loaded.add(index_dir)
+    slot.empty()
+    return retriever
+
+
+def _render_sidebar(model, index_dir, frozen, up):
     with st.sidebar:
-        digest = _model_digest(model)
-        model_value = model if not digest else f"{model} · {digest}"
-        loaded = index_ok(index_dir)
-        chunks = _chunk_count(index_dir) if loaded else 0
-        index_value = Path(index_dir).name
-        if loaded:
-            index_value = f"{index_value} · {chunks} chunks"
-        sha = git_commit()
-        st.markdown('<div class="chrome">STATUS</div>', unsafe_allow_html=True)
-        st.markdown(
-            sidebar_kv_html(
-                [
-                    ("model", model_value),
-                    ("index", index_value),
-                    ("threshold", f"cos {format_threshold(frozen['threshold'])}"),
-                    ("k", str(frozen["k"])),
-                    ("git", sha[:7] if sha else "—"),
-                    ("ollama", yn(_ollama_up())),
-                    ("index loaded", yn(loaded)),
-                    ("warm-up", warm_label(st.session_state.get("warmed"))),
-                ]
-            ),
-            unsafe_allow_html=True,
-        )
-
-        st.markdown('<div class="chrome">VIEW</div>', unsafe_allow_html=True)
-        st.toggle("Compare modes", key="compare")
-        st.toggle("Daylight", key="daylight")
-
-        if st.session_state.get("compare"):
-            st.markdown('<div class="chrome">COMPARE</div>', unsafe_allow_html=True)
-            modes = mode_choices()
-            st.selectbox(
-                "Left",
-                modes,
-                format_func=lambda m: MODE_LABELS.get(m, m),
-                key="cmp_left",
-            )
-            right_opts = [m for m in modes if m != st.session_state.get("cmp_left")]
-            current_right = st.session_state.get("cmp_right")
-            if current_right not in right_opts and right_opts:
-                st.session_state.cmp_right = right_opts[0]
-            st.selectbox(
-                "Right",
-                right_opts,
-                format_func=lambda m: MODE_LABELS.get(m, m),
-                key="cmp_right",
-            )
-
-        st.markdown('<div class="chrome">IDK THRESHOLD</div>', unsafe_allow_html=True)
-        st.caption(f"cos {format_threshold(frozen['threshold'])} (frozen)")
-
-        records = st.session_state.get("run_records") or []
-        st.markdown('<div class="chrome">SESSION</div>', unsafe_allow_html=True)
-        avg = avg_latency(records)
-        st.caption("avg —" if avg is None else f"avg {avg:.1f} s · {len(records)} runs")
-        if records:
-            st.download_button(
-                "CSV",
-                data=records_to_csv(records),
-                file_name="polaris-runs.csv",
-                mime="text/csv",
-                key="export-csv",
-            )
-            st.download_button(
-                "JSON",
-                data=records_to_json(records),
-                file_name="polaris-runs.json",
-                mime="application/json",
-                key="export-json",
-            )
-
-        if st.button("Clear chat", key="clear-chat"):
+        if st.button(
+            "New chat",
+            key="new-chat",
+            icon=":material/edit_square:",
+            use_container_width=True,
+        ):
             st.session_state.messages = []
             st.session_state.run_records = []
             st.session_state.warmed = False
             st.rerun()
 
+        st.markdown('<p class="side-h">View</p>', unsafe_allow_html=True)
+        st.toggle("Compare two modes", key="compare")
+        st.toggle("Daylight", key="daylight")
+        if st.session_state.get("compare"):
+            modes = mode_choices()
+            st.selectbox("Left", modes, format_func=mode_name, key="cmp_left")
+            right_opts = [m for m in modes if m != st.session_state.get("cmp_left")]
+            current_right = st.session_state.get("cmp_right")
+            if current_right not in right_opts and right_opts:
+                st.session_state.cmp_right = right_opts[0]
+            st.selectbox("Right", right_opts, format_func=mode_name, key="cmp_right")
+
+        records = st.session_state.get("run_records") or []
+        st.markdown('<p class="side-h">Session</p>', unsafe_allow_html=True)
+        avg = avg_latency(records)
         st.markdown(
-            '<p class="footer-license">Inter and JetBrains Mono — SIL OFL 1.1</p>',
+            sidebar_kv_html(
+                [
+                    ("Answers", str(len(records))),
+                    ("Average time", "—" if avg is None else f"{avg:.1f} s"),
+                ]
+            ),
+            unsafe_allow_html=True,
+        )
+        if records:
+            csv_col, json_col = st.columns(2, gap="small")
+            csv_col.download_button(
+                "CSV",
+                data=records_to_csv(records),
+                file_name="polaris-runs.csv",
+                mime="text/csv",
+                key="export-csv",
+                icon=":material/download:",
+                use_container_width=True,
+            )
+            json_col.download_button(
+                "JSON",
+                data=records_to_json(records),
+                file_name="polaris-runs.json",
+                mime="application/json",
+                key="export-json",
+                icon=":material/download:",
+                use_container_width=True,
+            )
+
+        digest = _model_digest(model)
+        loaded = index_ok(index_dir)
+        chunks = _chunk_count(index_dir) if loaded else 0
+        sha = git_commit()
+        st.markdown('<p class="side-h">System</p>', unsafe_allow_html=True)
+        st.markdown(
+            sidebar_kv_html(
+                [
+                    ("Model", model),
+                    ("Weights", digest or "—"),
+                    ("Index", Path(index_dir).name),
+                    ("Chunks", f"{chunks:,}" if loaded else "not loaded"),
+                    ("IDK threshold", f"cos {format_threshold(frozen['threshold'])}"),
+                    ("Top-k", str(frozen["k"])),
+                    ("Ollama", "running" if up else "stopped"),
+                    ("Warm-up", warm_label(st.session_state.get("warmed"))),
+                    ("Commit", sha[:7] if sha else "—"),
+                ]
+            ),
+            unsafe_allow_html=True,
+        )
+
+        st.markdown(
+            '<p class="footer-license">Ubuntu Sans, Ubuntu Font Licence 1.0<br>'
+            "JetBrains Mono, SIL OFL 1.1</p>",
             unsafe_allow_html=True,
         )
 
 
-def _render_mode_pills():
-    modes = mode_choices()
-    labels = [MODE_LABELS[m] for m in modes]
-    default = MODE_LABELS.get("full", labels[-1])
-    with st.container(key="mode"):
-        picked = st.segmented_control(
-            "Mode",
-            labels,
-            default=default,
-            key="mode-ctl",
-            label_visibility="collapsed",
+def _sync_mode(key):
+    picked = st.session_state.get(key)
+    if picked:
+        st.session_state.mode = mode_from_name(picked, st.session_state.get("mode", "full"))
+    else:
+        st.session_state[key] = mode_name(st.session_state.get("mode", "full"))
+
+
+def _render_composer(where, compare_on, left_mode, right_mode, status=""):
+    if status:
+        st.markdown(f'<div class="composer-meta">{status}</div>', unsafe_allow_html=True)
+    with st.container(key=f"composer-{where}"):
+        typed = st.chat_input("Ask about Linux or the lab", key=f"chat-{where}")
+        hint_col, ctl_col = st.columns([1, 1], gap="small", vertical_alignment="center")
+        if compare_on:
+            hint_col.markdown(
+                f'<p class="composer-hint">Comparing <b>{escape(mode_name(left_mode))}</b>'
+                f" with <b>{escape(mode_name(right_mode))}</b></p>",
+                unsafe_allow_html=True,
+            )
+            return typed
+        key = f"mode-{where}"
+        mode = st.session_state.get("mode", "full")
+        with ctl_col, st.container(key=f"mode-{where}-box"):
+            st.segmented_control(
+                "Mode",
+                [mode_name(m) for m in mode_choices()],
+                default=None if key in st.session_state else mode_name(mode),
+                key=key,
+                label_visibility="collapsed",
+                on_change=_sync_mode,
+                args=(key,),
+            )
+        hint_col.markdown(
+            f'<p class="composer-hint">{escape(mode_hint(st.session_state.get("mode", mode)))}</p>',
+            unsafe_allow_html=True,
         )
-    if picked is None:
-        picked = default
-    return next(m for m, lab in MODE_LABELS.items() if lab == picked)
+    return typed
+
+
+def _pick_example():
+    picked = st.session_state.get("ex-pick")
+    if picked:
+        st.session_state.pending_q = picked
+    st.session_state["ex-pick"] = None
 
 
 def _render_examples():
     with st.container(key="examples"):
-        cols = st.columns(2)
-        for i, text in enumerate(EXAMPLES):
-            if cols[i % 2].button(text, key=f"ex-{i}"):
-                st.session_state.pending_q = text
-                st.rerun()
+        st.pills(
+            "Examples",
+            list(EXAMPLES),
+            key="ex-pick",
+            label_visibility="collapsed",
+            on_change=_pick_example,
+        )
 
 
-def _answer_record(question, mode, model, retriever, index_dir):
+def _answer_record(question, mode, model, retriever, index_dir, panel=False):
+    slot = st.empty()
+    label = thinking_label(mode)
+    slot.markdown(
+        running_card_html(mode, label) if panel else thinking_html(label),
+        unsafe_allow_html=True,
+    )
     try:
         result = answer_question(
             question, mode, model, retriever=retriever, model_key="base"
         )
     except requests.RequestException as e:
+        slot.empty()
         st.error(
             f"Could not reach Ollama at {OLLAMA_HOST}. "
             f"Start it with `ollama serve`.\n\n{e}"
         )
         return None
+    slot.empty()
     rec = build_run_record(result, index_path=index_dir)
     st.session_state.run_records.append(rec)
     st.session_state.warmed = True
@@ -424,16 +496,16 @@ def _run_compare(question, left_mode, right_mode, model, retriever, index_dir):
         col_l, col_r = st.columns(2, gap="medium")
         wait = col_r.empty()
         wait.markdown(
-            waiting_html(right_mode, MODE_LABELS.get(left_mode, left_mode)),
+            waiting_html(right_mode, mode_name(left_mode)),
             unsafe_allow_html=True,
         )
         with col_l:
-            rec_l = _answer_record(question, left_mode, model, retriever, index_dir)
+            rec_l = _answer_record(question, left_mode, model, retriever, index_dir, panel=True)
             if rec_l is not None:
                 _render_card(rec_l, key="answer-cmp-left", align_slots=True)
         wait.empty()
-        rec_r = _answer_record(question, right_mode, model, retriever, index_dir)
         with col_r:
+            rec_r = _answer_record(question, right_mode, model, retriever, index_dir, panel=True)
             if rec_r is not None:
                 _render_card(rec_r, key="answer-cmp-right", align_slots=True)
     return rec_l, rec_r
@@ -476,7 +548,7 @@ def _render_card(record, key, align_slots=False):
         elif mode in ("cot", "full"):
             reason, answer = split_reasoning(record.get("answer") or "")
             if reason:
-                with st.expander("REASONING", expanded=False):
+                with st.expander("Reasoning", expanded=False):
                     st.markdown(reason)
                 _render_answer_body(answer)
             else:
@@ -487,7 +559,7 @@ def _render_card(record, key, align_slots=False):
             st.markdown(evidence_block_html(record, collapsed=True), unsafe_allow_html=True)
         elif align_slots:
             st.markdown(
-                empty_slot_html("ev", f"no sources in {MODE_LABELS.get(mode, mode)}"),
+                empty_slot_html("ev", f"No sources in {mode_name(mode)}"),
                 unsafe_allow_html=True,
             )
         st.markdown(

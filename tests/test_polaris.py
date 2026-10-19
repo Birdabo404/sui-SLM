@@ -50,7 +50,24 @@ from app.polaris import (
     split_reasoning,
     style_path,
     waiting_html,
+    STILL_WORKING,
+    compare_compact_html,
+    mode_from_name,
+    mode_name,
+    preview_text,
+    running_card_html,
+    status_html,
+    thinking_html,
+    thinking_label,
 )
+
+
+def _cache_stub(*args, **kwargs):
+    if args and callable(args[0]):
+        return args[0]
+    return lambda fn: fn
+
+
 class FakeRetriever:
     def __init__(self, hits):
         self.hits = hits
@@ -181,22 +198,24 @@ class RunRecordTests(unittest.TestCase):
         self.assertTrue(rec["abstained"])
         self.assertEqual(rec["answer"], ABSTAIN)
         html = idk_card_html(rec)
-        self.assertIn("no fix on this one", html)
+        self.assertIn("No fix on this one", html)
         self.assertIn("idk-body", html)
         self.assertNotIn('class="idk"', html)
         self.assertIn("polaris-idk-flag", html)
-        self.assertIn(ABSTAIN.splitlines()[0], html)
+        self.assertIn("I don&#x27;t know.", html)
+        self.assertNotIn("Steps:", html)
+        self.assertIn("<code>man &lt;command&gt;</code>", html)
         self.assertIn("Please ask the lab technician", html)
         card = card_html(rec)
         self.assertIn("idk-card", card)
         self.assertIn("retr low", card)
-        self.assertIn("best match:", card)
-        self.assertIn("best match: tldr ls", card)
+        self.assertIn("Best match:", card)
+        self.assertIn("<code>tldr ls</code>", card)
         self.assertNotIn("cosine 0.10 of 0.30 needed", card)
-        self.assertIn("1 candidate checked", card)
-        self.assertIn("abstain", card)
-        self.assertNotIn("1 source · abstain", card.replace(" · ", " · "))
-        self.assertIn("Evidence · 1 source", card)
+        self.assertIn("<b>1</b> candidate checked", card)
+        self.assertIn("abstained", card)
+        self.assertNotIn(" · ", card.split('class="metrics"', 1)[1])
+        self.assertIn('<span class="ev-title">Evidence</span> <span class="count">1 source</span>', card)
         self.assertNotIn(" open", card.split("ev-box", 1)[1][:20])
 
     def test_base_record_has_no_retrieval_max(self):
@@ -256,8 +275,8 @@ class CompareTests(unittest.TestCase):
 
     def test_run_compare_clears_waiting_before_right_starts(self):
         st = MagicMock()
-        st.cache_resource = lambda fn: fn
-        st.cache_data = lambda *a, **k: (lambda fn: fn)
+        st.cache_resource = _cache_stub
+        st.cache_data = _cache_stub
         sys.modules["streamlit"] = st
         import importlib
 
@@ -330,12 +349,13 @@ class CompareTests(unittest.TestCase):
 
 class HtmlTests(unittest.TestCase):
     def test_card_head_and_retrieval_off(self):
-        self.assertIn("[ BASE ]", card_head_html("base"))
-        self.assertIn("MODEL ONLY", card_head_html("base"))
-        self.assertIn("[ FULL ]", card_head_html("full"))
-        self.assertIn("no retrieval", retrieval_bar_html(None, 0.30, retrieval_off=True))
+        self.assertIn('<span class="mode">Base</span>', card_head_html("base"))
+        self.assertIn("Model only", card_head_html("base"))
+        self.assertIn('<span class="mode">Full</span>', card_head_html("full"))
+        self.assertNotIn("[", card_head_html("full"))
+        self.assertIn("No retrieval", retrieval_bar_html(None, 0.30, retrieval_off=True))
         self.assertIn(
-            "no retrieval in BASE",
+            "No retrieval in Base",
             retrieval_bar_html(None, 0.30, retrieval_off=True, mode="base"),
         )
         self.assertNotIn("retrieval off", retrieval_bar_html(None, 0.30, retrieval_off=True))
@@ -343,17 +363,15 @@ class HtmlTests(unittest.TestCase):
         self.assertIn("retr ok", html)
         self.assertIn("width:74.0%", html)
         self.assertIn("left:30.0%", html)
-        self.assertIn("left:74.0%", html)
-        self.assertIn(">0.30<", html)
-        self.assertIn(">0.74<", html)
-        self.assertIn(">0<", html)
-        self.assertIn(">1<", html)
-        self.assertNotIn("threshold <b>", html)
+        self.assertIn("<b>0.74</b> clears 0.30", html)
+        self.assertIn('role="meter"', html)
+        self.assertNotIn('class="scale"', html)
+        self.assertNotIn('class="knob"', html)
         low = retrieval_bar_html(0.22, 0.30)
         self.assertIn("retr low", low)
         self.assertIn("width:22.0%", low)
-        self.assertIn("left:22.0%", low)
         self.assertIn("left:30.0%", low)
+        self.assertIn("<b>0.22</b> below 0.30", low)
 
     def test_chips_and_evidence(self):
         hits = [
@@ -384,15 +402,15 @@ class HtmlTests(unittest.TestCase):
         chips = source_chips_html(hits)
         self.assertIn("TLDR", chips)
         self.assertIn("MAN", chips)
-        self.assertEqual(evidence_summary_text(rec), "Evidence · 2 sources · tldr tar")
+        self.assertEqual(evidence_summary_text(rec), "Evidence, 2 sources, best tldr tar")
         ev = evidence_rows_html(hits)
         self.assertIn("cosine 0.74", ev)
         self.assertNotIn("rrf", ev)
         self.assertNotIn("bm25", ev)
         self.assertNotIn("tldr/common/tar.md", ev)
         panel = evidence_panel_html(rec)
-        self.assertIn("best match:", panel)
-        self.assertIn("cosine 0.74 of 0.30", panel)
+        self.assertIn("Best match", panel)
+        self.assertIn("cosine 0.74, threshold 0.30", panel)
         self.assertNotIn("rrf 0.0500", panel.split("<details", 1)[0])
         self.assertNotIn("tldr/common/tar.md", panel.split("<details", 1)[0])
         self.assertIn("app <b>420</b> MB", panel)
@@ -403,7 +421,7 @@ class HtmlTests(unittest.TestCase):
         self.assertIn("tldr/common/tar.md", dbg)
         block = evidence_block_html(rec)
         self.assertIn("<summary>", block)
-        self.assertIn("Evidence · 2 sources", block)
+        self.assertIn('<span class="count">2 sources</span>', block)
         self.assertIn("tldr", block)
         self.assertNotIn(" open", block.split("ev-box", 1)[1][:20])
         off = source_chips_html([], retrieval_off=True)
@@ -424,7 +442,8 @@ class HtmlTests(unittest.TestCase):
         self.assertIn("1.8", html)
         self.assertIn("2.5 GB", html)
         self.assertIn("total", html)
-        self.assertIn("3 sources", html)
+        self.assertIn("<b>3</b> sources", html)
+        self.assertNotIn(" · ", html)
         self.assertNotIn("app <b>420</b>", html)
         self.assertNotIn("2100", html)
         self.assertNotIn("docs", html)
@@ -440,9 +459,9 @@ class HtmlTests(unittest.TestCase):
         idk["hits"] = [{"rank": 1, "source": "tldr", "dense": 0.2}]
         idk["mode"] = "rag"
         idk_html = metrics_html(idk)
-        self.assertIn("1 candidate checked", idk_html)
-        self.assertIn("abstain", idk_html)
-        self.assertNotIn("1 source", idk_html)
+        self.assertIn("<b>1</b> candidate checked", idk_html)
+        self.assertIn("abstained", idk_html)
+        self.assertNotIn("source", idk_html)
 
     def test_source_key_and_best_match(self):
         self.assertEqual(source_key("tldr"), "TLDR")
@@ -464,15 +483,17 @@ class HtmlTests(unittest.TestCase):
         html = waiting_html("full", "BASE")
         self.assertIn("waiting-card", html)
         self.assertIn("slot-empty", html)
-        self.assertIn("waiting · runs after BASE finishes", html)
+        self.assertIn("Starts when BASE finishes", html)
+        self.assertIn("thinking queued", html)
         self.assertNotIn("dashed", html)
         self.assertIn("retr off", html)
-        self.assertIn("no sources yet", html)
-        self.assertIn("no retrieval yet", html)
+        self.assertIn("No sources yet", html)
+        self.assertIn("No retrieval yet", html)
         self.assertNotIn("slot-line", html)
         css = style_path().read_text(encoding="utf-8")
-        self.assertIn(".card.waiting-card{border:var(--hair)", css.replace(" ", ""))
-        self.assertIn("1px dashed var(--c-slate)", css)
+        self.assertIn(".card.waiting-card{border:1pxsolidvar(--c-line)", css.replace(" ", ""))
+        self.assertIn(".thinking.queued .dots i{animation:none", css)
+        self.assertIn("1px dashed var(--c-idk)", css)
 
     def test_compare_base_vs_full_slots(self):
         question = "how do I extract a .tar.gz file?"
@@ -510,15 +531,15 @@ class HtmlTests(unittest.TestCase):
         }
         left = card_html(base, align_slots=True)
         right = card_html(full, align_slots=True)
-        self.assertIn("[ BASE ]", left)
-        self.assertIn("MODEL ONLY", left)
-        self.assertIn("[ FULL ]", right)
-        self.assertIn("RAG + COT", right)
+        self.assertIn('<span class="mode">Base</span>', left)
+        self.assertIn("Model only", left)
+        self.assertIn('<span class="mode">Full</span>', right)
+        self.assertIn("Lab docs, reasoned step by step", right)
         self.assertIn("slot-empty ev", left)
-        self.assertIn("no sources in BASE", left)
-        self.assertIn("no retrieval in BASE", left)
+        self.assertIn("No sources in Base", left)
+        self.assertIn("No retrieval in Base", left)
         self.assertIn("retr off", left)
-        self.assertIn("Evidence · 1 source", right)
+        self.assertIn('<span class="count">1 source</span>', right)
         self.assertIn("retr ok", right)
         self.assertIn("slot-empty best", left)
         self.assertIn("slot-empty best", right)
@@ -527,16 +548,60 @@ class HtmlTests(unittest.TestCase):
         wait = waiting_html("full", "BASE")
         self.assertIn("waiting-card", wait)
         self.assertIn("slot-empty ev", wait)
-        self.assertIn("no sources yet", wait)
-        self.assertIn("no retrieval yet", wait)
-        self.assertIn("[ FULL ]", wait)
+        self.assertIn("No sources yet", wait)
+        self.assertIn("No retrieval yet", wait)
+        self.assertIn('<span class="mode">Full</span>', wait)
         self.assertNotIn("dashed", wait)
         css = style_path().read_text(encoding="utf-8")
         compact = css.replace(" ", "").replace("\n", "")
-        self.assertIn(".slot-empty.ev,.slot-empty.best{", compact)
+        self.assertIn(".slot-empty{min-height:24px", compact)
         self.assertNotIn(".slot-empty.ev::after", compact)
-        self.assertIn(".ev-box>summary.src{color:var(--c-text-2)", compact)
-        self.assertNotIn(".ev-box>summary.src{color:var(--c-accent)", compact)
+        self.assertIn(".ev-box.best-src{", compact)
+        self.assertNotIn("var(--c-accent)", compact.split(".ev-box{", 1)[1].split(".retr{", 1)[0])
+
+
+class LoaderAndNamingTests(unittest.TestCase):
+    def test_thinking_loader_is_css_only_constellation(self):
+        html = thinking_html("Searching the lab docs")
+        self.assertIn('role="status"', html)
+        self.assertEqual(html.count("<i></i>"), 9)
+        self.assertIn("Searching the lab docs", html)
+        self.assertIn(STILL_WORKING, html)
+        self.assertNotIn("<script", html)
+        css = style_path().read_text(encoding="utf-8")
+        block = css.split("/* ---------- loader", 1)[1].split("/* ---------- sidebar", 1)[0]
+        for prop in ("width:", "height:", "top:", "left:", "margin"):
+            for frames in block.split("@keyframes")[1:]:
+                body = frames.split("}}", 1)[0]
+                self.assertNotIn(prop, body, f"loader keyframes animate {prop}")
+
+    def test_thinking_label_follows_mode(self):
+        self.assertEqual(thinking_label("full"), "Searching the lab docs")
+        self.assertEqual(thinking_label("rag"), "Searching the lab docs")
+        self.assertEqual(thinking_label("cot"), "Thinking it through")
+        self.assertEqual(thinking_label("base"), "Writing an answer")
+        self.assertEqual(thinking_label("full", loading_index=True), "Loading the lab docs index")
+        card = running_card_html("cot", "Thinking it through")
+        self.assertIn("running-card", card)
+        self.assertIn('<span class="mode">CoT</span>', card)
+
+    def test_mode_names_round_trip(self):
+        for mode in ("base", "cot", "rag", "full"):
+            self.assertEqual(mode_from_name(mode_name(mode)), mode)
+        self.assertEqual(mode_from_name("nope", "rag"), "rag")
+
+    def test_status_carries_text_not_only_color(self):
+        self.assertIn("qwen3.5:2b", status_html("qwen3.5:2b", True))
+        down = status_html("qwen3.5:2b", False)
+        self.assertIn("status down", down)
+        self.assertIn("Ollama is not running", down)
+
+    def test_compare_preview_skips_reasoning_and_fences(self):
+        text = "Think first.\n\nAnswer: Run this:\n```bash\ntar -xzf a.tar.gz\n```\nThen `ls` it."
+        self.assertEqual(preview_text(text), "Run this: Then ls it.")
+        html = compare_compact_html({"mode": "base", "answer": "Use `tar`."}, {"mode": "cot", "answer": text})
+        self.assertNotIn("```", html)
+        self.assertNotIn("Think first", html)
 
 
 class HelperTests(unittest.TestCase):
@@ -561,15 +626,20 @@ class HelperTests(unittest.TestCase):
 
     def test_style_ships_offline(self):
         css = style_path().read_text(encoding="utf-8")
-        self.assertIn("/app/static/Inter-Regular.woff2", css)
+        self.assertIn("/app/static/UbuntuSans-Variable-Latin.woff2", css)
+        self.assertTrue((style_path().parent / "static" / "UbuntuSans-Variable-Latin.woff2").is_file())
+        self.assertTrue((style_path().parent / "static" / "UbuntuSans-UFL.txt").is_file())
+        self.assertNotIn("Inter", css)
         self.assertNotIn("fonts.googleapis.com", css)
         self.assertNotIn("cdn", css.lower())
-        self.assertIn("--fs-base:15px", css)
-        self.assertIn("1px dashed var(--c-slate)", css)
+        self.assertIn("--fs-body:16px", css)
+        self.assertIn("1px dashed var(--c-idk)", css)
         self.assertNotIn('content:"▸', css)
+        self.assertNotIn("transition:all", css.replace(" ", ""))
         self.assertIn("@keyframes star-breathe", css)
+        self.assertIn("@keyframes polaris-breathe", css)
         self.assertIn("prefers-reduced-motion", css)
-        self.assertIn(".idk-star svg{width:20px;height:20px;fill:var(--c-slate-dim);animation:none}", css.replace("\n", ""))
+        self.assertIn(".idk-star svg{width:18px;height:18px;fill:none;stroke:var(--c-idk);stroke-width:1.5;animation:none}", css.replace("\n", ""))
         self.assertNotIn(".waiting{border:1px dashed", css.replace(" ", ""))
         orbit = orbit_style_path().read_text(encoding="utf-8")
         self.assertIn("@keyframes star-wrap-path", orbit)
@@ -602,7 +672,9 @@ class HelperTests(unittest.TestCase):
         self.assertIn('class="ink"', band)
         hero = empty_hero_html()
         self.assertNotIn('class="orbit"', hero)
-        self.assertNotIn("is-wrapping", hero)
+        self.assertEqual(hero.count('class="band'), 1)
+        self.assertIn("wrap-on", hero)
+        self.assertIn("Offline help for the Linux lab", hero)
 
     def test_star_motion_v3_occlusion_contract(self):
         idle = header_band_html(animate=True)
@@ -666,8 +738,8 @@ class DigestTests(unittest.TestCase):
 class ImportPolarisTests(unittest.TestCase):
     def test_app_import_with_stub(self):
         st = MagicMock()
-        st.cache_resource = lambda fn: fn
-        st.cache_data = lambda *a, **k: (lambda fn: fn)
+        st.cache_resource = _cache_stub
+        st.cache_data = _cache_stub
         with patch.dict(os.environ, {"ANONYMIZED_TELEMETRY": "False"}):
             import importlib
             import sys
