@@ -12,7 +12,12 @@ toolbarMode = "minimal"
 [[theme.fontFaces]]
 family = "Ubuntu Sans"
 url = "app/static/UbuntuSans-Variable-Latin.woff2"
-weight = "300 700"
+weight = 400
+style = "normal"
+[[theme.fontFaces]]
+family = "Ubuntu Sans"
+url = "app/static/UbuntuSans-Variable-Latin.woff2"
+weight = 600
 style = "normal"
 [[theme.fontFaces]]
 family = "JetBrains Mono"
