@@ -2,6 +2,8 @@
 """Offline Streamlit chat app for the CCIS Linux lab assistant."""
 import os
 import sys
+import threading
+from html import escape
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -34,11 +36,13 @@ from app.engine import (
 )
 from app.polaris import (
     EXAMPLES,
+    CancellableChat,
     avg_latency,
     best_match_html,
     build_run_record,
     card_head_html,
     compare_compact_html,
+    connection_html,
     default_compare_modes,
     empty_hero_html,
     empty_slot_html,
@@ -48,40 +52,54 @@ from app.polaris import (
     index_chunk_count,
     injected_css,
     metrics_html,
+    mode_menu_css,
+    mode_name,
+    network_online,
     pair_compare_modes,
     polaris_on,
     records_to_csv,
     records_to_json,
     retrieval_bar_html,
+    running_card_html,
+    side_logo_html,
+    sky_html,
+    sky_level,
     sidebar_kv_html,
     split_code_blocks,
     split_reasoning,
+    stopped_html,
+    thinking_html,
+    thinking_label,
     user_turn_html,
     waiting_html,
     warm_label,
-    yn,
 )
 from shared.frozen import format_threshold, load_frozen
 
 
-@st.cache_resource
+@st.cache_resource(show_spinner=False)
 def load_retriever(index_dir):
     from rag.query_hybrid import HybridRetriever
 
     return HybridRetriever(index_dir)
 
 
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=15, show_spinner=False)
 def _ollama_up():
     return ollama_reachable()
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=30, show_spinner=False)
 def _model_digest(model):
     return model_digest(model)
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=10, show_spinner=False)
+def _network_online():
+    return network_online()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
 def _chunk_count(index_dir):
     return index_chunk_count(index_dir)
 
@@ -208,10 +226,16 @@ def _init_session():
     st.session_state.setdefault("messages", [])
     st.session_state.setdefault("run_records", [])
     st.session_state.setdefault("warmed", False)
+    st.session_state.setdefault("mode", "full")
     if "cmp_left" not in st.session_state or "cmp_right" not in st.session_state:
         left, right = default_compare_modes()
         st.session_state.setdefault("cmp_left", left)
         st.session_state.setdefault("cmp_right", right)
+
+
+@st.cache_resource
+def _loaded_indexes():
+    return set()
 
 
 def run_polaris():
@@ -220,197 +244,314 @@ def run_polaris():
     index_dir = DEFAULT_INDEX
     model = BASE_MODEL
     frozen = load_frozen()
+    up = _ollama_up()
+    online = _network_online()
+    incoming = st.session_state.get("pending_q") or st.session_state.get("chat-dock")
 
-    _render_sidebar(model, index_dir, frozen)
+    chat = bool(st.session_state.messages or incoming or st.session_state.get("chat-landing"))
+    _render_sidebar(model, index_dir, frozen, up, online, chat=chat)
 
-    if st.session_state.get("daylight"):
-        st.markdown('<div class="polaris-daylight"></div>', unsafe_allow_html=True)
     compare_on = bool(st.session_state.get("compare"))
+    asked = sum(1 for m in st.session_state.messages if m.get("role") == "user") + (1 if incoming else 0)
+    flags = ["polaris-flags", f"polaris-sky-{sky_level(asked)}"]
+    if st.session_state.get("daylight"):
+        flags.append("polaris-daylight")
     if compare_on:
-        st.markdown('<div class="polaris-compare"></div>', unsafe_allow_html=True)
+        flags.append("polaris-compare")
+    st.markdown(
+        f'<div class="{" ".join(flags)}"></div>' + mode_menu_css(model, mode_choices()),
+        unsafe_allow_html=True,
+    )
+    st.markdown(sky_html(), unsafe_allow_html=True)
 
-    empty = not st.session_state.messages
-    st.markdown(header_band_html(slim=not empty, animate=empty), unsafe_allow_html=True)
+    left_mode, right_mode = pair_compare_modes(
+        st.session_state.get("cmp_left"),
+        st.session_state.get("cmp_right"),
+    )
+    conn = connection_html(online, up)
+    composer = dict(
+        compare_on=compare_on, left_mode=left_mode, right_mode=right_mode, model=model, conn=conn
+    )
 
-    for i, msg in enumerate(st.session_state.messages):
-        _replay_message(msg, i, compact_compare=True)
+    if not (st.session_state.messages or st.session_state.get("pending_q")):
+        with st.container(key="landing"):
+            st.markdown(empty_hero_html(), unsafe_allow_html=True)
+            typed, _ = _render_composer("landing", **composer)
+            _render_examples()
+        if typed:
+            # Hand the question to a fresh run so the thread layout is built from the start; swapping it in
+            # here would shift every later element and remount the thread on the next run.
+            st.session_state.pending_q = typed
+            st.rerun()
+        return
 
-    if empty:
-        st.markdown(empty_hero_html(), unsafe_allow_html=True)
-
-    mode = "full"
-    left_mode, right_mode = default_compare_modes()
-    if compare_on:
-        left_mode, right_mode = pair_compare_modes(
-            st.session_state.get("cmp_left"),
-            st.session_state.get("cmp_right"),
-        )
-    else:
-        mode = _render_mode_pills()
-
-    if empty:
-        _render_examples()
-        with st.container(key="composer-empty"):
-            typed = st.chat_input("ask a linux or lab question…")
-    else:
-        typed = st.chat_input("ask a linux or lab question…")
-
+    st.markdown(header_band_html(slim=True), unsafe_allow_html=True)
+    thread = st.container(key="thread")
+    with thread:
+        msgs = st.session_state.messages
+        for i, msg in enumerate(msgs):
+            _replay_message(msg, i, compact_compare=True)
+            if msg.get("role") == "user" and (i + 1 == len(msgs) or msgs[i + 1].get("role") == "user"):
+                st.markdown(stopped_html(), unsafe_allow_html=True)
+    typed, stop_slot = _render_composer("dock", generating=bool(incoming), **composer)
     question = st.session_state.pop("pending_q", None) or typed
     if not question:
         return
 
+    mode = st.session_state.get("mode", "full")
     st.session_state.messages.append({"role": "user", "content": question})
-    st.markdown(user_turn_html(question), unsafe_allow_html=True)
+    with thread:
+        answered = _answer_turn(question, mode, compare_on, left_mode, right_mode, model, index_dir)
+    stop_slot.empty()
+    if answered:
+        # The sidebar was drawn before this answer existed; one cheap rerun brings its counts up to date.
+        st.rerun()
 
-    if compare_on:
-        need_rag = uses_rag(left_mode) or uses_rag(right_mode)
-    else:
-        need_rag = uses_rag(mode)
+
+def _answer_turn(question, mode, compare_on, left_mode, right_mode, model, index_dir):
+    st.markdown(user_turn_html(question), unsafe_allow_html=True)
+    slot = st.empty()
+
+    need_rag = (uses_rag(left_mode) or uses_rag(right_mode)) if compare_on else uses_rag(mode)
     retriever = None
     if need_rag:
         if not index_ok(index_dir):
-            st.error(
-                f"No index at {index_dir}. Fetch the corpus and run rag/build_index.py first."
-            )
-            return
-        retriever = load_retriever(index_dir)
+            message = f"No index at {index_dir}. Fetch the corpus and run rag/build_index.py first."
+            slot.error(message)
+            st.session_state.messages.append({"role": "assistant", "error": message})
+            return False
+        retriever = _retriever_with_loader(index_dir, slot)
 
     if compare_on:
+        slot.empty()
         recs = _run_compare(question, left_mode, right_mode, model, retriever, index_dir)
-        if recs[0] is not None or recs[1] is not None:
-            st.session_state.messages.append({"role": "assistant", "compare": recs})
-        return
+        if recs[0] is None and recs[1] is None:
+            st.session_state.messages.append({"role": "assistant", "error": st.session_state.pop("last_error", "")})
+            return False
+        st.session_state.messages.append({"role": "assistant", "compare": recs})
+        return True
 
-    rec = _answer_record(question, mode, model, retriever, index_dir)
+    rec = _answer_record(question, mode, model, retriever, index_dir, slot=slot)
     if rec is None:
-        return
-    _render_card(rec, key=f"answer-{len(st.session_state.run_records)}")
+        st.session_state.messages.append({"role": "assistant", "error": st.session_state.pop("last_error", "")})
+        return False
+    _render_card(rec, key=f"answer-{len(st.session_state.messages)}", slot=slot)
     st.session_state.messages.append({"role": "assistant", "record": rec})
+    return True
 
 
-def _render_sidebar(model, index_dir, frozen):
+def _retriever_with_loader(index_dir, slot):
+    loaded = _loaded_indexes()
+    if index_dir in loaded:
+        return load_retriever(index_dir)
+    slot.markdown(thinking_html(thinking_label("", loading_index=True)), unsafe_allow_html=True)
+    retriever = load_retriever(index_dir)
+    loaded.add(index_dir)
+    return retriever
+
+
+def _render_sidebar(model, index_dir, frozen, up, online, chat=False):
     with st.sidebar:
-        digest = _model_digest(model)
-        model_value = model if not digest else f"{model} · {digest}"
-        loaded = index_ok(index_dir)
-        chunks = _chunk_count(index_dir) if loaded else 0
-        index_value = Path(index_dir).name
-        if loaded:
-            index_value = f"{index_value} · {chunks} chunks"
-        sha = git_commit()
-        st.markdown('<div class="chrome">STATUS</div>', unsafe_allow_html=True)
-        st.markdown(
-            sidebar_kv_html(
-                [
-                    ("model", model_value),
-                    ("index", index_value),
-                    ("threshold", f"cos {format_threshold(frozen['threshold'])}"),
-                    ("k", str(frozen["k"])),
-                    ("git", sha[:7] if sha else "—"),
-                    ("ollama", yn(_ollama_up())),
-                    ("index loaded", yn(loaded)),
-                    ("warm-up", warm_label(st.session_state.get("warmed"))),
-                ]
-            ),
-            unsafe_allow_html=True,
-        )
+        with st.container(key="side-top"):
+            st.markdown(side_logo_html(play=chat), unsafe_allow_html=True)
+            if st.button(
+                "New chat",
+                key="new-chat",
+                icon=":material/edit_square:",
+                use_container_width=True,
+            ):
+                st.session_state.messages = []
+                st.session_state.run_records = []
+                st.session_state.warmed = False
+                st.rerun()
 
-        st.markdown('<div class="chrome">VIEW</div>', unsafe_allow_html=True)
-        st.toggle("Compare modes", key="compare")
+        st.markdown('<p class="side-h">View</p>', unsafe_allow_html=True)
+        st.toggle("Compare two modes", key="compare")
         st.toggle("Daylight", key="daylight")
-
         if st.session_state.get("compare"):
-            st.markdown('<div class="chrome">COMPARE</div>', unsafe_allow_html=True)
             modes = mode_choices()
-            st.selectbox(
-                "Left",
-                modes,
-                format_func=lambda m: MODE_LABELS.get(m, m),
-                key="cmp_left",
-            )
+            st.selectbox("Left", modes, format_func=mode_name, key="cmp_left")
             right_opts = [m for m in modes if m != st.session_state.get("cmp_left")]
             current_right = st.session_state.get("cmp_right")
             if current_right not in right_opts and right_opts:
                 st.session_state.cmp_right = right_opts[0]
-            st.selectbox(
-                "Right",
-                right_opts,
-                format_func=lambda m: MODE_LABELS.get(m, m),
-                key="cmp_right",
-            )
-
-        st.markdown('<div class="chrome">IDK THRESHOLD</div>', unsafe_allow_html=True)
-        st.caption(f"cos {format_threshold(frozen['threshold'])} (frozen)")
+            st.selectbox("Right", right_opts, format_func=mode_name, key="cmp_right")
 
         records = st.session_state.get("run_records") or []
-        st.markdown('<div class="chrome">SESSION</div>', unsafe_allow_html=True)
+        st.markdown('<p class="side-h">Session</p>', unsafe_allow_html=True)
         avg = avg_latency(records)
-        st.caption("avg —" if avg is None else f"avg {avg:.1f} s · {len(records)} runs")
+        st.markdown(
+            sidebar_kv_html(
+                [
+                    ("Answers", str(len(records))),
+                    ("Average time", "—" if avg is None else f"{avg:.1f} s"),
+                ]
+            ),
+            unsafe_allow_html=True,
+        )
         if records:
-            st.download_button(
+            csv_col, json_col = st.columns(2, gap="small")
+            csv_col.download_button(
                 "CSV",
                 data=records_to_csv(records),
                 file_name="polaris-runs.csv",
                 mime="text/csv",
                 key="export-csv",
+                icon=":material/download:",
+                use_container_width=True,
             )
-            st.download_button(
+            json_col.download_button(
                 "JSON",
                 data=records_to_json(records),
                 file_name="polaris-runs.json",
                 mime="application/json",
                 key="export-json",
+                icon=":material/download:",
+                use_container_width=True,
             )
 
-        if st.button("Clear chat", key="clear-chat"):
-            st.session_state.messages = []
-            st.session_state.run_records = []
-            st.session_state.warmed = False
-            st.rerun()
+        digest = _model_digest(model)
+        loaded = index_ok(index_dir)
+        chunks = _chunk_count(index_dir) if loaded else 0
+        sha = git_commit()
+        st.markdown('<p class="side-h">System</p>', unsafe_allow_html=True)
+        st.markdown(
+            sidebar_kv_html(
+                [
+                    ("Model", model),
+                    ("Weights", digest or "—"),
+                    ("Index", Path(index_dir).name),
+                    ("Chunks", f"{chunks:,}" if loaded else "not loaded"),
+                    ("IDK threshold", f"cos {format_threshold(frozen['threshold'])}"),
+                    ("Top-k", str(frozen["k"])),
+                    ("Ollama", "running" if up else "stopped"),
+                    ("Network", "connected" if online else "offline"),
+                    ("Warm-up", warm_label(st.session_state.get("warmed"))),
+                    ("Commit", sha[:7] if sha else "—"),
+                ]
+            ),
+            unsafe_allow_html=True,
+        )
 
         st.markdown(
-            '<p class="footer-license">Inter and JetBrains Mono — SIL OFL 1.1</p>',
+            '<p class="footer-license">Ubuntu Sans, Ubuntu Font Licence 1.0<br>'
+            "JetBrains Mono, SIL OFL 1.1</p>",
             unsafe_allow_html=True,
         )
 
 
-def _render_mode_pills():
-    modes = mode_choices()
-    labels = [MODE_LABELS[m] for m in modes]
-    default = MODE_LABELS.get("full", labels[-1])
-    with st.container(key="mode"):
-        picked = st.segmented_control(
-            "Mode",
-            labels,
-            default=default,
-            key="mode-ctl",
-            label_visibility="collapsed",
-        )
-    if picked is None:
-        picked = default
-    return next(m for m, lab in MODE_LABELS.items() if lab == picked)
+def _sync_mode(key):
+    picked = st.session_state.get(key)
+    if picked:
+        st.session_state.mode = picked
+
+
+def _render_composer(where, compare_on, left_mode, right_mode, model, conn, generating=False):
+    with st.container(key=f"composer-{where}"):
+        typed = st.chat_input("Ask about Linux or the lab", key=f"chat-{where}")
+        conn_col, ctl_col = st.columns([1, 1], gap="small", vertical_alignment="center")
+        conn_col.markdown(f'<div class="composer-conn">{conn}</div>', unsafe_allow_html=True)
+        if compare_on:
+            ctl_col.markdown(
+                f'<p class="composer-cmp"><b>{escape(model)}</b> {escape(mode_name(left_mode))}'
+                f" vs {escape(mode_name(right_mode))}</p>",
+                unsafe_allow_html=True,
+            )
+        else:
+            key = f"mode-{where}"
+            modes = mode_choices()
+            mode = st.session_state.get("mode", "full")
+            if key in st.session_state and st.session_state[key] is None:
+                del st.session_state[key]
+            with ctl_col, st.container(key=f"mode-{where}-box"):
+                st.selectbox(
+                    "Mode",
+                    modes,
+                    index=modes.index(mode) if mode in modes else len(modes) - 1,
+                    format_func=mode_name,
+                    key=key,
+                    label_visibility="collapsed",
+                    on_change=_sync_mode,
+                    args=(key,),
+                )
+        stop_slot = st.empty()
+        if generating:
+            stop_slot.button("Stop", key="stop-gen", help="Stop generating")
+    return typed, stop_slot
+
+
+def _pick_example():
+    picked = st.session_state.get("ex-pick")
+    if picked:
+        st.session_state.pending_q = picked
+    st.session_state["ex-pick"] = None
 
 
 def _render_examples():
     with st.container(key="examples"):
-        cols = st.columns(2)
-        for i, text in enumerate(EXAMPLES):
-            if cols[i % 2].button(text, key=f"ex-{i}"):
-                st.session_state.pending_q = text
-                st.rerun()
+        st.pills(
+            "Examples",
+            list(EXAMPLES),
+            key="ex-pick",
+            label_visibility="collapsed",
+            on_change=_pick_example,
+        )
 
 
-def _answer_record(question, mode, model, retriever, index_dir):
+def _run_stoppable(work, heartbeat, tick=0.2):
+    """Run work(chat) on a worker thread and wait for it.
+
+    The heartbeat is a Streamlit call, which is where a Stop click or a new question interrupts this
+    script; the finally then cancels the request so Ollama stops generating.
+    """
+    chat = CancellableChat()
+    box = {}
+
+    def run():
+        try:
+            box["value"] = work(chat)
+        except BaseException as e:
+            box["error"] = e
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
     try:
-        result = answer_question(
-            question, mode, model, retriever=retriever, model_key="base"
+        while worker.is_alive():
+            worker.join(tick)
+            if worker.is_alive():
+                heartbeat()
+    finally:
+        if worker.is_alive():
+            chat.cancel()
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
+
+
+def _answer_record(question, mode, model, retriever, index_dir, panel=False, slot=None):
+    keep = slot is not None
+    slot = slot if keep else st.empty()
+    label = thinking_label(mode)
+    loader = running_card_html(mode, label) if panel else thinking_html(label)
+    slot.markdown(loader, unsafe_allow_html=True)
+    try:
+        result = _run_stoppable(
+            lambda chat: answer_question(
+                question, mode, model, retriever=retriever, chat_fn=chat, model_key="base"
+            ),
+            lambda: slot.markdown(loader, unsafe_allow_html=True),
         )
     except requests.RequestException as e:
-        st.error(
-            f"Could not reach Ollama at {OLLAMA_HOST}. "
-            f"Start it with `ollama serve`.\n\n{e}"
-        )
+        message = f"Could not reach Ollama at {OLLAMA_HOST}. Start it with `ollama serve`.\n\n{e}"
+        st.session_state.last_error = message
+        if keep:
+            slot.error(message)
+        else:
+            slot.empty()
+            st.error(message)
         return None
+    if not keep:
+        slot.empty()
     rec = build_run_record(result, index_path=index_dir)
     st.session_state.run_records.append(rec)
     st.session_state.warmed = True
@@ -424,16 +565,16 @@ def _run_compare(question, left_mode, right_mode, model, retriever, index_dir):
         col_l, col_r = st.columns(2, gap="medium")
         wait = col_r.empty()
         wait.markdown(
-            waiting_html(right_mode, MODE_LABELS.get(left_mode, left_mode)),
+            waiting_html(right_mode, mode_name(left_mode)),
             unsafe_allow_html=True,
         )
         with col_l:
-            rec_l = _answer_record(question, left_mode, model, retriever, index_dir)
+            rec_l = _answer_record(question, left_mode, model, retriever, index_dir, panel=True)
             if rec_l is not None:
                 _render_card(rec_l, key="answer-cmp-left", align_slots=True)
         wait.empty()
-        rec_r = _answer_record(question, right_mode, model, retriever, index_dir)
         with col_r:
+            rec_r = _answer_record(question, right_mode, model, retriever, index_dir, panel=True)
             if rec_r is not None:
                 _render_card(rec_r, key="answer-cmp-right", align_slots=True)
     return rec_l, rec_r
@@ -462,21 +603,24 @@ def _replay_message(msg, index, compact_compare=False):
     if rec:
         _render_card(rec, key=f"answer-{index}")
         return
+    if "error" in msg:
+        st.error(msg["error"] or "That answer failed.")
+        return
     st.markdown(msg.get("content") or "")
 
 
-def _render_card(record, key, align_slots=False):
+def _render_card(record, key, align_slots=False, slot=None):
     mode = record.get("mode") or ""
     rag = uses_rag(mode)
     abstained = bool(record.get("abstained"))
-    with st.container(key=key):
+    with (slot.container(key=key) if slot is not None else st.container(key=key)):
         st.markdown(card_head_html(mode), unsafe_allow_html=True)
         if abstained:
             st.markdown(idk_card_html(record), unsafe_allow_html=True)
         elif mode in ("cot", "full"):
             reason, answer = split_reasoning(record.get("answer") or "")
             if reason:
-                with st.expander("REASONING", expanded=False):
+                with st.expander("Reasoning", expanded=False):
                     st.markdown(reason)
                 _render_answer_body(answer)
             else:
@@ -487,7 +631,7 @@ def _render_card(record, key, align_slots=False):
             st.markdown(evidence_block_html(record, collapsed=True), unsafe_allow_html=True)
         elif align_slots:
             st.markdown(
-                empty_slot_html("ev", f"no sources in {MODE_LABELS.get(mode, mode)}"),
+                empty_slot_html("ev", f"No sources in {mode_name(mode)}"),
                 unsafe_allow_html=True,
             )
         st.markdown(
