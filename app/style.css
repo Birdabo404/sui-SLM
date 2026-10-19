@@ -69,8 +69,9 @@
 
 /* ---------- Streamlit chrome ---------- */
 html,body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;overflow-x:clip}
+:root{scrollbar-color:var(--c-line-strong) transparent}
 .stApp,[data-testid="stAppViewContainer"]{background:var(--c-bg);color:var(--c-text);font-family:var(--f-sans)}
-[data-testid="stHeader"]{background:transparent}
+[data-testid="stHeader"]{background:linear-gradient(to bottom,var(--c-bg) 55%,transparent)}
 [data-testid="stDecoration"]{display:none}
 [data-testid="stMainBlockContainer"]{max-width:var(--main-max);padding:3.5rem var(--s-5) 0}
 :root:has(.polaris-compare) [data-testid="stMainBlockContainer"]{max-width:var(--cmp-max)}
@@ -363,6 +364,10 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(-
 .st-key-new-chat button:active{transform:scale(.98)}
 [data-testid="stSidebar"] .side-h{margin:var(--s-6) 0 0;font:600 var(--fs-cap)/1 var(--f-sans);color:var(--c-text-3);letter-spacing:.01em}
 [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p,[data-testid="stSidebar"] label p{font:400 var(--fs-ui)/var(--lh-ui) var(--f-sans);color:var(--c-text)}
+[data-testid="stSidebar"] [data-baseweb="select"] > div{background:var(--c-raised);border-color:var(--c-line);border-radius:var(--r-sm);color:var(--c-text)}
+[data-testid="stSidebar"] [data-baseweb="select"] svg{color:var(--c-text-3)}
+[data-baseweb="popover"] ul{background:var(--c-surface)}
+[data-baseweb="popover"] li{color:var(--c-text)}
 [data-testid="stCheckbox"] label[data-baseweb="checkbox"] > div:first-child{background:var(--c-line-strong)!important}
 [data-testid="stCheckbox"] label[data-baseweb="checkbox"]:has(input:checked) > div:first-child{background:var(--c-accent)!important}
 [data-testid="stCheckbox"] label[data-baseweb="checkbox"] > div:first-child > div{background:oklch(1 0 0)!important}
