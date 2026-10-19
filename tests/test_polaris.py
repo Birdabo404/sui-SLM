@@ -68,7 +68,10 @@ from app.polaris import (
     connection_html,
     mode_menu_css,
     network_online,
+    SKY_LEVELS,
     side_logo_html,
+    sky_html,
+    sky_level,
     star_defs,
     stopped_html,
     thinking_html,
@@ -647,8 +650,22 @@ class LoaderAndNamingTests(unittest.TestCase):
 
     def test_html_avoids_inline_custom_properties(self):
         # Streamlit's sanitizer strips inline custom properties, which would void any CSS that reads them.
-        for html in (thinking_html("Searching the lab docs"), side_logo_html(True), empty_hero_html(), stopped_html()):
+        for html in (thinking_html("Searching the lab docs"), side_logo_html(True), empty_hero_html(), stopped_html(), sky_html()):
             self.assertNotIn('style="--', html)
+
+    def test_sky_is_one_raw_html_line_that_fades_per_question(self):
+        html = sky_html()
+        self.assertNotIn("\n", html)
+        self.assertNotIn("<pre", html)
+        self.assertTrue(html.startswith('<div class="sky" aria-hidden="true"><div class="sky-field">'))
+        self.assertEqual(html.count("<b>"), 7)
+        self.assertIs(sky_html(), html)
+        self.assertEqual([sky_level(n) for n in (-1, 0, 1, 2, 3, 4, 9)], [0, 0, 1, 2, 3, 4, 4])
+        css = style_path().read_text(encoding="utf-8")
+        for level, opacity in enumerate(SKY_LEVELS[1:], 1):
+            rule = f':root:has(.polaris-sky-{level}) [data-testid="stMarkdownContainer"] .sky{{opacity:{opacity:g}'
+            self.assertIn(rule.replace("opacity:0.", "opacity:."), css)
+        self.assertIn("visibility:hidden", css.split(".polaris-sky-4", 1)[1].split("}", 1)[0])
 
     def test_thinking_phrases_match_css_cycle(self):
         html = thinking_html("Writing an answer")

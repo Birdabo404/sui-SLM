@@ -62,6 +62,8 @@ from app.polaris import (
     retrieval_bar_html,
     running_card_html,
     side_logo_html,
+    sky_html,
+    sky_level,
     sidebar_kv_html,
     split_code_blocks,
     split_reasoning,
@@ -250,7 +252,8 @@ def run_polaris():
     _render_sidebar(model, index_dir, frozen, up, online, chat=chat)
 
     compare_on = bool(st.session_state.get("compare"))
-    flags = ["polaris-flags"]
+    asked = sum(1 for m in st.session_state.messages if m.get("role") == "user") + (1 if incoming else 0)
+    flags = ["polaris-flags", f"polaris-sky-{sky_level(asked)}"]
     if st.session_state.get("daylight"):
         flags.append("polaris-daylight")
     if compare_on:
@@ -259,6 +262,7 @@ def run_polaris():
         f'<div class="{" ".join(flags)}"></div>' + mode_menu_css(model, mode_choices()),
         unsafe_allow_html=True,
     )
+    st.markdown(sky_html(), unsafe_allow_html=True)
 
     left_mode, right_mode = pair_compare_modes(
         st.session_state.get("cmp_left"),

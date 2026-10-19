@@ -10,6 +10,7 @@ import http.client
 import io
 import json
 import os
+import random
 import re
 import socket
 import threading
@@ -186,6 +187,52 @@ class CancellableChat:
                 sock.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
+
+
+SKY_COLS, SKY_ROWS = 220, 56
+SKY_LEVELS = (1.0, 0.55, 0.3, 0.12, 0.0)
+# The Little Dipper, Polaris at the tip of the handle: (col, row) offsets, two columns per unit for the
+# monospace cell's aspect ratio, and the glyph for each star by rough brightness.
+LITTLE_DIPPER = (
+    (0, 0, "*"), (5, 2, "."), (9, 4, "'"), (13, 6, "."), (15, 9, "."), (22, 9, "+"), (20, 6, "*"),
+)
+
+
+def ascii_sky(cols=SKY_COLS, rows=SKY_ROWS, seed=7):
+    """A sparse ASCII starfield, the same every time, with the Little Dipper up and to the right."""
+    rng = random.Random(seed)
+    grid = [[" "] * cols for _ in range(rows)]
+    for r in range(rows):
+        for c in range(cols):
+            if rng.random() < 0.011:
+                grid[r][c] = rng.choices(".'+*", weights=(70, 14, 9, 7))[0]
+    c0, r0 = int(cols * 0.66), int(rows * 0.14)
+    bright = set()
+    for dc, dr, glyph in LITTLE_DIPPER:
+        grid[r0 + dr][c0 + dc] = glyph
+        bright.add((r0 + dr, c0 + dc))
+    lines = []
+    for r, row in enumerate(grid):
+        end = len("".join(row).rstrip())
+        cells = (
+            f"<b>{escape(ch, quote=False)}</b>" if (r, c) in bright else escape(ch, quote=False)
+            for c, ch in enumerate(row[:end])
+        )
+        lines.append("".join(cells))
+    return "<br>".join(lines)
+
+
+# One line of HTML on purpose: Streamlit replaces <pre>, and a blank line would end the HTML block.
+_SKY_HTML = f'<div class="sky" aria-hidden="true"><div class="sky-field">{ascii_sky()}</div></div>'
+
+
+def sky_html():
+    return _SKY_HTML
+
+
+def sky_level(turns):
+    """0 on an empty chat, one step fainter per question asked, gone after the fourth."""
+    return max(0, min(int(turns), len(SKY_LEVELS) - 1))
 
 
 def polaris_on():

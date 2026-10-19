@@ -174,6 +174,25 @@ html,body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;o
 .conn.online svg{color:var(--c-text-2)}
 .conn.down{color:var(--c-danger);background:color-mix(in oklch,var(--c-danger) 14%,transparent)}
 
+/* ---------- sky: an ASCII starfield behind an empty chat, one step fainter per question ---------- */
+[data-testid="stMainBlockContainer"]{position:relative;z-index:0}
+[data-testid="stElementContainer"]:has(> [data-testid="stMarkdown"] .sky){position:absolute;width:0;height:0;overflow:visible}
+[data-testid="stMarkdownContainer"] .sky{--sky-cx:50%;position:fixed;inset:0;z-index:-1;display:flex;align-items:center;justify-content:center;
+  margin:0;padding:0;border:0;border-radius:0;background:none;overflow:hidden;pointer-events:none;user-select:none;
+  font:400 13px/1.55 var(--f-mono);letter-spacing:0;color:color-mix(in oklch,var(--c-text-3) 80%,transparent);
+  -webkit-mask-image:radial-gradient(ellipse 30% 36% at var(--sky-cx) 48%,transparent 20%,#000 90%);
+  mask-image:radial-gradient(ellipse 30% 36% at var(--sky-cx) 48%,transparent 20%,#000 90%);
+  opacity:1;visibility:visible;animation:polaris-sky-in 1.6s var(--ease-out) backwards;
+  transition:opacity 2.4s var(--ease-in-out),visibility 0s linear 0s}
+:root:has([data-testid="stSidebar"][aria-expanded="true"]) [data-testid="stMarkdownContainer"] .sky{--sky-cx:calc(50% + 124px)}
+.sky-field{flex:none;white-space:pre}
+.sky b{font-weight:400;color:var(--c-text-2)}
+:root:has(.polaris-sky-1) [data-testid="stMarkdownContainer"] .sky{opacity:.55}
+:root:has(.polaris-sky-2) [data-testid="stMarkdownContainer"] .sky{opacity:.3}
+:root:has(.polaris-sky-3) [data-testid="stMarkdownContainer"] .sky{opacity:.12}
+:root:has(.polaris-sky-4) [data-testid="stMarkdownContainer"] .sky{opacity:0;visibility:hidden;transition:opacity 2.4s var(--ease-in-out),visibility 0s linear 2.4s}
+@keyframes polaris-sky-in{from{opacity:0}}
+
 /* ---------- landing: one centered column, the star is the only loud thing ---------- */
 .st-key-landing{min-height:calc(100dvh - 3.75rem - var(--s-2));justify-content:center;gap:var(--s-4);padding-bottom:12vh}
 .hero{--k:2.5;display:flex;flex-direction:column;align-items:center;gap:var(--s-2);margin-bottom:var(--s-4)}
@@ -414,6 +433,7 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(-
 .thinking.queued .dots i:nth-child(5){opacity:.6}
 .thinking.queued{color:var(--c-text-3)}
 @media (prefers-reduced-motion:reduce){
+  [data-testid="stMarkdownContainer"] .sky{animation:none;transition-duration:.15s}
   .q,.thinking,p.stopped,.cmp-compact,.card,[class*="st-key-answer"] > *,.st-key-composer-dock,.st-key-stop-gen{animation:polaris-fade-in .15s linear both!important}
   .thinking .dots i{transform:none;animation-name:polaris-breathe-reduced;animation-duration:2.4s}
   @keyframes polaris-breathe-reduced{0%,100%{opacity:.3}50%{opacity:.9}}
@@ -460,6 +480,8 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(-
 button:focus-visible,[role="radio"]:focus-visible,summary:focus-visible,a:focus-visible{outline:2px solid var(--c-accent)!important;outline-offset:2px}
 @media (max-width:640px){
   [data-testid="stMainBlockContainer"]{padding-left:var(--s-4);padding-right:var(--s-4)}
+  [data-testid="stMarkdownContainer"] .sky{-webkit-mask-image:radial-gradient(ellipse 62% 30% at 50% 46%,transparent 35%,#000 95%);
+    mask-image:radial-gradient(ellipse 62% 30% at 50% 46%,transparent 35%,#000 95%)}
   .hero{--k:1.9}
   .conn span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
   .conn{padding:0 7px}
