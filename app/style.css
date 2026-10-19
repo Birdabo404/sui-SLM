@@ -73,7 +73,7 @@ html,body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;o
 .stApp,[data-testid="stAppViewContainer"]{background:var(--c-bg);color:var(--c-text);font-family:var(--f-sans)}
 [data-testid="stHeader"]{background:linear-gradient(to bottom,var(--c-bg) 55%,transparent)}
 [data-testid="stDecoration"]{display:none}
-[data-testid="stMainBlockContainer"]{max-width:var(--main-max);padding:3.5rem var(--s-5) 0}
+[data-testid="stMainBlockContainer"]{max-width:var(--main-max);padding:calc(3.75rem + var(--s-2)) var(--s-5) 0}
 :root:has(.polaris-compare) [data-testid="stMainBlockContainer"]{max-width:var(--cmp-max)}
 [data-testid="stElementContainer"][data-stale="true"]{opacity:1!important;transition:none!important}
 [data-testid="stElementContainer"]:has(.polaris-flags),
@@ -166,7 +166,7 @@ html,body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;o
 .status.down .dot{background:transparent;box-shadow:inset 0 0 0 1.5px var(--c-danger)}
 
 /* ---------- landing: one centered column, the star is the only loud thing ---------- */
-.st-key-landing{min-height:calc(100dvh - 3.5rem);justify-content:center;gap:var(--s-4);padding-bottom:12vh}
+.st-key-landing{min-height:calc(100dvh - 3.75rem - var(--s-2));justify-content:center;gap:var(--s-4);padding-bottom:12vh}
 .hero{--k:2.5;display:flex;flex-direction:column;align-items:center;gap:var(--s-2);margin-bottom:var(--s-4)}
 .hero .band{justify-content:center;height:calc(36px * var(--k))}
 .hero .mark{padding:0 .35em;transform:translate(.4em,calc(-2px * var(--k))) scale(var(--k))}
