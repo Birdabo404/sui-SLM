@@ -40,6 +40,7 @@ from app.polaris import (
     build_run_record,
     card_head_html,
     compare_compact_html,
+    connection_html,
     default_compare_modes,
     empty_hero_html,
     empty_slot_html,
@@ -49,19 +50,20 @@ from app.polaris import (
     index_chunk_count,
     injected_css,
     metrics_html,
-    mode_from_name,
-    mode_hint,
+    mode_menu_css,
     mode_name,
+    network_online,
     pair_compare_modes,
     polaris_on,
     records_to_csv,
     records_to_json,
     retrieval_bar_html,
     running_card_html,
+    side_logo_html,
     sidebar_kv_html,
     split_code_blocks,
     split_reasoning,
-    status_html,
+    stopped_html,
     thinking_html,
     thinking_label,
     user_turn_html,
@@ -86,6 +88,11 @@ def _ollama_up():
 @st.cache_data(ttl=30, show_spinner=False)
 def _model_digest(model):
     return model_digest(model)
+
+
+@st.cache_data(ttl=10, show_spinner=False)
+def _network_online():
+    return network_online()
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -234,8 +241,11 @@ def run_polaris():
     model = BASE_MODEL
     frozen = load_frozen()
     up = _ollama_up()
+    online = _network_online()
+    where = "dock" if st.session_state.messages else "landing"
+    incoming = st.session_state.get("pending_q") or st.session_state.get(f"chat-{where}")
 
-    _render_sidebar(model, index_dir, frozen, up)
+    _render_sidebar(model, index_dir, frozen, up, online, chat=bool(st.session_state.messages or incoming))
 
     compare_on = bool(st.session_state.get("compare"))
     flags = ["polaris-flags"]
@@ -243,34 +253,43 @@ def run_polaris():
         flags.append("polaris-daylight")
     if compare_on:
         flags.append("polaris-compare")
-    st.markdown(f'<div class="{" ".join(flags)}"></div>', unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="{" ".join(flags)}"></div>' + mode_menu_css(model, mode_choices()),
+        unsafe_allow_html=True,
+    )
 
     left_mode, right_mode = pair_compare_modes(
         st.session_state.get("cmp_left"),
         st.session_state.get("cmp_right"),
     )
-    status = status_html(model, up)
+    conn = connection_html(online, up)
+    composer = dict(
+        compare_on=compare_on, left_mode=left_mode, right_mode=right_mode, model=model, conn=conn
+    )
 
     if not st.session_state.messages:
         landing = st.empty()
         with landing.container(key="landing"):
             st.markdown(empty_hero_html(), unsafe_allow_html=True)
-            typed = _render_composer("landing", compare_on, left_mode, right_mode, status)
+            typed, _ = _render_composer("landing", **composer)
             _render_examples()
         question = st.session_state.pop("pending_q", None) or typed
         if not question:
             return
         landing.empty()
-        st.markdown(header_band_html(slim=True, status=status), unsafe_allow_html=True)
+        st.markdown(header_band_html(slim=True), unsafe_allow_html=True)
         thread = st.container(key="thread")
-        _render_composer("dock", compare_on, left_mode, right_mode)
+        _, stop_slot = _render_composer("dock", generating=True, **composer)
     else:
-        st.markdown(header_band_html(slim=True, status=status), unsafe_allow_html=True)
+        st.markdown(header_band_html(slim=True), unsafe_allow_html=True)
         thread = st.container(key="thread")
         with thread:
-            for i, msg in enumerate(st.session_state.messages):
+            msgs = st.session_state.messages
+            for i, msg in enumerate(msgs):
                 _replay_message(msg, i, compact_compare=True)
-        typed = _render_composer("dock", compare_on, left_mode, right_mode)
+                if msg.get("role") == "user" and (i + 1 == len(msgs) or msgs[i + 1].get("role") == "user"):
+                    st.markdown(stopped_html(), unsafe_allow_html=True)
+        typed, stop_slot = _render_composer("dock", generating=bool(incoming), **composer)
         question = st.session_state.pop("pending_q", None) or typed
         if not question:
             return
@@ -279,58 +298,61 @@ def run_polaris():
     st.session_state.messages.append({"role": "user", "content": question})
     with thread:
         _answer_turn(question, mode, compare_on, left_mode, right_mode, model, index_dir)
+    stop_slot.empty()
 
 
 def _answer_turn(question, mode, compare_on, left_mode, right_mode, model, index_dir):
     st.markdown(user_turn_html(question), unsafe_allow_html=True)
+    slot = st.empty()
 
     need_rag = (uses_rag(left_mode) or uses_rag(right_mode)) if compare_on else uses_rag(mode)
     retriever = None
     if need_rag:
         if not index_ok(index_dir):
-            st.error(
+            slot.error(
                 f"No index at {index_dir}. Fetch the corpus and run rag/build_index.py first."
             )
             return
-        retriever = _retriever_with_loader(index_dir)
+        retriever = _retriever_with_loader(index_dir, slot)
 
     if compare_on:
+        slot.empty()
         recs = _run_compare(question, left_mode, right_mode, model, retriever, index_dir)
         if recs[0] is not None or recs[1] is not None:
             st.session_state.messages.append({"role": "assistant", "compare": recs})
         return
 
-    rec = _answer_record(question, mode, model, retriever, index_dir)
+    rec = _answer_record(question, mode, model, retriever, index_dir, slot=slot)
     if rec is None:
         return
-    _render_card(rec, key=f"answer-{len(st.session_state.run_records)}")
+    _render_card(rec, key=f"answer-{len(st.session_state.messages)}", slot=slot)
     st.session_state.messages.append({"role": "assistant", "record": rec})
 
 
-def _retriever_with_loader(index_dir):
+def _retriever_with_loader(index_dir, slot):
     loaded = _loaded_indexes()
     if index_dir in loaded:
         return load_retriever(index_dir)
-    slot = st.empty()
     slot.markdown(thinking_html(thinking_label("", loading_index=True)), unsafe_allow_html=True)
     retriever = load_retriever(index_dir)
     loaded.add(index_dir)
-    slot.empty()
     return retriever
 
 
-def _render_sidebar(model, index_dir, frozen, up):
+def _render_sidebar(model, index_dir, frozen, up, online, chat=False):
     with st.sidebar:
-        if st.button(
-            "New chat",
-            key="new-chat",
-            icon=":material/edit_square:",
-            use_container_width=True,
-        ):
-            st.session_state.messages = []
-            st.session_state.run_records = []
-            st.session_state.warmed = False
-            st.rerun()
+        with st.container(key="side-top"):
+            st.markdown(side_logo_html(play=chat), unsafe_allow_html=True)
+            if st.button(
+                "New chat",
+                key="new-chat",
+                icon=":material/edit_square:",
+                use_container_width=True,
+            ):
+                st.session_state.messages = []
+                st.session_state.run_records = []
+                st.session_state.warmed = False
+                st.rerun()
 
         st.markdown('<p class="side-h">View</p>', unsafe_allow_html=True)
         st.toggle("Compare two modes", key="compare")
@@ -392,6 +414,7 @@ def _render_sidebar(model, index_dir, frozen, up):
                     ("IDK threshold", f"cos {format_threshold(frozen['threshold'])}"),
                     ("Top-k", str(frozen["k"])),
                     ("Ollama", "running" if up else "stopped"),
+                    ("Network", "connected" if online else "offline"),
                     ("Warm-up", warm_label(st.session_state.get("warmed"))),
                     ("Commit", sha[:7] if sha else "—"),
                 ]
@@ -409,41 +432,41 @@ def _render_sidebar(model, index_dir, frozen, up):
 def _sync_mode(key):
     picked = st.session_state.get(key)
     if picked:
-        st.session_state.mode = mode_from_name(picked, st.session_state.get("mode", "full"))
-    else:
-        st.session_state[key] = mode_name(st.session_state.get("mode", "full"))
+        st.session_state.mode = picked
 
 
-def _render_composer(where, compare_on, left_mode, right_mode, status=""):
-    if status:
-        st.markdown(f'<div class="composer-meta">{status}</div>', unsafe_allow_html=True)
+def _render_composer(where, compare_on, left_mode, right_mode, model, conn, generating=False):
     with st.container(key=f"composer-{where}"):
         typed = st.chat_input("Ask about Linux or the lab", key=f"chat-{where}")
-        hint_col, ctl_col = st.columns([1, 1], gap="small", vertical_alignment="center")
+        conn_col, ctl_col = st.columns([1, 1], gap="small", vertical_alignment="center")
+        conn_col.markdown(f'<div class="composer-conn">{conn}</div>', unsafe_allow_html=True)
         if compare_on:
-            hint_col.markdown(
-                f'<p class="composer-hint">Comparing <b>{escape(mode_name(left_mode))}</b>'
-                f" with <b>{escape(mode_name(right_mode))}</b></p>",
+            ctl_col.markdown(
+                f'<p class="composer-cmp"><b>{escape(model)}</b> {escape(mode_name(left_mode))}'
+                f" vs {escape(mode_name(right_mode))}</p>",
                 unsafe_allow_html=True,
             )
-            return typed
-        key = f"mode-{where}"
-        mode = st.session_state.get("mode", "full")
-        with ctl_col, st.container(key=f"mode-{where}-box"):
-            st.segmented_control(
-                "Mode",
-                [mode_name(m) for m in mode_choices()],
-                default=None if key in st.session_state else mode_name(mode),
-                key=key,
-                label_visibility="collapsed",
-                on_change=_sync_mode,
-                args=(key,),
-            )
-        hint_col.markdown(
-            f'<p class="composer-hint">{escape(mode_hint(st.session_state.get("mode", mode)))}</p>',
-            unsafe_allow_html=True,
-        )
-    return typed
+        else:
+            key = f"mode-{where}"
+            modes = mode_choices()
+            mode = st.session_state.get("mode", "full")
+            if key in st.session_state and st.session_state[key] is None:
+                del st.session_state[key]
+            with ctl_col, st.container(key=f"mode-{where}-box"):
+                st.selectbox(
+                    "Mode",
+                    modes,
+                    index=modes.index(mode) if mode in modes else len(modes) - 1,
+                    format_func=mode_name,
+                    key=key,
+                    label_visibility="collapsed",
+                    on_change=_sync_mode,
+                    args=(key,),
+                )
+        stop_slot = st.empty()
+        if generating:
+            stop_slot.button("Stop", key="stop-gen", help="Stop generating")
+    return typed, stop_slot
 
 
 def _pick_example():
@@ -464,8 +487,9 @@ def _render_examples():
         )
 
 
-def _answer_record(question, mode, model, retriever, index_dir, panel=False):
-    slot = st.empty()
+def _answer_record(question, mode, model, retriever, index_dir, panel=False, slot=None):
+    keep = slot is not None
+    slot = slot if keep else st.empty()
     label = thinking_label(mode)
     slot.markdown(
         running_card_html(mode, label) if panel else thinking_html(label),
@@ -482,7 +506,8 @@ def _answer_record(question, mode, model, retriever, index_dir, panel=False):
             f"Start it with `ollama serve`.\n\n{e}"
         )
         return None
-    slot.empty()
+    if not keep:
+        slot.empty()
     rec = build_run_record(result, index_path=index_dir)
     st.session_state.run_records.append(rec)
     st.session_state.warmed = True
@@ -537,11 +562,11 @@ def _replay_message(msg, index, compact_compare=False):
     st.markdown(msg.get("content") or "")
 
 
-def _render_card(record, key, align_slots=False):
+def _render_card(record, key, align_slots=False, slot=None):
     mode = record.get("mode") or ""
     rag = uses_rag(mode)
     abstained = bool(record.get("abstained"))
-    with st.container(key=key):
+    with (slot.container(key=key) if slot is not None else st.container(key=key)):
         st.markdown(card_head_html(mode), unsafe_allow_html=True)
         if abstained:
             st.markdown(idk_card_html(record), unsafe_allow_html=True)

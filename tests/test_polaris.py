@@ -56,7 +56,13 @@ from app.polaris import (
     mode_name,
     preview_text,
     running_card_html,
-    status_html,
+    THINKING_WORDS,
+    connection_html,
+    mode_menu_css,
+    network_online,
+    side_logo_html,
+    star_defs,
+    stopped_html,
     thinking_html,
     thinking_label,
 )
@@ -581,6 +587,7 @@ class LoaderAndNamingTests(unittest.TestCase):
         self.assertEqual(thinking_label("cot"), "Thinking it through")
         self.assertEqual(thinking_label("base"), "Writing an answer")
         self.assertEqual(thinking_label("full", loading_index=True), "Loading the lab docs index")
+        self.assertIn("Stopped", stopped_html())
         card = running_card_html("cot", "Thinking it through")
         self.assertIn("running-card", card)
         self.assertIn('<span class="mode">CoT</span>', card)
@@ -590,11 +597,60 @@ class LoaderAndNamingTests(unittest.TestCase):
             self.assertEqual(mode_from_name(mode_name(mode)), mode)
         self.assertEqual(mode_from_name("nope", "rag"), "rag")
 
-    def test_status_carries_text_not_only_color(self):
-        self.assertIn("qwen3.5:2b", status_html("qwen3.5:2b", True))
-        down = status_html("qwen3.5:2b", False)
-        self.assertIn("status down", down)
-        self.assertIn("Ollama is not running", down)
+    def test_connection_pill_carries_text_not_only_color(self):
+        self.assertIn(">Offline<", connection_html(False, True))
+        self.assertIn("conn offline", connection_html(False, True))
+        self.assertIn(">Online<", connection_html(True, True))
+        down = connection_html(True, False)
+        self.assertIn("conn down", down)
+        self.assertIn("Ollama stopped", down)
+        self.assertIn("ollama serve", down)
+
+    def test_network_online_reads_routes_without_sending(self):
+        header = "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\n"
+        with tempfile.TemporaryDirectory() as td:
+            Path(td, "route").write_text(header + "eth0\t00000000\t0102A8C0\t0003\t0\t0\t100\t00000000\n")
+            self.assertTrue(network_online(td))
+            Path(td, "route").write_text(header + "eth0\t0002A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\n")
+            self.assertFalse(network_online(td))
+            Path(td, "route").write_text(header)
+            Path(td, "ipv6_route").write_text(
+                "00000000000000000000000000000000 00 00000000000000000000000000000000 00 "
+                "fe800000000000000000000000000001 00000400 00000001 00000000 00000003 wlan0\n"
+            )
+            self.assertTrue(network_online(td))
+
+    def test_mode_menu_css_names_model_and_hints(self):
+        css = mode_menu_css('qwen"3.5:2b', ["base", "cot", "rag", "full"])
+        self.assertIn('--polaris-model:"qwen\\"3.5:2b"', css)
+        self.assertIn('nth-child(4)::after{content:"Lab docs, reasoned step by step"}', css)
+        self.assertTrue(css.startswith("<style>") and css.endswith("</style>"))
+
+    def test_sidebar_logo_and_star_ids(self):
+        idle = side_logo_html()
+        self.assertIn("band side calm wrap-on", idle)
+        self.assertNotIn("is-wrapping", idle)
+        self.assertIn("is-wrapping", side_logo_html(play=True))
+        self.assertIn('id="polaris-star-lux-side"', idle)
+        self.assertIn("url(#polaris-star-lux-side)", idle)
+        self.assertIn('id="polaris-star-lux-hero"', empty_hero_html())
+        self.assertIn('id="polaris-star-lux-slim"', header_band_html(slim=True))
+        self.assertNotEqual(star_defs("a"), star_defs("b"))
+
+    def test_html_avoids_inline_custom_properties(self):
+        # Streamlit's sanitizer strips inline custom properties, which would void any CSS that reads them.
+        for html in (thinking_html("Searching the lab docs"), side_logo_html(True), empty_hero_html(), stopped_html()):
+            self.assertNotIn('style="--', html)
+
+    def test_thinking_phrases_match_css_cycle(self):
+        html = thinking_html("Writing an answer")
+        self.assertEqual(html.count("<span>"), len(THINKING_WORDS) + 1)
+        self.assertIn("<span>Writing an answer…</span>", html)
+        css = style_path().read_text(encoding="utf-8")
+        self.assertIn("polaris-cycle 17.6s", css)
+        self.assertIn(".thinking-label > span:nth-child(8){animation-delay:15.4s}", css)
+        self.assertEqual(len(THINKING_WORDS), 7)
+        self.assertIn('[data-testid="stStatusWidget"]{display:none!important}', css)
 
     def test_compare_preview_skips_reasoning_and_fences(self):
         text = "Think first.\n\nAnswer: Run this:\n```bash\ntar -xzf a.tar.gz\n```\nThen `ls` it."

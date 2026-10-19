@@ -14,6 +14,8 @@ from html import escape
 from pathlib import Path
 from typing import TypedDict
 
+import psutil
+
 from app.engine import MODE_LABELS, MODE_SUBS, mode_choices, uses_rag
 from shared.frozen import format_threshold
 
@@ -22,30 +24,39 @@ STAR_SVG = (
     '<path d="M12 0L14.2 9.8 24 12 14.2 14.2 12 24 9.8 14.2 0 12 9.8 9.8Z"/>'
     "</svg>"
 )
-STAR_LUX_SVG = (
-    '<svg viewBox="0 0 24 24" aria-hidden="true">'
-    '<path fill="url(#polaris-star-lux-fill)" d="M12 0C12.45 7.1 14.7 11.2 22 12C14.7 12.8 12.45 16.9 12 24C11.55 16.9 9.3 12.8 2 12C9.3 11.2 11.55 7.1 12 0Z"/>'
-    '<path fill="#FFF9EC" opacity=".55" d="M12 6C12.2 9.6 12.9 11.3 15.5 12C12.9 12.7 12.2 14.4 12 18C11.8 14.4 11.1 12.7 8.5 12C11.1 11.3 11.8 9.6 12 6Z"/>'
-    "</svg>"
-)
 GLINT_SVG = (
     '<svg viewBox="0 0 24 24" aria-hidden="true">'
     '<path fill="#FFEBC2" d="M12 0C12.4 9 15 11.6 24 12C15 12.4 12.4 15 12 24C11.6 15 9 12.4 0 12C9 11.6 11.6 9 12 0Z"/>'
     '<circle cx="12" cy="12" r="2.2" fill="#FFF8EA"/>'
     "</svg>"
 )
-STAR_DEFS = (
-    '<svg width="0" height="0" aria-hidden="true">'
-    "<defs>"
-    '<radialGradient id="polaris-star-lux-fill" cx="12" cy="12" r="11.5" gradientUnits="userSpaceOnUse">'
-    '<stop offset="0" stop-color="#FFF7E2"/>'
-    '<stop offset=".16" stop-color="#FFE3A2"/>'
-    '<stop offset=".46" stop-color="#F5B942"/>'
-    '<stop offset="1" stop-color="#E29A2E"/>'
-    "</radialGradient>"
-    "</defs>"
-    "</svg>"
-)
+
+
+def star_lux_svg(uid):
+    return (
+        '<svg viewBox="0 0 24 24" aria-hidden="true">'
+        f'<path fill="url(#polaris-star-lux-{uid})" d="M12 0C12.45 7.1 14.7 11.2 22 12C14.7 12.8 12.45 16.9 12 24C11.55 16.9 9.3 12.8 2 12C9.3 11.2 11.55 7.1 12 0Z"/>'
+        '<path fill="#FFF9EC" opacity=".55" d="M12 6C12.2 9.6 12.9 11.3 15.5 12C12.9 12.7 12.2 14.4 12 18C11.8 14.4 11.1 12.7 8.5 12C11.1 11.3 11.8 9.6 12 6Z"/>'
+        "</svg>"
+    )
+
+
+def star_defs(uid):
+    """Each wordmark carries its own gradient id: a shared id breaks once the first copy is display:none."""
+    return (
+        '<svg width="0" height="0" aria-hidden="true">'
+        "<defs>"
+        f'<radialGradient id="polaris-star-lux-{uid}" cx="12" cy="12" r="11.5" gradientUnits="userSpaceOnUse">'
+        '<stop offset="0" stop-color="#FFF7E2"/>'
+        '<stop offset=".16" stop-color="#FFE3A2"/>'
+        '<stop offset=".46" stop-color="#F5B942"/>'
+        '<stop offset="1" stop-color="#E29A2E"/>'
+        "</radialGradient>"
+        "</defs>"
+        "</svg>"
+    )
+
+
 SNIPPET_LEN = 200
 CHIP_CAP = 4
 EXPORT_FIELDS = (
@@ -87,7 +98,29 @@ MODE_HINTS = {
     "full": "Lab docs, reasoned step by step",
 }
 TAGLINE = "Offline help for the Linux lab"
-STILL_WORKING = "Still working. The model runs on this machine."
+STILL_WORKING = "The model runs on this machine, so this can take a moment."
+# Shown one after another while an answer is running, after the stage label (always 7: the CSS cycle is built for 8).
+THINKING_WORDS = (
+    "Grepping…",
+    "Reading man pages…",
+    "Untarring thoughts…",
+    "Piping it through…",
+    "Charting a course…",
+    "Stargazing…",
+    "Checking permissions…",
+)
+_WIFI_SVG = (
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 8.5a15 15 0 0 1 20 0M5 12a10.5 10.5 0 0 1 14 0'
+    'M8.5 15.5a5.5 5.5 0 0 1 7 0"/><circle class="d" cx="12" cy="19" r="1.2"/></svg>'
+)
+_WIFI_OFF_SVG = (
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 15.5a5.5 5.5 0 0 1 7 0M5 12a10.5 10.5 0 0 1 4.2-2.3'
+    'M2 8.5a15 15 0 0 1 5-3M3 3l18 18"/><circle class="d" cx="12" cy="19" r="1.2"/></svg>'
+)
+_ALERT_SVG = (
+    '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7.5v5.5"/>'
+    '<circle class="d" cx="12" cy="16.5" r="1"/></svg>'
+)
 SOURCE_KEY_RULES = (
     ("tldr", "TLDR"),
     ("man", "MAN"),
@@ -404,7 +437,7 @@ def empty_slot_html(kind="", label=""):
     return f'<div class="{klass}">{inner}</div>'
 
 
-def _header_star_html():
+def _header_star_html(uid):
     glints = f'<span class="glints"><b>{GLINT_SVG}</b><b>{GLINT_SVG}</b></span>'
     trail = "<span class=\"trail\">" + ("<i></i>" * 10) + f"<b>{GLINT_SVG}</b>" * 3 + "</span>"
     glow = (
@@ -414,7 +447,7 @@ def _header_star_html():
     )
     star = (
         f'<span class="star-fx" aria-hidden="true">{glints}{trail}'
-        f'<span class="rig"><span class="body"><span class="breathe"><span class="sway">{STAR_LUX_SVG}</span></span></span></span>'
+        f'<span class="rig"><span class="body"><span class="breathe"><span class="sway">{star_lux_svg(uid)}</span></span></span></span>'
         "</span>"
     )
     return (
@@ -425,17 +458,58 @@ def _header_star_html():
     )
 
 
-def status_html(model, up):
-    state = "up" if up else "down"
-    text = escape(model) if up else "Ollama is not running"
-    title = "Ollama is answering" if up else "Start it with: ollama serve"
+def network_online(route_dir="/proc/net"):
+    """True when this machine has a usable network route. Passive: reads routing state, sends nothing."""
+    base = Path(route_dir)
+    v4, v6 = base / "route", base / "ipv6_route"
+    if v4.is_file() or v6.is_file():
+        try:
+            if v4.is_file():
+                for line in v4.read_text().splitlines()[1:]:
+                    f = line.split()
+                    if len(f) > 3 and f[1] == "00000000" and int(f[3], 16) & 1:
+                        return True
+            if v6.is_file():
+                for line in v6.read_text().splitlines():
+                    f = line.split()
+                    if len(f) > 9 and f[0] == "0" * 32 and f[1] == "00" and f[9] != "lo":
+                        return True
+            return False
+        except (OSError, ValueError):
+            pass
+    try:
+        stats = psutil.net_if_stats()
+        for name, addrs in psutil.net_if_addrs().items():
+            if not stats.get(name) or not stats[name].isup or name.lower().startswith(("lo", "docker", "veth", "virbr")):
+                continue
+            for a in addrs:
+                ip = str(a.address)
+                if ip.count(".") == 3 and not ip.startswith(("127.", "169.254.")):
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def connection_html(online, ollama_up):
+    if not ollama_up:
+        return (
+            '<span class="conn down" title="Start it with: ollama serve">'
+            f"{_ALERT_SVG}<span>Ollama stopped</span></span>"
+        )
+    if online:
+        return (
+            '<span class="conn online" title="A network is connected. Answers still come from the model on this machine.">'
+            f"{_WIFI_SVG}<span>Online</span></span>"
+        )
     return (
-        f'<span class="status {state}" title="{title}">'
-        f'<span class="dot" aria-hidden="true"></span>{text}</span>'
+        '<span class="conn offline" title="No network. Everything runs on this machine.">'
+        f"{_WIFI_OFF_SVG}<span>Offline</span></span>"
     )
 
 
-def header_band_html(slim=False, animate=False, status=""):
+def header_band_html(slim=False, animate=False, status="", uid=None):
+    uid = uid or ("slim" if slim else "hero")
     classes = ["band"]
     if slim:
         classes.append("slim")
@@ -446,12 +520,24 @@ def header_band_html(slim=False, animate=False, status=""):
     label = "polaris, replay the star" if animate else "polaris"
     return (
         f'<div class="{" ".join(classes)}">'
-        + STAR_DEFS
+        + star_defs(uid)
         + f'<span class="{mark_class}" tabindex="0" role="img" aria-label="{label}"><span class="word">'
-        + _header_star_html()
+        + _header_star_html(uid)
         + "</span></span>"
         + (f'<span class="spacer"></span>{status}' if status else "")
         + "</div>"
+    )
+
+
+def side_logo_html(play=False):
+    """Sidebar wordmark: no idle loops; wraps once when a chat starts and again on hover or focus."""
+    mark_class = "mark is-wrapping" if play else "mark"
+    return (
+        '<div class="side-logo"><div class="band side calm wrap-on">'
+        + star_defs("side")
+        + f'<span class="{mark_class}" tabindex="0" role="img" aria-label="polaris, replay the star"><span class="word">'
+        + _header_star_html("side")
+        + "</span></span></div></div>"
     )
 
 
@@ -721,15 +807,34 @@ def _dots_html():
 
 
 def thinking_html(label, still=STILL_WORKING):
-    """Loader for a running answer: a 3x3 constellation breathing out from its center star."""
+    """Loader for a running answer: a 3x3 constellation breathing out from its center star, the stage label,
+    then a cycle of thinking phrases. Pure CSS, so it keeps moving while the main thread is busy."""
+    words = "".join(f"<span>{escape(w)}</span>" for w in (label + "…", *THINKING_WORDS))
     return (
-        '<div class="thinking" role="status">'
+        f'<div class="thinking" role="status" aria-label="{escape(label)}">'
         + _dots_html()
-        + '<span class="thinking-label">'
-        f'<span class="now">{escape(label)}</span>'
-        f'<span class="later" aria-hidden="true">{escape(still)}</span>'
+        + '<span class="thinking-text" aria-hidden="true">'
+        f'<span class="thinking-label">{words}</span>'
+        f'<span class="thinking-note">{escape(still)}</span>'
         "</span></div>"
     )
+
+
+def _css_string(text):
+    return '"' + str(text).replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ") + '"'
+
+
+def mode_menu_css(model, modes):
+    """Per-run CSS: the model name on the mode dropdown, and each mode's hint inside its open menu."""
+    open_menu = ':root:has([class*="st-key-mode-"] [aria-expanded="true"]) [data-baseweb="popover"] li[role="option"]'
+    rules = [f":root{{--polaris-model:{_css_string(model)}}}"]
+    for i, mode in enumerate(modes, 1):
+        rules.append(f"{open_menu}:nth-child({i})::after{{content:{_css_string(mode_hint(mode))}}}")
+    return "<style>" + "".join(rules) + "</style>"
+
+
+def stopped_html():
+    return '<p class="stopped">Stopped before an answer came back.</p>'
 
 
 def running_card_html(mode, label):
@@ -752,7 +857,7 @@ def waiting_html(mode, after_label):
         + card_head_html(mode)
         + '<div class="slot-empty body"><div class="thinking queued">'
         + _dots_html()
-        + f'<span class="thinking-label"><span class="now">Starts when {escape(after_label)} finishes</span></span>'
+        + f'<span class="thinking-text"><span class="queued-label">Starts when {escape(after_label)} finishes</span></span>'
         + "</div></div>"
         + empty_slot_html("ev", "No sources yet")
         + '<div class="retr off">No retrieval yet</div>'
