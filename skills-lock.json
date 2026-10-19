@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "skills": {
+    "animation-vocabulary": {
+      "source": "emilkowalski/skills",
+      "sourceType": "github",
+      "skillPath": "skills/animation-vocabulary/SKILL.md",
+      "computedHash": "0058036865ecbb864fd0c4132efcc62425355d6e99c7e6ef6a936742d62a5dea"
+    },
+    "apple-hig-designer": {
+      "source": "jamesrochabrun/skills",
+      "sourceType": "github",
+      "skillPath": "skills/apple-hig-designer/SKILL.md",
+      "computedHash": "d6f35edf97a7545d967e4d5bbb5666712d732c9e40328835d8f3f585ae416f0a"
+    },
+    "apple-ui-designer": {
+      "source": "heyman333/atelier-ui",
+      "sourceType": "github",
+      "skillPath": "skills/apple-ui-designer/SKILL.md",
+      "computedHash": "26d43c0a38e7a0ad8cf2cd5418d48ca7525873cc60f203ac67fcf024ce577eb3"
+    },
+    "better-colors": {
+      "source": "jakubkrehel/skills",
+      "sourceType": "github",
+      "skillPath": "skills/better-colors/SKILL.md",
+      "computedHash": "25be5683f90265ae9caad9e0f22c14607b47a0e8cd2481bdb4a498071fb5bd56"
+    },
+    "design-an-interface": {
+      "source": "mattpocock/skills",
+      "ref": "f958fa17c1b62c3f7be38fc09512669acf6b64fc",
+      "sourceType": "github",
+      "skillPath": "skills/deprecated/design-an-interface/SKILL.md",
+      "computedHash": "aef348a9af675b771635623b5aa7790da4d40adc1ee88b58b6fd116eda2047d8"
+    },
+    "frontend-design": {
+      "source": "anthropics/skills",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "skills/frontend-design/SKILL.md",
+      "computedHash": "89496d5dd00f4810205f351759594fc2742bf8eea85a2f2b2d1de59f4bd91576"
+    },
+    "hallmark": {
+      "source": "Nutlope/hallmark",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "skills/hallmark/SKILL.md",
+      "computedHash": "579f86b27cdd7eb972107f7aecedd537f472891c5fd7c7c821bea15f64e0fe86"
+    },
+    "improve-animations": {
+      "source": "emilkowalski/skills",
+      "sourceType": "github",
+      "skillPath": "skills/improve-animations/SKILL.md",
+      "computedHash": "524ea241e41d58bbdd8e288700fe24f5725e2a2f3ae7186ad7cebf9055058356"
+    },
+    "make-interfaces-feel-better": {
+      "source": "jakubkrehel/make-interfaces-feel-better",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "skills/make-interfaces-feel-better/SKILL.md",
+      "computedHash": "c8b15b529e088a318b2d3c17f0a97e15a7b1ce9ddab8bbdf9209e6ab7315cbde"
+    }
+  }
+}
