@@ -11,14 +11,9 @@ gatherUsageStats = false
 toolbarMode = "minimal"
 
 [[theme.fontFaces]]
-family = "Inter"
-url = "app/static/Inter-Regular.woff2"
-weight = 400
-style = "normal"
-[[theme.fontFaces]]
-family = "Inter"
-url = "app/static/Inter-SemiBold.woff2"
-weight = 600
+family = "Ubuntu Sans"
+url = "app/static/UbuntuSans-Variable-Latin.woff2"
+weight = "300 700"
 style = "normal"
 [[theme.fontFaces]]
 family = "JetBrains Mono"
@@ -33,15 +28,15 @@ style = "normal"
 
 [theme]
 base = "light"
-primaryColor = "#92400E"
-backgroundColor = "#FAF8F3"
-secondaryBackgroundColor = "#F1ECE1"
-textColor = "#1B2742"
-font = "Inter, sans-serif"
-headingFont = "'JetBrains Mono', monospace"
+primaryColor = "#BA6900"
+backgroundColor = "#F9FAFB"
+secondaryBackgroundColor = "#EEF0F4"
+textColor = "#191E28"
+font = "'Ubuntu Sans', sans-serif"
+headingFont = "'Ubuntu Sans', sans-serif"
 codeFont = "'JetBrains Mono', monospace"
-baseFontSize = 14
+baseFontSize = 15
 
 [theme.sidebar]
-backgroundColor = "#F1ECE1"
-secondaryBackgroundColor = "#FFFFFF"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#EEF0F4"
