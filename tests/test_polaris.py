@@ -277,7 +277,7 @@ class CompareTests(unittest.TestCase):
         st = MagicMock()
         st.cache_resource = _cache_stub
         st.cache_data = _cache_stub
-        st.session_state = {"messages": [{"role": "user", "content": "q"}]}
+        st.session_state.messages = [{"role": "user", "content": "q"}]
         sys.modules["streamlit"] = st
         import importlib
 
