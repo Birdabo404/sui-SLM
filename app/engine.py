@@ -172,19 +172,23 @@ def build_messages(question, hits, mode):
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def ollama_chat(messages, model, host=None, temperature=0.2, seed=None):
-    host = host or OLLAMA_HOST
-    url = host.rstrip("/") + "/api/chat"
+def ollama_chat_body(messages, model, temperature=0.2, seed=None):
     options = {"temperature": temperature, "num_ctx": 4096}
     if seed is not None:
         options["seed"] = seed
-    body = {
+    return {
         "model": model,
         "stream": False,
         "think": False,
         "messages": messages,
         "options": options,
     }
+
+
+def ollama_chat(messages, model, host=None, temperature=0.2, seed=None):
+    host = host or OLLAMA_HOST
+    url = host.rstrip("/") + "/api/chat"
+    body = ollama_chat_body(messages, model, temperature=temperature, seed=seed)
     r = requests.post(url, json=body, timeout=300)
     r.raise_for_status()
     return r.json()["message"]["content"]
