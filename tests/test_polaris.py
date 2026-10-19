@@ -277,6 +277,7 @@ class CompareTests(unittest.TestCase):
         st = MagicMock()
         st.cache_resource = _cache_stub
         st.cache_data = _cache_stub
+        st.session_state = {"messages": [{"role": "user", "content": "q"}]}
         sys.modules["streamlit"] = st
         import importlib
 
@@ -328,7 +329,7 @@ class CompareTests(unittest.TestCase):
             }
 
         def render(rec, key, align_slots=False):
-            events.append(("render", rec["mode"]))
+            events.append(("render", rec["mode"], key))
 
         with patch.object(app_mod.st, "container", return_value=Box()), patch.object(
             app_mod.st, "columns", return_value=(Col(), Col())
@@ -345,6 +346,8 @@ class CompareTests(unittest.TestCase):
             [e for e in events if isinstance(e, tuple) and e[0] == "start"],
             [("start", "base"), ("start", "full")],
         )
+        self.assertIn(("render", "base", "answer-h1-l"), events)
+        self.assertIn(("render", "full", "answer-h1-r"), events)
 
 
 class HtmlTests(unittest.TestCase):

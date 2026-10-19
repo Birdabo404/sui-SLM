@@ -303,7 +303,7 @@ def _answer_turn(question, mode, compare_on, left_mode, right_mode, model, index
     rec = _answer_record(question, mode, model, retriever, index_dir)
     if rec is None:
         return
-    _render_card(rec, key=f"answer-{len(st.session_state.run_records)}")
+    _render_card(rec, key=f"answer-{len(st.session_state.messages)}")
     st.session_state.messages.append({"role": "assistant", "record": rec})
 
 
@@ -491,6 +491,7 @@ def _answer_record(question, mode, model, retriever, index_dir, panel=False):
 
 def _run_compare(question, left_mode, right_mode, model, retriever, index_dir):
     left_mode, right_mode = pair_compare_modes(left_mode, right_mode)
+    message_index = len(st.session_state.messages)
     rec_l = rec_r = None
     with st.container(key="cmp"):
         col_l, col_r = st.columns(2, gap="medium")
@@ -502,12 +503,12 @@ def _run_compare(question, left_mode, right_mode, model, retriever, index_dir):
         with col_l:
             rec_l = _answer_record(question, left_mode, model, retriever, index_dir, panel=True)
             if rec_l is not None:
-                _render_card(rec_l, key="answer-cmp-left", align_slots=True)
+                _render_card(rec_l, key=f"answer-h{message_index}-l", align_slots=True)
         wait.empty()
         with col_r:
             rec_r = _answer_record(question, right_mode, model, retriever, index_dir, panel=True)
             if rec_r is not None:
-                _render_card(rec_r, key="answer-cmp-right", align_slots=True)
+                _render_card(rec_r, key=f"answer-h{message_index}-r", align_slots=True)
     return rec_l, rec_r
 
 
