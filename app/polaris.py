@@ -6,17 +6,22 @@ app.engine.answer_question.
 from __future__ import annotations
 
 import csv
+import http.client
 import io
 import json
 import os
 import re
+import socket
+import threading
 from html import escape
 from pathlib import Path
 from typing import TypedDict
+from urllib.parse import urlsplit
 
 import psutil
+import requests
 
-from app.engine import MODE_LABELS, MODE_SUBS, mode_choices, uses_rag
+from app.engine import MODE_LABELS, MODE_SUBS, OLLAMA_HOST, mode_choices, ollama_chat_body, uses_rag
 from shared.frozen import format_threshold
 
 STAR_SVG = (
@@ -128,6 +133,59 @@ SOURCE_KEY_RULES = (
     ("ubuntu", "UBUNTU-HELP"),
     ("help", "UBUNTU-HELP"),
 )
+
+
+class ChatCancelled(Exception):
+    """The user stopped the answer before Ollama replied."""
+
+
+class CancellableChat:
+    """chat_fn for answer_question that the UI can stop.
+
+    Sends the same body as engine.ollama_chat. cancel() shuts the socket down, which unblocks the waiting
+    thread and makes Ollama abandon the generation instead of finishing it in the background.
+    """
+
+    def __init__(self, host=None, timeout=300):
+        self._url = urlsplit((host or OLLAMA_HOST).rstrip("/") + "/api/chat")
+        self._timeout = timeout
+        self._lock = threading.Lock()
+        self._conn = None
+        self.cancelled = False
+
+    def __call__(self, messages, model):
+        conn = http.client.HTTPConnection(self._url.hostname, self._url.port or 80, timeout=self._timeout)
+        with self._lock:
+            if self.cancelled:
+                raise ChatCancelled()
+            self._conn = conn
+        body = json.dumps(ollama_chat_body(messages, model)).encode("utf-8")
+        try:
+            conn.request("POST", self._url.path, body=body, headers={"Content-Type": "application/json"})
+            resp = conn.getresponse()
+            data = resp.read()
+        except (OSError, http.client.HTTPException) as e:
+            if self.cancelled:
+                raise ChatCancelled() from e
+            raise requests.ConnectionError(str(e)) from e
+        finally:
+            conn.close()
+        if self.cancelled:
+            raise ChatCancelled()
+        if resp.status >= 400:
+            raise requests.HTTPError(f"Ollama returned HTTP {resp.status}")
+        return json.loads(data)["message"]["content"]
+
+    def cancel(self):
+        with self._lock:
+            self.cancelled = True
+            conn = self._conn
+        sock = getattr(conn, "sock", None)
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
 
 
 def polaris_on():

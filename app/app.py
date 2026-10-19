@@ -2,6 +2,7 @@
 """Offline Streamlit chat app for the CCIS Linux lab assistant."""
 import os
 import sys
+import threading
 from html import escape
 from pathlib import Path
 
@@ -35,6 +36,7 @@ from app.engine import (
 )
 from app.polaris import (
     EXAMPLES,
+    CancellableChat,
     avg_latency,
     best_match_html,
     build_run_record,
@@ -485,17 +487,48 @@ def _render_examples():
         )
 
 
+def _run_stoppable(work, heartbeat, tick=0.2):
+    """Run work(chat) on a worker thread and wait for it.
+
+    The heartbeat is a Streamlit call, which is where a Stop click or a new question interrupts this
+    script; the finally then cancels the request so Ollama stops generating.
+    """
+    chat = CancellableChat()
+    box = {}
+
+    def run():
+        try:
+            box["value"] = work(chat)
+        except BaseException as e:
+            box["error"] = e
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    try:
+        while worker.is_alive():
+            worker.join(tick)
+            if worker.is_alive():
+                heartbeat()
+    finally:
+        if worker.is_alive():
+            chat.cancel()
+    if "error" in box:
+        raise box["error"]
+    return box["value"]
+
+
 def _answer_record(question, mode, model, retriever, index_dir, panel=False, slot=None):
     keep = slot is not None
     slot = slot if keep else st.empty()
     label = thinking_label(mode)
-    slot.markdown(
-        running_card_html(mode, label) if panel else thinking_html(label),
-        unsafe_allow_html=True,
-    )
+    loader = running_card_html(mode, label) if panel else thinking_html(label)
+    slot.markdown(loader, unsafe_allow_html=True)
     try:
-        result = answer_question(
-            question, mode, model, retriever=retriever, model_key="base"
+        result = _run_stoppable(
+            lambda chat: answer_question(
+                question, mode, model, retriever=retriever, chat_fn=chat, model_key="base"
+            ),
+            lambda: slot.markdown(loader, unsafe_allow_html=True),
         )
     except requests.RequestException as e:
         slot.empty()

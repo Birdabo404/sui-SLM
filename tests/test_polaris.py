@@ -4,17 +4,23 @@ import csv
 import io
 import json
 import os
+import socket
 import sys
 import tempfile
+import threading
+import time
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+import requests
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from shared.prompt import ABSTAIN
-from app.engine import WEAK_DENSE, answer_question, is_weak, model_digest, ollama_reachable
+from app.engine import WEAK_DENSE, answer_question, is_weak, model_digest, ollama_chat_body, ollama_reachable
 from app.polaris import (
     EXPORT_FIELDS,
     best_match_html,
@@ -51,6 +57,8 @@ from app.polaris import (
     style_path,
     waiting_html,
     STILL_WORKING,
+    CancellableChat,
+    ChatCancelled,
     compare_compact_html,
     mode_from_name,
     mode_name,
@@ -658,6 +666,108 @@ class LoaderAndNamingTests(unittest.TestCase):
         html = compare_compact_html({"mode": "base", "answer": "Use `tar`."}, {"mode": "cot", "answer": text})
         self.assertNotIn("```", html)
         self.assertNotIn("Think first", html)
+
+
+class _Interrupted(Exception):
+    pass
+
+
+class _SlowOllama(BaseHTTPRequestHandler):
+    delay = 0.0
+    bodies = []
+
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        type(self).bodies.append(json.loads(self.rfile.read(n)))
+        time.sleep(type(self).delay)
+        out = json.dumps({"message": {"role": "assistant", "content": "use tar -xzf"}}).encode()
+        try:
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(out)))
+            self.end_headers()
+            self.wfile.write(out)
+        except OSError:
+            pass
+
+    def log_message(self, *a):
+        pass
+
+
+class StopTests(unittest.TestCase):
+    def setUp(self):
+        _SlowOllama.bodies = []
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), _SlowOllama)
+        self.server.daemon_threads = True
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.host = f"http://127.0.0.1:{self.server.server_address[1]}"
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+
+    def test_sends_the_engine_body(self):
+        _SlowOllama.delay = 0
+        msgs = [{"role": "user", "content": "hi"}]
+        self.assertEqual(CancellableChat(self.host)(msgs, "qwen3.5:2b"), "use tar -xzf")
+        self.assertEqual(_SlowOllama.bodies[0], ollama_chat_body(msgs, "qwen3.5:2b"))
+
+    def test_cancel_aborts_a_slow_answer(self):
+        _SlowOllama.delay = 5
+        chat = CancellableChat(self.host)
+        box = {}
+
+        def run():
+            try:
+                box["out"] = chat([{"role": "user", "content": "hi"}], "m")
+            except BaseException as e:
+                box["err"] = e
+
+        worker = threading.Thread(target=run)
+        t0 = time.perf_counter()
+        worker.start()
+        time.sleep(0.3)
+        chat.cancel()
+        worker.join(3)
+        self.assertFalse(worker.is_alive())
+        self.assertLess(time.perf_counter() - t0, 2)
+        self.assertIsInstance(box.get("err"), ChatCancelled)
+
+    def test_unreachable_ollama_is_a_requests_error(self):
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            dead = f"http://127.0.0.1:{probe.getsockname()[1]}"
+        with self.assertRaises(requests.RequestException):
+            CancellableChat(dead, timeout=2)([{"role": "user", "content": "hi"}], "m")
+
+    def test_interrupt_while_waiting_cancels_the_request(self):
+        st = MagicMock()
+        st.cache_resource = _cache_stub
+        st.cache_data = _cache_stub
+        sys.modules["streamlit"] = st
+        import importlib
+
+        if "app.app" in sys.modules:
+            del sys.modules["app.app"]
+        app_mod = importlib.import_module("app.app")
+        seen = {}
+
+        def work(chat):
+            seen["chat"] = chat
+            while not chat.cancelled:
+                time.sleep(0.05)
+            raise ChatCancelled()
+
+        beats = {"n": 0}
+
+        def heartbeat():
+            beats["n"] += 1
+            if beats["n"] == 2:
+                raise _Interrupted("rerun requested")
+
+        with self.assertRaises(_Interrupted):
+            app_mod._run_stoppable(work, heartbeat, tick=0.05)
+        self.assertTrue(seen["chat"].cancelled)
+        self.assertEqual(app_mod._run_stoppable(lambda chat: 42, heartbeat), 42)
 
 
 class HelperTests(unittest.TestCase):
