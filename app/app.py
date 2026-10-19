@@ -297,8 +297,11 @@ def run_polaris():
     mode = st.session_state.get("mode", "full")
     st.session_state.messages.append({"role": "user", "content": question})
     with thread:
-        _answer_turn(question, mode, compare_on, left_mode, right_mode, model, index_dir)
+        answered = _answer_turn(question, mode, compare_on, left_mode, right_mode, model, index_dir)
     stop_slot.empty()
+    if answered:
+        # The sidebar was drawn before this answer existed; one cheap rerun brings its counts up to date.
+        st.rerun()
 
 
 def _answer_turn(question, mode, compare_on, left_mode, right_mode, model, index_dir):
@@ -309,24 +312,28 @@ def _answer_turn(question, mode, compare_on, left_mode, right_mode, model, index
     retriever = None
     if need_rag:
         if not index_ok(index_dir):
-            slot.error(
-                f"No index at {index_dir}. Fetch the corpus and run rag/build_index.py first."
-            )
-            return
+            message = f"No index at {index_dir}. Fetch the corpus and run rag/build_index.py first."
+            slot.error(message)
+            st.session_state.messages.append({"role": "assistant", "error": message})
+            return False
         retriever = _retriever_with_loader(index_dir, slot)
 
     if compare_on:
         slot.empty()
         recs = _run_compare(question, left_mode, right_mode, model, retriever, index_dir)
-        if recs[0] is not None or recs[1] is not None:
-            st.session_state.messages.append({"role": "assistant", "compare": recs})
-        return
+        if recs[0] is None and recs[1] is None:
+            st.session_state.messages.append({"role": "assistant", "error": st.session_state.pop("last_error", "")})
+            return False
+        st.session_state.messages.append({"role": "assistant", "compare": recs})
+        return True
 
     rec = _answer_record(question, mode, model, retriever, index_dir, slot=slot)
     if rec is None:
-        return
+        st.session_state.messages.append({"role": "assistant", "error": st.session_state.pop("last_error", "")})
+        return False
     _render_card(rec, key=f"answer-{len(st.session_state.messages)}", slot=slot)
     st.session_state.messages.append({"role": "assistant", "record": rec})
+    return True
 
 
 def _retriever_with_loader(index_dir, slot):
@@ -531,11 +538,13 @@ def _answer_record(question, mode, model, retriever, index_dir, panel=False, slo
             lambda: slot.markdown(loader, unsafe_allow_html=True),
         )
     except requests.RequestException as e:
-        slot.empty()
-        st.error(
-            f"Could not reach Ollama at {OLLAMA_HOST}. "
-            f"Start it with `ollama serve`.\n\n{e}"
-        )
+        message = f"Could not reach Ollama at {OLLAMA_HOST}. Start it with `ollama serve`.\n\n{e}"
+        st.session_state.last_error = message
+        if keep:
+            slot.error(message)
+        else:
+            slot.empty()
+            st.error(message)
         return None
     if not keep:
         slot.empty()
@@ -589,6 +598,9 @@ def _replay_message(msg, index, compact_compare=False):
     rec = msg.get("record")
     if rec:
         _render_card(rec, key=f"answer-{index}")
+        return
+    if "error" in msg:
+        st.error(msg["error"] or "That answer failed.")
         return
     st.markdown(msg.get("content") or "")
 
