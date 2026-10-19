@@ -242,10 +242,10 @@ def run_polaris():
     frozen = load_frozen()
     up = _ollama_up()
     online = _network_online()
-    where = "dock" if st.session_state.messages else "landing"
-    incoming = st.session_state.get("pending_q") or st.session_state.get(f"chat-{where}")
+    incoming = st.session_state.get("pending_q") or st.session_state.get("chat-dock")
 
-    _render_sidebar(model, index_dir, frozen, up, online, chat=bool(st.session_state.messages or incoming))
+    chat = bool(st.session_state.messages or incoming or st.session_state.get("chat-landing"))
+    _render_sidebar(model, index_dir, frozen, up, online, chat=chat)
 
     compare_on = bool(st.session_state.get("compare"))
     flags = ["polaris-flags"]
@@ -267,32 +267,30 @@ def run_polaris():
         compare_on=compare_on, left_mode=left_mode, right_mode=right_mode, model=model, conn=conn
     )
 
-    if not st.session_state.messages:
-        landing = st.empty()
-        with landing.container(key="landing"):
+    if not (st.session_state.messages or st.session_state.get("pending_q")):
+        with st.container(key="landing"):
             st.markdown(empty_hero_html(), unsafe_allow_html=True)
             typed, _ = _render_composer("landing", **composer)
             _render_examples()
-        question = st.session_state.pop("pending_q", None) or typed
-        if not question:
-            return
-        landing.empty()
-        st.markdown(header_band_html(slim=True), unsafe_allow_html=True)
-        thread = st.container(key="thread")
-        _, stop_slot = _render_composer("dock", generating=True, **composer)
-    else:
-        st.markdown(header_band_html(slim=True), unsafe_allow_html=True)
-        thread = st.container(key="thread")
-        with thread:
-            msgs = st.session_state.messages
-            for i, msg in enumerate(msgs):
-                _replay_message(msg, i, compact_compare=True)
-                if msg.get("role") == "user" and (i + 1 == len(msgs) or msgs[i + 1].get("role") == "user"):
-                    st.markdown(stopped_html(), unsafe_allow_html=True)
-        typed, stop_slot = _render_composer("dock", generating=bool(incoming), **composer)
-        question = st.session_state.pop("pending_q", None) or typed
-        if not question:
-            return
+        if typed:
+            # Hand the question to a fresh run so the thread layout is built from the start; swapping it in
+            # here would shift every later element and remount the thread on the next run.
+            st.session_state.pending_q = typed
+            st.rerun()
+        return
+
+    st.markdown(header_band_html(slim=True), unsafe_allow_html=True)
+    thread = st.container(key="thread")
+    with thread:
+        msgs = st.session_state.messages
+        for i, msg in enumerate(msgs):
+            _replay_message(msg, i, compact_compare=True)
+            if msg.get("role") == "user" and (i + 1 == len(msgs) or msgs[i + 1].get("role") == "user"):
+                st.markdown(stopped_html(), unsafe_allow_html=True)
+    typed, stop_slot = _render_composer("dock", generating=bool(incoming), **composer)
+    question = st.session_state.pop("pending_q", None) or typed
+    if not question:
+        return
 
     mode = st.session_state.get("mode", "full")
     st.session_state.messages.append({"role": "user", "content": question})
