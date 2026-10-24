@@ -855,12 +855,44 @@ def source_chips_html(hits, retrieval_off=False):
     return "".join(parts)
 
 
+def timing_breakdown(record):
+    parts = []
+    for label, field in (("model load", "load_s"), ("prompt", "prompt_s"), ("generation", "gen_s")):
+        value = _opt_float(record.get(field))
+        if value is not None:
+            parts.append(f"{label} {value:.2f} s")
+    return ", ".join(parts)
+
+
+def answer_stats_html(record):
+    """Response time and generation speed as two chips. tok/s is left out when Ollama reported no generation
+    (an abstained answer never calls the model, and records saved before the timing fields have none)."""
+    latency = float(record.get("latency_s") or 0.0)
+    detail = timing_breakdown(record)
+    title = "Question to answer" + (f": {detail}" if detail else "")
+    chips = [
+        f'<span class="stat" title="{escape(title)}"><span class="sr">Response time </span>'
+        f"<b>{latency:.1f}</b> s</span>"
+    ]
+    tok_s = _opt_float(record.get("tok_s"))
+    if tok_s is not None:
+        tokens = _opt_int(record.get("eval_count"))
+        gen_s = _opt_float(record.get("gen_s"))
+        speed = (
+            f"{tokens} tokens in {gen_s:.2f} s of generation"
+            if tokens is not None and gen_s is not None
+            else "Generation speed"
+        )
+        chips.append(
+            f'<span class="stat" title="{escape(speed)}"><span class="sr">Speed </span>'
+            f"<b>{tok_s:.1f}</b> tok/s</span>"
+        )
+    return '<span class="stats">' + "".join(chips) + "</span>"
+
+
 def metrics_html(record):
     n = source_count(record)
-    bits = [
-        f'<b>{float(record.get("latency_s") or 0):.1f}</b> s',
-        f'<b>{format_total_ram(record.get("total_mb"))}</b> RAM total',
-    ]
+    bits = [f'<b>{format_total_ram(record.get("total_mb"))}</b> RAM total']
     if record.get("abstained"):
         unit = "candidate checked" if n == 1 else "candidates checked"
         bits.append(f"<b>{n}</b> {unit}")
@@ -868,7 +900,12 @@ def metrics_html(record):
     else:
         count, _, unit = source_count_label(n).partition(" ")
         bits.append(f"<b>{count}</b> {unit}")
-    return '<div class="metrics">' + "".join(f"<span>{b}</span>" for b in bits) + "</div>"
+    return (
+        '<div class="metrics">'
+        + answer_stats_html(record)
+        + "".join(f"<span>{b}</span>" for b in bits)
+        + "</div>"
+    )
 
 
 def ram_split_html(record):

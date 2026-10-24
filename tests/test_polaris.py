@@ -99,6 +99,7 @@ from app.polaris import (
     stopped_html,
     thinking_html,
     thinking_label,
+    answer_stats_html,
 )
 
 
@@ -856,6 +857,52 @@ class LoaderAndNamingTests(unittest.TestCase):
         html = compare_compact_html({"mode": "base", "answer": "Use `tar`."}, {"mode": "cot", "answer": text})
         self.assertNotIn("```", html)
         self.assertNotIn("Think first", html)
+
+
+class AnswerStatsTests(unittest.TestCase):
+    TIMED = {
+        "mode": "full",
+        "answer": "Use `tar -xzf`.",
+        "latency_s": 3.24,
+        "tok_s": 18.43,
+        "gen_s": 2.46,
+        "prompt_s": 0.36,
+        "load_s": 0.18,
+        "eval_count": 45,
+        "total_mb": 2520,
+        "docs": ["a"],
+        "abstained": False,
+    }
+
+    def test_time_and_speed_chips_lead_the_metrics_row(self):
+        html = metrics_html(self.TIMED)
+        self.assertTrue(html.startswith('<div class="metrics"><span class="stats">'))
+        self.assertIn(
+            '<span class="stat" title="Question to answer: model load 0.18 s, prompt 0.36 s, generation 2.46 s">'
+            '<span class="sr">Response time </span><b>3.2</b> s</span>',
+            html,
+        )
+        self.assertIn(
+            '<span class="stat" title="45 tokens in 2.46 s of generation">'
+            '<span class="sr">Speed </span><b>18.4</b> tok/s</span>',
+            html,
+        )
+        self.assertLess(html.index("tok/s"), html.index("RAM total"))
+
+    def test_speed_chip_needs_generation_timing(self):
+        for missing in ({"tok_s": None}, {"tok_s": ""}):
+            html = metrics_html({**self.TIMED, **missing, "gen_s": None, "prompt_s": None, "load_s": None})
+            self.assertIn("<b>3.2</b> s", html)
+            self.assertNotIn("tok/s", html)
+            self.assertIn('title="Question to answer"', html)
+        # An abstained answer never reaches the model, so only its time shows.
+        self.assertEqual(answer_stats_html({"latency_s": 0.4}).count('class="stat"'), 1)
+
+    def test_stat_numbers_keep_their_width(self):
+        css = style_path().read_text(encoding="utf-8")
+        rule = css.split(".stat b{", 1)[1].split("}", 1)[0]
+        self.assertIn("font-variant-numeric:tabular-nums", rule)
+        self.assertIn(".sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)", css)
 
 
 class _Interrupted(Exception):

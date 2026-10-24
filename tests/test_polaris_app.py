@@ -41,6 +41,12 @@ def _fake_answer(calls):
             "total_mb": 1000.0,
             "ts": "2026-10-24T00:00:00+00:00",
             "git_commit": "abc1234",
+            "eval_count": 22,
+            "eval_duration": 1_200_000_000,
+            "tok_s": 18.33,
+            "gen_s": 1.2,
+            "prompt_s": 0.2,
+            "load_s": 0.05,
         }
 
     return answer
@@ -94,6 +100,10 @@ class PolarisRunLoopTests(unittest.TestCase):
 
     def _generating_args(self):
         return [c.kwargs.get("generating") for c in self.flags.call_args_list]
+
+    def _ask(self, question, where="dock"):
+        self.at.chat_input(key=f"chat-{where}").set_value(question).run()
+        self.assertFalse(self.at.exception)
 
     def test_landing_question_is_answered_in_the_run_it_arrives_in(self):
         self.at.run()
@@ -153,6 +163,16 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertIn("engine failed", self.at.exception[0].message)
         self.assertEqual(self._generating_args(), [True, False])
         self.assertNotIn("stop-gen", [b.key for b in self.at.button])
+
+    # ---------- answer stats ----------
+
+    def test_each_answer_shows_time_and_speed_chips(self):
+        self.at.run()
+        self._ask("extract a .tar.gz file", "landing")
+        html = self._html()
+        self.assertIn('<span class="sr">Response time </span><b>1.5</b> s', html)
+        self.assertIn('<span class="sr">Speed </span><b>18.3</b> tok/s', html)
+        self.assertIn('title="22 tokens in 1.20 s of generation"', html)
 
 
 if __name__ == "__main__":
