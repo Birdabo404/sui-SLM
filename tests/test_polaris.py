@@ -453,7 +453,7 @@ class CompareTests(unittest.TestCase):
         ), patch.object(app_mod, "_answer_record", side_effect=answer), patch.object(
             app_mod, "_render_card", side_effect=render
         ), patch.object(app_mod, "DISTILLED_MODEL", "student:latest"):
-            (left, right), failures = app_mod._run_compare(
+            (left, right), unanswered = app_mod._run_compare(
                 "q",
                 "base",
                 "full",
@@ -464,7 +464,7 @@ class CompareTests(unittest.TestCase):
                 right_model_key="distilled",
             )
 
-        self.assertEqual(failures, (None, None))
+        self.assertEqual(unanswered, (None, None))
         self.assertEqual(left["mode"], "base")
         self.assertEqual(right["mode"], "full")
         left_start = ("start", "base", "qwen3.5:2b", "base")

@@ -21,6 +21,7 @@ from app.engine import OllamaInfo
 try:
     import streamlit
     from streamlit.logger import set_log_level
+    from streamlit.runtime.scriptrunner_utils.exceptions import StopException
     from streamlit.testing.v1 import AppTest
 except ImportError:
     streamlit = None
@@ -481,8 +482,8 @@ class PolarisRunLoopTests(unittest.TestCase):
         (reply,) = self.store.load_chat(cid).messages[1:]
         self.assertIsNone(reply["compare"][0])
         self.assertEqual(reply["compare"][1]["mode"], "cot")
-        failed, ok = reply["compare_errors"]
-        self.assertEqual((failed["mode"], failed["model"], ok), ("base", "qwen3.5:2b", None))
+        failed, ok = reply["compare_unanswered"]
+        self.assertEqual((failed["state"], failed["mode"], failed["model"], ok), ("error", "base", "qwen3.5:2b", None))
         self.assertIn("connection refused", failed["error"])
 
         self.at.run()
@@ -492,6 +493,98 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.at.button(key=f"hist-open-{cid}").click().run()
         self.assertFalse(self.at.exception)
         shown()
+
+    def _compare_base_vs_cot(self):
+        self.at.run()
+        self.at.toggle(key="compare").set_value(True).run()
+        self.at.selectbox(key="cmp-right-config").set_value("base+CoT").run()
+
+    def _answers_left_then_raises(self, error):
+        answer = _fake_answer(self.calls)
+
+        def answer_left_only(question, mode, model, **kw):
+            if mode == "cot":
+                raise error
+            return answer(question, mode, model, **kw)
+
+        return answer_left_only
+
+    def _left_answer_and_right_cancelled_shown(self):
+        html = self._html()
+        self.assertIn("Use `tar -xzf file.tar.gz`.", [m.value for m in self.at.markdown])
+        self.assertIn('<span class="mode">+CoT</span>', html)
+        self.assertEqual(html.count(polaris.cancelled_side_html()), 1)
+        self.assertNotIn("Stopped before an answer came back.", html)
+        self.assertEqual(self.at.error, [])
+
+    def _left_answer_and_right_cancelled_stored(self):
+        (reply,) = self.store.load_chat(self._chat_id()).messages[1:]
+        self.assertEqual(reply["compare"][0]["mode"], "base")
+        self.assertIsNone(reply["compare"][1])
+        self.assertEqual(reply["compare_unanswered"], [None, {"mode": "cot", "model": "qwen3.5:2b", "state": "cancelled"}])
+
+    def test_a_cancelled_right_side_shows_cancelled_live_on_rerun_and_from_history(self):
+        self._compare_base_vs_cot()
+        with patch("app.engine.answer_question", side_effect=self._answers_left_then_raises(polaris.ChatCancelled())):
+            self._ask("extract a .tar.gz file", "landing")
+        self._left_answer_and_right_cancelled_shown()
+        self._left_answer_and_right_cancelled_stored()
+        self.at.run()
+        self._left_answer_and_right_cancelled_shown()
+        cid = self._chat_id()
+        self.at.button(key="new-chat").click().run()
+        self.at.button(key=f"hist-open-{cid}").click().run()
+        self.assertFalse(self.at.exception)
+        self._left_answer_and_right_cancelled_shown()
+
+    def test_a_click_that_ends_the_run_mid_compare_keeps_the_left_answer(self):
+        # A Stop click, or any other click, ends the run at its next interrupt check by raising a Streamlit control
+        # exception, as StopException does here, rather than ChatCancelled.
+        self._compare_base_vs_cot()
+        with patch("app.engine.answer_question", side_effect=self._answers_left_then_raises(StopException())):
+            self._ask("extract a .tar.gz file", "landing")
+        self._left_answer_and_right_cancelled_stored()
+        self.at.run()
+        self._left_answer_and_right_cancelled_shown()
+
+    def test_the_left_answer_is_in_the_thread_while_the_right_side_runs(self):
+        # A click starts the next run straight away, while this one is still unwinding, and that run draws the
+        # thread as it is then.
+        self._compare_base_vs_cot()
+        thread = self.at.session_state["messages"]
+        answer = _fake_answer(self.calls)
+        during_right = []
+
+        def answer_and_look(question, mode, model, **kw):
+            if mode == "cot":
+                during_right.extend(dict(m) for m in thread)
+            return answer(question, mode, model, **kw)
+
+        with patch("app.engine.answer_question", side_effect=answer_and_look):
+            self._ask("extract a .tar.gz file", "landing")
+        _, reply = during_right
+        self.assertEqual((reply["compare"][0]["mode"], reply["compare"][1]), ("base", None))
+        self.assertEqual(reply["compare_unanswered"], (None, {"mode": "cot", "model": "qwen3.5:2b", "state": "cancelled"}))
+        (stored,) = self.store.load_chat(self._chat_id()).messages[1:]
+        self.assertEqual([rec["mode"] for rec in stored["compare"]], ["base", "cot"])
+        self.assertNotIn("compare_unanswered", stored)
+
+    def test_a_compare_cancelled_on_the_left_never_starts_the_right_and_is_kept_as_stopped(self):
+        self._compare_base_vs_cot()
+        with patch("app.engine.answer_question", side_effect=polaris.ChatCancelled()) as answer:
+            self._ask("extract a .tar.gz file", "landing")
+        self.assertEqual(answer.call_count, 1)
+        # Both sides read Cancelled under their own heads; with no answer on either, the turn is kept as stopped.
+        html = self._html()
+        self.assertEqual(html.count(polaris.cancelled_side_html()), 2)
+        self.assertIn('<span class="mode">BASE</span>', html)
+        self.assertIn('<span class="mode">+CoT</span>', html)
+        self.assertEqual(
+            list(self.store.load_chat(self._chat_id()).messages),
+            [{"role": "user", "content": "extract a .tar.gz file"}],
+        )
+        self.at.run()
+        self.assertIn("Stopped before an answer came back.", self._html())
 
 
 if __name__ == "__main__":

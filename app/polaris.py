@@ -1149,6 +1149,10 @@ def stopped_html():
     return '<p class="stopped">Stopped before an answer came back.</p>'
 
 
+def cancelled_side_html():
+    return '<p class="stopped">Cancelled</p>'
+
+
 def running_card_html(mode, label, model=""):
     return '<div class="card running-card">' + card_head_html(mode, model) + thinking_html(label) + "</div>"
 
