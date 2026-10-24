@@ -346,16 +346,11 @@ def run_polaris():
     refresh_sidebar = _render_sidebar(model, index_dir, frozen, up, online, chat=bool(msgs or incoming))
     st.markdown(sky_html(), unsafe_allow_html=True)
 
-    left_model_key, right_model_key = pair_compare_model_keys(
+    left_model_key, left_mode, right_model_key, right_mode = _compare_sides(
         st.session_state.get("cmp_left_model"),
-        st.session_state.get("cmp_right_model"),
-        DISTILLED_MODEL,
-    )
-    left_mode, right_mode = pair_compare_config_modes(
         st.session_state.get("cmp_left"),
+        st.session_state.get("cmp_right_model"),
         st.session_state.get("cmp_right"),
-        left_model_key,
-        right_model_key,
     )
     conn = connection_html(online, up)
     composer = dict(
@@ -620,6 +615,14 @@ def _history_panel():
                 )
 
 
+def _compare_sides(left_key, left_mode, right_key, right_mode):
+    """Each compare side's model key and config, made valid as a pair: the model keys first, then the configs for
+    those models. Returns them in the order they came in."""
+    left_key, right_key = pair_compare_model_keys(left_key, right_key, DISTILLED_MODEL)
+    left_mode, right_mode = pair_compare_config_modes(left_mode, right_mode, left_key, right_key)
+    return left_key, left_mode, right_key, right_mode
+
+
 def _compare_pickers():
     """One picker per side over the thesis configs, written back to the cmp_* keys run_polaris pairs up."""
     configs = compare_configs(DISTILLED_MODEL)
@@ -628,16 +631,11 @@ def _compare_pickers():
     def label(cid):
         return cid if two_models else mode_name(configs[cid][1])
 
-    left_key, right_key = pair_compare_model_keys(
+    left_key, left_mode, right_key, right_mode = _compare_sides(
         st.session_state.get("cmp_left_model"),
-        st.session_state.get("cmp_right_model"),
-        DISTILLED_MODEL,
-    )
-    left_mode, right_mode = pair_compare_config_modes(
         st.session_state.get("cmp_left"),
+        st.session_state.get("cmp_right_model"),
         st.session_state.get("cmp_right"),
-        left_key,
-        right_key,
     )
     # Pass index rather than seeding the key through session state: the browser shows a seeded value once, then
     # falls back to the widget's default, so the default has to be the current pick.
@@ -928,16 +926,11 @@ def _run_compare(
     right_model_key="base",
     context=None,
 ):
-    left_model_key, right_model_key = pair_compare_model_keys(
+    left_model_key, left_mode, right_model_key, right_mode = _compare_sides(
         left_model_key,
-        right_model_key,
-        DISTILLED_MODEL,
-    )
-    left_mode, right_mode = pair_compare_config_modes(
         left_mode,
-        right_mode,
-        left_model_key,
         right_model_key,
+        right_mode,
     )
     left_model = model_name_for(
         left_model_key,
