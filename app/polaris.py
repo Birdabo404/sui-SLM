@@ -126,6 +126,7 @@ MODE_HINTS = {
 }
 TAGLINE = "Offline help for the Linux lab"
 STILL_WORKING = "The model runs on this machine, so this can take a moment."
+ENGLISH_NOTE = "English questions only"
 _WIFI_SVG = (
     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 8.5a15 15 0 0 1 20 0M5 12a10.5 10.5 0 0 1 14 0'
     'M8.5 15.5a5.5 5.5 0 0 1 7 0"/><circle class="d" cx="12" cy="19" r="1.2"/></svg>'
@@ -1073,6 +1074,10 @@ def flags_html(sky, daylight=False, compare=False, generating=False):
     if generating:
         flags.append("polaris-generating")
     return f'<div class="{" ".join(flags)}"></div>'
+
+
+def composer_note_html(conn):
+    return f'<div class="composer-conn">{conn}<span class="composer-note">{escape(ENGLISH_NOTE)}</span></div>'
 
 
 def _css_string(text):
