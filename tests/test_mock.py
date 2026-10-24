@@ -891,7 +891,7 @@ class ImportTests(unittest.TestCase):
             import streamlit  # noqa: F401
         except ImportError:
             st = MagicMock()
-            st.cache_resource = lambda fn: fn
+            st.cache_resource = lambda fn=None, **kwargs: fn if fn is not None else (lambda wrapped: wrapped)
             st.cache_data = lambda *a, **k: (lambda fn: fn)
             sys.modules["streamlit"] = st
         import importlib
