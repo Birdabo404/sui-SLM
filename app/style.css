@@ -480,6 +480,12 @@ button:focus-visible,[role="radio"]:focus-visible,summary:focus-visible,a:focus-
   [class*="st-key-composer-"]{margin-bottom:var(--s-5)}
   [class*="st-key-composer-"] [data-testid="stColumn"]:first-child :is([data-testid="stVerticalBlock"],[data-testid="stElementContainer"]){position:static}
   .composer-note{position:absolute;inset:calc(100% + var(--s-1)) 0 auto;text-align:center}
+  /* the open mode menu stays inside the screen. Its rows are a fixed height, so where a hint can't fit beside its
+     config name the hint is cut short, never the name: 5em holds the longest name, +RAG+CoT */
+  :root:has([class*="st-key-mode-"] [aria-expanded="true"]) [data-baseweb="popover"] > div{min-width:min(340px,calc(100vw - 2 * var(--s-4)));margin:0 var(--s-4)}
+  :root:has([class*="st-key-mode-"] [aria-expanded="true"]) [data-baseweb="popover"] li[role="option"]{gap:var(--s-3)}
+  :root:has([class*="st-key-mode-"] [aria-expanded="true"]) [data-baseweb="popover"] li[role="option"] > div{flex:1 1 0;min-width:5em}
+  :root:has([class*="st-key-mode-"] [aria-expanded="true"]) [data-baseweb="popover"] li[role="option"]::after{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
   .st-key-examples button p{white-space:normal}
   .q{margin-top:var(--s-7)}
 }
