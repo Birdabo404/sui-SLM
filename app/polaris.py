@@ -23,7 +23,15 @@ from urllib.parse import urlsplit
 import psutil
 import requests
 
-from app.engine import MODE_LABELS, MODE_SUBS, OLLAMA_HOST, mode_choices, ollama_chat_body, uses_rag
+from app.engine import (
+    MODE_LABELS,
+    MODE_SUBS,
+    OLLAMA_HOST,
+    mode_choices,
+    ollama_chat_body,
+    parse_ollama_chat_response,
+    uses_rag,
+)
 from shared.frozen import format_threshold
 
 STAR_SVG = (
@@ -74,6 +82,17 @@ EXPORT_FIELDS = (
     "model",
     "answer",
     "latency_s",
+    "eval_count",
+    "eval_duration",
+    "prompt_eval_count",
+    "prompt_eval_duration",
+    "load_duration",
+    "tok_s",
+    "gen_s",
+    "prompt_s",
+    "load_s",
+    "ollama_version",
+    "model_digest",
     "app_rss_mb",
     "ollama_rss_mb",
     "total_mb",
@@ -206,7 +225,7 @@ class CancellableChat:
             raise ChatCancelled()
         if resp.status >= 400:
             raise requests.HTTPError(f"Ollama returned HTTP {resp.status}")
-        return json.loads(data)["message"]["content"]
+        return parse_ollama_chat_response(json.loads(data))
 
     @contextmanager
     def commit(self):
@@ -306,6 +325,17 @@ class RunRecord(TypedDict):
     model: str
     answer: str
     latency_s: float
+    eval_count: int | None
+    eval_duration: int | None
+    prompt_eval_count: int | None
+    prompt_eval_duration: int | None
+    load_duration: int | None
+    tok_s: float | None
+    gen_s: float | None
+    prompt_s: float | None
+    load_s: float | None
+    ollama_version: str
+    model_digest: str
     app_rss_mb: float
     ollama_rss_mb: float
     total_mb: float
@@ -324,6 +354,15 @@ def _opt_float(value):
         return None
     try:
         return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _opt_int(value):
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
     except (TypeError, ValueError):
         return None
 
@@ -373,6 +412,17 @@ def build_run_record(result, index_path=""):
         "model": str(result.get("model") or ""),
         "answer": str(result.get("text") or ""),
         "latency_s": float(result.get("latency_s") or 0.0),
+        "eval_count": _opt_int(result.get("eval_count")),
+        "eval_duration": _opt_int(result.get("eval_duration")),
+        "prompt_eval_count": _opt_int(result.get("prompt_eval_count")),
+        "prompt_eval_duration": _opt_int(result.get("prompt_eval_duration")),
+        "load_duration": _opt_int(result.get("load_duration")),
+        "tok_s": _opt_float(result.get("tok_s")),
+        "gen_s": _opt_float(result.get("gen_s")),
+        "prompt_s": _opt_float(result.get("prompt_s")),
+        "load_s": _opt_float(result.get("load_s")),
+        "ollama_version": str(result.get("ollama_version") or ""),
+        "model_digest": str(result.get("model_digest") or ""),
         "app_rss_mb": float(result.get("app_rss_mb") or 0.0),
         "ollama_rss_mb": float(result.get("ollama_rss_mb") or 0.0),
         "total_mb": float(result.get("total_mb") or 0.0),
@@ -394,6 +444,9 @@ def records_to_csv(records):
     for rec in records:
         row = {k: rec.get(k, "") for k in EXPORT_FIELDS}
         row["latency_s"] = f"{float(rec.get('latency_s') or 0):.4f}"
+        for field in ("tok_s", "gen_s", "prompt_s", "load_s"):
+            value = rec.get(field)
+            row[field] = "" if value is None else f"{float(value):.4f}"
         row["app_rss_mb"] = f"{float(rec.get('app_rss_mb') or 0):.1f}"
         row["ollama_rss_mb"] = f"{float(rec.get('ollama_rss_mb') or 0):.1f}"
         row["total_mb"] = f"{float(rec.get('total_mb') or 0):.1f}"

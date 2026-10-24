@@ -23,11 +23,13 @@ sys.path.insert(0, str(ROOT))
 
 from shared.prompt import ABSTAIN
 from app.engine import (
+    OllamaInfo,
     WEAK_DENSE,
     answer_question,
     build_messages,
     is_weak,
     model_digest,
+    ollama_info,
     ollama_chat_body,
     ollama_reachable,
     warm_model,
@@ -736,13 +738,14 @@ class _SlowOllama(BaseHTTPRequestHandler):
     delay = 0.0
     bodies = []
     request_started = threading.Event()
+    reply = {"message": {"role": "assistant", "content": "use tar -xzf"}}
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
         type(self).bodies.append(json.loads(self.rfile.read(n)))
         type(self).request_started.set()
         time.sleep(type(self).delay)
-        out = json.dumps({"message": {"role": "assistant", "content": "use tar -xzf"}}).encode()
+        out = json.dumps(type(self).reply).encode()
         try:
             self.send_response(200)
             self.send_header("Content-Length", str(len(out)))
@@ -759,6 +762,9 @@ class StopTests(unittest.TestCase):
     def setUp(self):
         _SlowOllama.bodies = []
         _SlowOllama.request_started.clear()
+        _SlowOllama.reply = {
+            "message": {"role": "assistant", "content": "use tar -xzf"}
+        }
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), _SlowOllama)
         self.server.daemon_threads = True
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -803,6 +809,54 @@ class StopTests(unittest.TestCase):
         self.assertEqual(body["messages"], [])
         self.assertEqual(body["keep_alive"], "45m")
         self.assertFalse(body["stream"])
+
+    def test_answer_returns_and_logs_ollama_stats(self):
+        _SlowOllama.reply = {
+            "message": {"role": "assistant", "content": "ok"},
+            "eval_count": 20,
+            "eval_duration": 2_000_000_000,
+            "prompt_eval_count": 40,
+            "prompt_eval_duration": 500_000_000,
+            "load_duration": 100_000_000,
+        }
+        chat = CancellableChat(self.host)
+        with tempfile.TemporaryDirectory() as td:
+            log = Path(td) / "answers.csv"
+            result = answer_question(
+                "hi",
+                "base",
+                "m",
+                chat_fn=chat,
+                log_path=log,
+                log_commit=chat.commit,
+                model_info=OllamaInfo(
+                    version="0.12.3",
+                    model_digest="2.0B Q4_K_M",
+                ),
+            )
+            with open(log, newline="", encoding="utf-8") as f:
+                row = next(csv.DictReader(f))
+        self.assertEqual(result["eval_count"], 20)
+        self.assertEqual(result["eval_duration"], 2_000_000_000)
+        self.assertEqual(result["prompt_eval_count"], 40)
+        self.assertEqual(result["prompt_eval_duration"], 500_000_000)
+        self.assertEqual(result["load_duration"], 100_000_000)
+        self.assertEqual(result["tok_s"], 10.0)
+        self.assertEqual(result["gen_s"], 2.0)
+        self.assertEqual(result["prompt_s"], 0.5)
+        self.assertEqual(result["load_s"], 0.1)
+        self.assertEqual(result["ollama_version"], "0.12.3")
+        self.assertEqual(result["model_digest"], "2.0B Q4_K_M")
+        record = build_run_record(result)
+        self.assertEqual(record["tok_s"], 10.0)
+        self.assertEqual(record["eval_count"], 20)
+        self.assertEqual(record["ollama_version"], "0.12.3")
+        self.assertEqual(row["tok_s"], "10.0000")
+        self.assertEqual(row["gen_s"], "2.0000")
+        self.assertEqual(row["prompt_s"], "0.5000")
+        self.assertEqual(row["load_s"], "0.1000")
+        self.assertEqual(row["ollama_version"], "0.12.3")
+        self.assertEqual(row["model_digest"], "2.0B Q4_K_M")
 
     def test_cancel_aborts_a_slow_answer(self):
         _SlowOllama.delay = 5
@@ -1150,14 +1204,17 @@ class HelperTests(unittest.TestCase):
 
 
 class DigestTests(unittest.TestCase):
-    def test_show_quant(self):
-        fake = MagicMock()
-        fake.ok = True
-        fake.json.return_value = {
-            "details": {"parameter_size": "2.0B", "quantization_level": "Q4_K_M"}
-        }
-        with patch("app.engine.requests.post", return_value=fake):
-            self.assertEqual(model_digest("qwen3.5:2b"), "2.0B Q4_K_M")
+    digest = "a" * 64
+
+    def test_show_digest(self):
+        show = MagicMock()
+        show.ok = True
+        show.json.return_value = {"digest": self.digest}
+        with patch("app.engine.requests.post", return_value=show), patch(
+            "app.engine.requests.get"
+        ) as get:
+            self.assertEqual(model_digest("qwen3.5:2b"), self.digest)
+        get.assert_not_called()
 
     def test_blank_on_failure(self):
         with patch("app.engine.requests.post", side_effect=OSError("down")), patch(
@@ -1167,21 +1224,45 @@ class DigestTests(unittest.TestCase):
         with patch("app.engine.requests.get", side_effect=OSError("down")):
             self.assertFalse(ollama_reachable())
 
-    def test_tags_fallback(self):
+    def test_tags_fallback_requires_an_exact_model(self):
         show = MagicMock()
-        show.ok = False
+        show.ok = True
+        show.json.return_value = {
+            "details": {"parameter_size": "2.0B", "quantization_level": "Q4_K_M"}
+        }
         tags = MagicMock()
         tags.ok = True
         tags.json.return_value = {
-            "models": [{
-                "name": "qwen3.5:2b",
-                "details": {"quantization_level": "Q8_0"},
-            }]
+            "models": [
+                {"name": "qwen3.5:7b", "digest": "wrong"},
+                {"name": "qwen3.5:2b", "digest": self.digest},
+            ]
         }
         with patch("app.engine.requests.post", return_value=show), patch(
             "app.engine.requests.get", return_value=tags
         ):
-            self.assertEqual(model_digest("qwen3.5:2b"), "Q8_0")
+            self.assertEqual(model_digest("qwen3.5:2b"), self.digest)
+
+    def test_info_combines_version_and_model_digest(self):
+        version = MagicMock()
+        version.ok = True
+        version.json.return_value = {"version": "0.12.3"}
+        show = MagicMock()
+        show.ok = True
+        show.json.return_value = {"details": {"parameter_size": "2.0B"}}
+        tags = MagicMock()
+        tags.ok = True
+        tags.json.return_value = {
+            "models": [{"name": "qwen3.5:2b", "digest": self.digest}]
+        }
+        with patch("app.engine.requests.get", side_effect=[version, tags]), patch(
+            "app.engine.requests.post",
+            return_value=show,
+        ) as post:
+            info = ollama_info("qwen3.5:2b")
+        self.assertEqual(info.version, "0.12.3")
+        self.assertEqual(info.model_digest, self.digest)
+        self.assertEqual(post.call_args.kwargs["json"], {"name": "qwen3.5:2b"})
 
 
 class ImportPolarisTests(unittest.TestCase):
