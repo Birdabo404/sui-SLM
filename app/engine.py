@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 BASE_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.5:2b")
 DISTILLED_MODEL = os.environ.get("OLLAMA_DISTILLED_MODEL", "")
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
+DEFAULT_KEEP_ALIVE = "30m"
 DEFAULT_INDEX = os.environ.get("RAG_INDEX", str(ROOT / "rag" / "rag-index-v2"))
 LOG_CSV = Path(os.environ.get("LOG_CSV", str(ROOT / "logs" / "answers.csv")))
 _FROZEN = load_frozen()
@@ -172,26 +173,53 @@ def build_messages(question, hits, mode):
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def ollama_chat_body(messages, model, temperature=0.2, seed=None):
+def keep_alive_setting(environ=None):
+    environ = os.environ if environ is None else environ
+    return environ.get("OLLAMA_KEEP_ALIVE") or DEFAULT_KEEP_ALIVE
+
+
+def ollama_chat_body(messages, model, temperature=0.2, seed=None, keep_alive=None):
     options = {"temperature": temperature, "num_ctx": 4096}
     if seed is not None:
         options["seed"] = seed
-    return {
+    body = {
         "model": model,
         "stream": False,
         "think": False,
         "messages": messages,
         "options": options,
     }
+    if keep_alive is not None:
+        body["keep_alive"] = keep_alive
+    return body
 
 
-def ollama_chat(messages, model, host=None, temperature=0.2, seed=None):
+def ollama_chat(messages, model, host=None, temperature=0.2, seed=None, keep_alive=None):
     host = host or OLLAMA_HOST
     url = host.rstrip("/") + "/api/chat"
-    body = ollama_chat_body(messages, model, temperature=temperature, seed=seed)
+    body = ollama_chat_body(
+        messages,
+        model,
+        temperature=temperature,
+        seed=seed,
+        keep_alive=keep_alive,
+    )
     r = requests.post(url, json=body, timeout=300)
     r.raise_for_status()
     return r.json()["message"]["content"]
+
+
+def warm_model(model, host=None, keep_alive=None):
+    try:
+        ollama_chat(
+            [],
+            model,
+            host=host,
+            keep_alive=keep_alive or keep_alive_setting(),
+        )
+        return True
+    except requests.RequestException:
+        return False
 
 
 def _digest_from_details(details):
@@ -339,18 +367,28 @@ def answer_question(
     extra_log=None,
     log_fields=None,
     log_commit=None,
+    keep_alive=None,
+    git_sha=None,
 ):
     k = K if k is None else k
     threshold = WEAK_DENSE if threshold is None else threshold
     if chat_fn is None:
         def chat_fn(messages, model_name):
             return ollama_chat(
-                messages, model_name, temperature=temperature, seed=seed
+                messages,
+                model_name,
+                temperature=temperature,
+                seed=seed,
+                keep_alive=keep_alive,
             )
     else:
         configure = getattr(chat_fn, "configure", None)
         if configure is not None:
-            configure(temperature=temperature, seed=seed)
+            configure(
+                temperature=temperature,
+                seed=seed,
+                keep_alive=keep_alive,
+            )
 
     t0 = time.perf_counter()
     sampler = RamSampler()
@@ -375,7 +413,7 @@ def answer_question(
     latency = time.perf_counter() - t0
     row = {
         "ts": datetime.now(timezone.utc).isoformat(),
-        "git_commit": git_commit(),
+        "git_commit": git_commit() if git_sha is None else git_sha,
         "config": config_id(model_key, mode),
         "model": model,
         "mode": mode,

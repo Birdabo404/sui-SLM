@@ -29,6 +29,7 @@ from app.engine import (
     git_commit,
     is_ollama_process,
     is_weak,
+    keep_alive_setting,
     log_answer,
     mode_choices,
     model_name_for,
@@ -493,6 +494,25 @@ class MockRunTests(unittest.TestCase):
         self.assertEqual(body["options"]["temperature"], 0)
         self.assertEqual(body["options"]["seed"], 42)
         self.assertEqual(body["model"], "qwen3.5:2b")
+        self.assertFalse(body["stream"])
+        self.assertNotIn("keep_alive", body)
+
+    def test_keep_alive_setting_defaults_and_honors_env(self):
+        self.assertEqual(keep_alive_setting({}), "30m")
+        self.assertEqual(keep_alive_setting({"OLLAMA_KEEP_ALIVE": "2h"}), "2h")
+        self.assertEqual(keep_alive_setting({"OLLAMA_KEEP_ALIVE": "0"}), "0")
+
+    def test_answer_uses_supplied_git_sha_without_subprocess(self):
+        with patch("app.engine.git_commit", side_effect=AssertionError("git called")):
+            result = answer_question(
+                "hello",
+                "base",
+                "qwen3.5:2b",
+                chat_fn=self._chat,
+                log_path=self.log,
+                git_sha="abc1234",
+            )
+        self.assertEqual(result["git_commit"], "abc1234")
 
 
 class EvalTests(unittest.TestCase):
