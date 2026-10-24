@@ -108,8 +108,18 @@ def _chunk_count(index_dir):
 
 
 @st.cache_resource(show_spinner=False)
+def _warmed_models():
+    return set()
+
+
 def _warm_model_at_startup(model, keep_alive):
-    return warm_model(model, keep_alive=keep_alive)
+    warmed = _warmed_models()
+    if model in warmed:
+        return True
+    if not warm_model(model, keep_alive=keep_alive):
+        return False
+    warmed.add(model)
+    return True
 
 
 def _session_git_commit():
@@ -268,8 +278,11 @@ def run_polaris():
     model = BASE_MODEL
     frozen = load_frozen()
     up = _ollama_up()
-    if up:
+    if up and not st.session_state.warmed:
         st.session_state.warmed = _warm_model_at_startup(model, keep_alive_setting())
+    elif not up:
+        st.session_state.warmed = False
+        _warmed_models().discard(model)
     online = _network_online()
     incoming = st.session_state.get("pending_q") or st.session_state.get("chat-dock")
 

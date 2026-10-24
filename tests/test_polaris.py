@@ -2,6 +2,7 @@
 """Polaris UI helpers. No live Ollama."""
 import csv
 import http.client
+import importlib
 import io
 import json
 import os
@@ -124,8 +125,6 @@ class FlagTests(unittest.TestCase):
 
 class SessionStartupTests(unittest.TestCase):
     def test_compare_defaults_off_and_git_is_read_once(self):
-        import importlib
-
         app_mod = importlib.import_module("app.app")
         fake_st = MagicMock()
         fake_st.session_state = {}
@@ -139,6 +138,19 @@ class SessionStartupTests(unittest.TestCase):
             self.assertEqual(app_mod._session_git_commit(), "abc1234")
         self.assertFalse(fake_st.session_state["compare"])
         commit.assert_called_once_with()
+
+    def test_failed_warmup_retries_and_success_is_cached(self):
+        app_mod = importlib.import_module("app.app")
+        warmed = set()
+        with patch.object(app_mod, "_warmed_models", return_value=warmed), patch.object(
+            app_mod,
+            "warm_model",
+            side_effect=[False, True],
+        ) as warm:
+            self.assertFalse(app_mod._warm_model_at_startup("model", "30m"))
+            self.assertTrue(app_mod._warm_model_at_startup("model", "30m"))
+            self.assertTrue(app_mod._warm_model_at_startup("model", "30m"))
+        self.assertEqual(warm.call_count, 2)
 
 
 class RunRecordTests(unittest.TestCase):
@@ -325,7 +337,6 @@ class CompareTests(unittest.TestCase):
         st.cache_data = _cache_stub
         st.session_state.messages = [{"role": "user", "content": "q"}]
         sys.modules["streamlit"] = st
-        import importlib
 
         if "app.app" in sys.modules:
             del sys.modules["app.app"]
@@ -994,7 +1005,6 @@ class StopTests(unittest.TestCase):
         st.cache_resource = _cache_stub
         st.cache_data = _cache_stub
         sys.modules["streamlit"] = st
-        import importlib
 
         if "app.app" in sys.modules:
             del sys.modules["app.app"]
@@ -1024,7 +1034,6 @@ class StopTests(unittest.TestCase):
         st.cache_resource = _cache_stub
         st.cache_data = _cache_stub
         sys.modules["streamlit"] = st
-        import importlib
 
         if "app.app" in sys.modules:
             del sys.modules["app.app"]
@@ -1181,9 +1190,6 @@ class ImportPolarisTests(unittest.TestCase):
         st.cache_resource = _cache_stub
         st.cache_data = _cache_stub
         with patch.dict(os.environ, {"ANONYMIZED_TELEMETRY": "False"}):
-            import importlib
-            import sys
-
             sys.modules["streamlit"] = st
             if "app.app" in sys.modules:
                 del sys.modules["app.app"]
