@@ -14,6 +14,7 @@ import random
 import re
 import socket
 import threading
+from contextlib import contextmanager
 from html import escape
 from pathlib import Path
 from typing import TypedDict
@@ -147,20 +148,44 @@ class CancellableChat:
     thread and makes Ollama abandon the generation instead of finishing it in the background.
     """
 
-    def __init__(self, host=None, timeout=300):
+    def __init__(self, host=None, timeout=300, temperature=0.2, seed=None):
         self._url = urlsplit((host or OLLAMA_HOST).rstrip("/") + "/api/chat")
         self._timeout = timeout
+        self._temperature = temperature
+        self._seed = seed
         self._lock = threading.Lock()
         self._conn = None
+        self._committed = False
         self.cancelled = False
+
+    def configure(self, *, temperature, seed):
+        with self._lock:
+            self._temperature = temperature
+            self._seed = seed
 
     def __call__(self, messages, model):
         conn = http.client.HTTPConnection(self._url.hostname, self._url.port or 80, timeout=self._timeout)
+        conn.auto_open = 0
+        body = json.dumps(
+            ollama_chat_body(
+                messages,
+                model,
+                temperature=self._temperature,
+                seed=self._seed,
+            )
+        ).encode("utf-8")
+        try:
+            conn.connect()
+        except (OSError, http.client.HTTPException) as e:
+            conn.close()
+            if self.cancelled:
+                raise ChatCancelled() from e
+            raise requests.ConnectionError(str(e)) from e
         with self._lock:
             if self.cancelled:
+                conn.close()
                 raise ChatCancelled()
             self._conn = conn
-        body = json.dumps(ollama_chat_body(messages, model)).encode("utf-8")
         try:
             conn.request("POST", self._url.path, body=body, headers={"Content-Type": "application/json"})
             resp = conn.getresponse()
@@ -170,6 +195,9 @@ class CancellableChat:
                 raise ChatCancelled() from e
             raise requests.ConnectionError(str(e)) from e
         finally:
+            with self._lock:
+                if self._conn is conn:
+                    self._conn = None
             conn.close()
         if self.cancelled:
             raise ChatCancelled()
@@ -177,8 +205,20 @@ class CancellableChat:
             raise requests.HTTPError(f"Ollama returned HTTP {resp.status}")
         return json.loads(data)["message"]["content"]
 
+    @contextmanager
+    def commit(self):
+        with self._lock:
+            if self.cancelled:
+                raise ChatCancelled()
+            if self._committed:
+                raise RuntimeError("chat result already committed")
+            self._committed = True
+        yield
+
     def cancel(self):
         with self._lock:
+            if self._committed:
+                return
             self.cancelled = True
             conn = self._conn
         sock = getattr(conn, "sock", None)
@@ -187,6 +227,8 @@ class CancellableChat:
                 sock.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
+        if conn is not None:
+            conn.close()
 
 
 SKY_COLS, SKY_ROWS = 220, 56

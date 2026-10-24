@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Polaris UI helpers. No live Ollama."""
 import csv
+import http.client
 import io
 import json
 import os
@@ -20,7 +21,15 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from shared.prompt import ABSTAIN
-from app.engine import WEAK_DENSE, answer_question, is_weak, model_digest, ollama_chat_body, ollama_reachable
+from app.engine import (
+    WEAK_DENSE,
+    answer_question,
+    build_messages,
+    is_weak,
+    model_digest,
+    ollama_chat_body,
+    ollama_reachable,
+)
 from app.polaris import (
     EXPORT_FIELDS,
     best_match_html,
@@ -294,6 +303,7 @@ class CompareTests(unittest.TestCase):
         st = MagicMock()
         st.cache_resource = _cache_stub
         st.cache_data = _cache_stub
+        st.session_state.messages = [{"role": "user", "content": "q"}]
         sys.modules["streamlit"] = st
         import importlib
 
@@ -345,7 +355,7 @@ class CompareTests(unittest.TestCase):
             }
 
         def render(rec, key, align_slots=False):
-            events.append(("render", rec["mode"]))
+            events.append(("render", rec["mode"], key))
 
         with patch.object(app_mod.st, "container", return_value=Box()), patch.object(
             app_mod.st, "columns", return_value=(Col(), Col())
@@ -362,6 +372,8 @@ class CompareTests(unittest.TestCase):
             [e for e in events if isinstance(e, tuple) and e[0] == "start"],
             [("start", "base"), ("start", "full")],
         )
+        self.assertIn(("render", "base", "answer-h1-l"), events)
+        self.assertIn(("render", "full", "answer-h1-r"), events)
 
 
 class HtmlTests(unittest.TestCase):
@@ -692,10 +704,12 @@ class _Interrupted(Exception):
 class _SlowOllama(BaseHTTPRequestHandler):
     delay = 0.0
     bodies = []
+    request_started = threading.Event()
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length") or 0)
         type(self).bodies.append(json.loads(self.rfile.read(n)))
+        type(self).request_started.set()
         time.sleep(type(self).delay)
         out = json.dumps({"message": {"role": "assistant", "content": "use tar -xzf"}}).encode()
         try:
@@ -713,6 +727,7 @@ class _SlowOllama(BaseHTTPRequestHandler):
 class StopTests(unittest.TestCase):
     def setUp(self):
         _SlowOllama.bodies = []
+        _SlowOllama.request_started.clear()
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), _SlowOllama)
         self.server.daemon_threads = True
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -722,11 +737,30 @@ class StopTests(unittest.TestCase):
         self.server.shutdown()
         self.server.server_close()
 
-    def test_sends_the_engine_body(self):
+    def test_sends_temperature_and_seed_in_the_engine_body(self):
         _SlowOllama.delay = 0
-        msgs = [{"role": "user", "content": "hi"}]
-        self.assertEqual(CancellableChat(self.host)(msgs, "qwen3.5:2b"), "use tar -xzf")
-        self.assertEqual(_SlowOllama.bodies[0], ollama_chat_body(msgs, "qwen3.5:2b"))
+        chat = CancellableChat(self.host)
+        with tempfile.TemporaryDirectory() as td:
+            out = answer_question(
+                "hi",
+                "base",
+                "qwen3.5:2b",
+                chat_fn=chat,
+                log_path=Path(td) / "answers.csv",
+                temperature=0,
+                seed=42,
+                log_commit=chat.commit,
+            )
+        self.assertEqual(out["text"], "use tar -xzf")
+        self.assertEqual(
+            _SlowOllama.bodies[0],
+            ollama_chat_body(
+                build_messages("hi", [], "base"),
+                "qwen3.5:2b",
+                temperature=0,
+                seed=42,
+            ),
+        )
 
     def test_cancel_aborts_a_slow_answer(self):
         _SlowOllama.delay = 5
@@ -742,12 +776,180 @@ class StopTests(unittest.TestCase):
         worker = threading.Thread(target=run)
         t0 = time.perf_counter()
         worker.start()
-        time.sleep(0.3)
+        self.assertTrue(_SlowOllama.request_started.wait(2))
         chat.cancel()
         worker.join(3)
         self.assertFalse(worker.is_alive())
         self.assertLess(time.perf_counter() - t0, 2)
         self.assertIsInstance(box.get("err"), ChatCancelled)
+
+    def test_cancelled_slow_answer_writes_no_csv(self):
+        _SlowOllama.delay = 5
+        chat = CancellableChat(self.host)
+        box = {}
+        with tempfile.TemporaryDirectory() as td:
+            log = Path(td) / "answers.csv"
+
+            def run():
+                try:
+                    box["out"] = answer_question(
+                        "hi",
+                        "base",
+                        "m",
+                        chat_fn=chat,
+                        log_path=log,
+                        log_commit=chat.commit,
+                    )
+                except BaseException as e:
+                    box["err"] = e
+
+            worker = threading.Thread(target=run)
+            worker.start()
+            self.assertTrue(_SlowOllama.request_started.wait(2))
+            chat.cancel()
+            worker.join(3)
+            self.assertFalse(worker.is_alive())
+            self.assertIsInstance(box.get("err"), ChatCancelled)
+            self.assertFalse(log.exists())
+
+    def test_cancelled_weak_rag_abstain_writes_no_csv(self):
+        chat = CancellableChat(self.host)
+        chat.cancel()
+        hits = [{
+            "id": "weak",
+            "title": "unrelated",
+            "text": "nothing",
+            "source": "tldr",
+            "path": "x.md",
+            "rrf": 1 / 60,
+            "dense": 0.10,
+        }]
+        with tempfile.TemporaryDirectory() as td:
+            log = Path(td) / "answers.csv"
+            with self.assertRaises(ChatCancelled):
+                answer_question(
+                    "where is the password?",
+                    "full",
+                    "m",
+                    retriever=FakeRetriever(hits),
+                    chat_fn=chat,
+                    log_path=log,
+                    log_commit=chat.commit,
+                )
+            self.assertFalse(log.exists())
+        self.assertEqual(_SlowOllama.bodies, [])
+
+    def test_cancel_closes_after_socket_shutdown(self):
+        events = []
+
+        class Sock:
+            def shutdown(self, how):
+                events.append(("shutdown", how))
+
+        class Conn:
+            sock = Sock()
+
+            def close(self):
+                events.append(("close", None))
+
+        chat = CancellableChat(self.host)
+        chat._conn = Conn()
+        chat.cancel()
+        self.assertEqual(events, [("shutdown", socket.SHUT_RDWR), ("close", None)])
+
+    def test_cancel_while_connecting_sends_no_request(self):
+        connected = threading.Event()
+        release = threading.Event()
+        calls = []
+
+        class Conn:
+            sock = None
+
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def connect(self):
+                connected.set()
+                release.wait(2)
+
+            def request(self, *args, **kwargs):
+                calls.append("request")
+
+            def close(self):
+                calls.append("close")
+
+        chat = CancellableChat(self.host)
+        box = {}
+
+        def run():
+            try:
+                chat([{"role": "user", "content": "hi"}], "m")
+            except BaseException as e:
+                box["err"] = e
+
+        with patch("app.polaris.http.client.HTTPConnection", Conn):
+            worker = threading.Thread(target=run)
+            worker.start()
+            self.assertTrue(connected.wait(2))
+            chat.cancel()
+            release.set()
+            worker.join(2)
+        self.assertFalse(worker.is_alive())
+        self.assertIsInstance(box.get("err"), ChatCancelled)
+        self.assertNotIn("request", calls)
+        self.assertIn("close", calls)
+
+    def test_cancel_before_request_cannot_reconnect(self):
+        request_entered = threading.Event()
+        release = threading.Event()
+        calls = []
+
+        class Sock:
+            def shutdown(self, how):
+                calls.append(("shutdown", how))
+
+        class Conn:
+            auto_open = 1
+            sock = None
+
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def connect(self):
+                self.sock = Sock()
+
+            def request(self, *args, **kwargs):
+                request_entered.set()
+                release.wait(2)
+                if self.sock is None and self.auto_open:
+                    calls.append(("reconnect", None))
+                    self.connect()
+                if self.sock is None:
+                    raise http.client.NotConnected()
+
+            def close(self):
+                self.sock = None
+                calls.append(("close", None))
+
+        chat = CancellableChat(self.host)
+        box = {}
+
+        def run():
+            try:
+                chat([{"role": "user", "content": "hi"}], "m")
+            except BaseException as e:
+                box["err"] = e
+
+        with patch("app.polaris.http.client.HTTPConnection", Conn):
+            worker = threading.Thread(target=run)
+            worker.start()
+            self.assertTrue(request_entered.wait(2))
+            chat.cancel()
+            release.set()
+            worker.join(2)
+        self.assertFalse(worker.is_alive())
+        self.assertIsInstance(box.get("err"), ChatCancelled)
+        self.assertNotIn(("reconnect", None), calls)
 
     def test_unreachable_ollama_is_a_requests_error(self):
         with socket.socket() as probe:
@@ -785,6 +987,30 @@ class StopTests(unittest.TestCase):
             app_mod._run_stoppable(work, heartbeat, tick=0.05)
         self.assertTrue(seen["chat"].cancelled)
         self.assertEqual(app_mod._run_stoppable(lambda chat: 42, heartbeat), 42)
+
+    def test_answer_record_catches_chat_cancelled(self):
+        st = MagicMock()
+        st.cache_resource = _cache_stub
+        st.cache_data = _cache_stub
+        sys.modules["streamlit"] = st
+        import importlib
+
+        if "app.app" in sys.modules:
+            del sys.modules["app.app"]
+        app_mod = importlib.import_module("app.app")
+        slot = MagicMock()
+        with patch.object(app_mod, "_run_stoppable", side_effect=ChatCancelled):
+            rec = app_mod._answer_record(
+                "q",
+                "base",
+                "m",
+                None,
+                "idx",
+                slot=slot,
+            )
+        self.assertIsNone(rec)
+        self.assertIs(st.session_state.last_cancelled, True)
+        slot.empty.assert_called_once()
 
 
 class HelperTests(unittest.TestCase):

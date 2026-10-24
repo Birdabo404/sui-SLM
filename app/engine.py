@@ -338,6 +338,7 @@ def answer_question(
     seed=None,
     extra_log=None,
     log_fields=None,
+    log_commit=None,
 ):
     k = K if k is None else k
     threshold = WEAK_DENSE if threshold is None else threshold
@@ -346,6 +347,10 @@ def answer_question(
             return ollama_chat(
                 messages, model_name, temperature=temperature, seed=seed
             )
+    else:
+        configure = getattr(chat_fn, "configure", None)
+        if configure is not None:
+            configure(temperature=temperature, seed=seed)
 
     t0 = time.perf_counter()
     sampler = RamSampler()
@@ -389,7 +394,11 @@ def answer_question(
     }
     if extra_log:
         row.update(extra_log)
-    log_answer(row, path=log_path, fields=log_fields)
+    if log_commit is None:
+        log_answer(row, path=log_path, fields=log_fields)
+    else:
+        with log_commit():
+            log_answer(row, path=log_path, fields=log_fields)
     return {
         "text": text,
         "hits": hits,
