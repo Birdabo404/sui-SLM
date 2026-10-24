@@ -4,7 +4,6 @@ import os
 import sqlite3
 import sys
 import threading
-from html import escape
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -49,6 +48,9 @@ from app.polaris import (
     build_run_record,
     card_head_html,
     compare_compact_html,
+    compare_configs,
+    compare_model_tags,
+    compare_summary_html,
     composer_note_html,
     connection_html,
     default_compare_modes,
@@ -67,7 +69,6 @@ from app.polaris import (
     mode_menu_css,
     mode_name,
     model_key_choices,
-    model_mode_choices,
     network_online,
     pair_compare_config_modes,
     pair_compare_model_keys,
@@ -357,24 +358,14 @@ def run_polaris():
         right_model_key,
     )
     conn = connection_html(online, up)
-    compare_model = model
-    if left_model_key != right_model_key:
-        left_model = model_name_for(
-            left_model_key,
-            base_model=BASE_MODEL,
-            distilled_model=DISTILLED_MODEL,
-        )
-        right_model = model_name_for(
-            right_model_key,
-            base_model=BASE_MODEL,
-            distilled_model=DISTILLED_MODEL,
-        )
-        compare_model = f"{left_model} vs {right_model}"
     composer = dict(
         compare_on=compare_on,
-        left_mode=left_mode,
-        right_mode=right_mode,
-        model=compare_model,
+        compare_line=compare_summary_html(
+            model_name_for(left_model_key, base_model=model, distilled_model=DISTILLED_MODEL),
+            left_mode,
+            model_name_for(right_model_key, base_model=model, distilled_model=DISTILLED_MODEL),
+            right_mode,
+        ),
         conn=conn,
     )
 
@@ -631,6 +622,48 @@ def _history_panel():
                 )
 
 
+def _compare_pickers():
+    """One picker per side over the thesis configs, written back to the cmp_* keys run_polaris pairs up."""
+    configs = compare_configs(DISTILLED_MODEL)
+    two_models = len(model_key_choices(DISTILLED_MODEL)) > 1
+
+    def label(cid):
+        return cid if two_models else mode_name(configs[cid][1])
+
+    left_key, right_key = pair_compare_model_keys(
+        st.session_state.get("cmp_left_model"),
+        st.session_state.get("cmp_right_model"),
+        DISTILLED_MODEL,
+    )
+    left_mode, right_mode = pair_compare_config_modes(
+        st.session_state.get("cmp_left"),
+        st.session_state.get("cmp_right"),
+        left_key,
+        right_key,
+    )
+    # Pass index rather than seeding the key through session state: the browser shows a seeded value once, then
+    # falls back to the widget's default, so the default has to be the current pick.
+    left_options = list(configs)
+    left = st.selectbox(
+        "Left",
+        left_options,
+        index=left_options.index(config_id(left_key, left_mode)),
+        format_func=label,
+        key="cmp-left-config",
+    )
+    right_options = [cid for cid in configs if cid != left]
+    wanted = config_id(right_key, right_mode)
+    right = st.selectbox(
+        "Right",
+        right_options,
+        index=right_options.index(wanted) if wanted in right_options else 0,
+        format_func=label,
+        key="cmp-right-config",
+    )
+    st.session_state.cmp_left_model, st.session_state.cmp_left = configs[left]
+    st.session_state.cmp_right_model, st.session_state.cmp_right = configs[right]
+
+
 def _render_sidebar(model, index_dir, frozen, up, online, chat=False):
     """Draw the sidebar and return refresh(), which redraws the parts an answer changes in place."""
     with st.sidebar:
@@ -647,52 +680,11 @@ def _render_sidebar(model, index_dir, frozen, up, online, chat=False):
         _history_panel()
 
         st.markdown('<p class="side-h">View</p>', unsafe_allow_html=True)
-        st.toggle("Compare two modes", key="compare")
-        st.toggle("Daylight", key="daylight")
+        st.toggle("Compare two configs", key="compare")
         if st.session_state.get("compare"):
-            model_keys = model_key_choices(DISTILLED_MODEL)
-            left_model_key, right_model_key = pair_compare_model_keys(
-                st.session_state.get("cmp_left_model"),
-                st.session_state.get("cmp_right_model"),
-                DISTILLED_MODEL,
-            )
-            if len(model_keys) > 1:
-                st.selectbox(
-                    "Left model",
-                    model_keys,
-                    format_func=lambda key: model_name_for(key),
-                    key="cmp_left_model",
-                )
-                st.selectbox(
-                    "Right model",
-                    model_keys,
-                    format_func=lambda key: model_name_for(key),
-                    key="cmp_right_model",
-                )
-                left_model_key = st.session_state.get("cmp_left_model")
-                right_model_key = st.session_state.get("cmp_right_model")
-            left_mode, right_mode = pair_compare_config_modes(
-                st.session_state.get("cmp_left"),
-                st.session_state.get("cmp_right"),
-                left_model_key,
-                right_model_key,
-            )
-            st.session_state.cmp_left = left_mode
-            st.session_state.cmp_right = right_mode
-            left_modes = model_mode_choices(left_model_key)
-            right_modes = model_mode_choices(right_model_key)
-            st.selectbox("Left", left_modes, format_func=mode_name, key="cmp_left")
-            same_model = left_model_key == right_model_key
-            right_opts = [
-                m for m in right_modes
-                if not same_model or m != st.session_state.get("cmp_left")
-            ]
-            if not right_opts:
-                right_opts = right_modes
-            current_right = st.session_state.get("cmp_right")
-            if current_right not in right_opts:
-                st.session_state.cmp_right = right_opts[0]
-            st.selectbox("Right", right_opts, format_func=mode_name, key="cmp_right")
+            with st.container(key="cmp-pickers"):
+                _compare_pickers()
+        st.toggle("Daylight", key="daylight")
 
         session = st.empty()
         system = st.empty()
@@ -782,17 +774,13 @@ def _sync_mode(key):
         st.session_state.mode = picked
 
 
-def _render_composer(where, compare_on, left_mode, right_mode, model, conn, generating=False):
+def _render_composer(where, compare_on, compare_line, conn, generating=False):
     with st.container(key=f"composer-{where}"):
         typed = st.chat_input("Ask about Linux or the lab", key=f"chat-{where}")
         conn_col, ctl_col = st.columns([1, 1], gap="small", vertical_alignment="center")
         conn_col.markdown(composer_note_html(conn), unsafe_allow_html=True)
         if compare_on:
-            ctl_col.markdown(
-                f'<p class="composer-cmp"><b>{escape(model)}</b> {escape(mode_name(left_mode))}'
-                f" vs {escape(mode_name(right_mode))}</p>",
-                unsafe_allow_html=True,
-            )
+            ctl_col.markdown(compare_line, unsafe_allow_html=True)
         else:
             key = f"mode-{where}"
             modes = mode_choices()
@@ -884,11 +872,12 @@ def _answer_record(
     *,
     model_key="base",
     context=None,
+    tag="",
 ):
     keep = slot is not None
     slot = slot if keep else st.empty()
     label = thinking_label(mode)
-    loader = running_card_html(mode, label) if panel else thinking_html(label)
+    loader = running_card_html(mode, label, tag) if panel else thinking_html(label)
     keep_alive = keep_alive_setting()
     git_sha = _session_git_commit()
     model_info = _model_info(model)
@@ -963,13 +952,14 @@ def _run_compare(
         base_model=model,
         distilled_model=DISTILLED_MODEL,
     )
+    left_tag, right_tag = (left_model, right_model) if left_model != right_model else ("", "")
     message_index = len(st.session_state.messages)
     rec_l = rec_r = None
     with st.container(key="cmp"):
         col_l, col_r = st.columns(2, gap="medium")
         wait = col_r.empty()
         wait.markdown(
-            waiting_html(right_mode, mode_name(left_mode)),
+            waiting_html(right_mode, "the left answer", right_tag),
             unsafe_allow_html=True,
         )
         with col_l:
@@ -982,9 +972,10 @@ def _run_compare(
                 panel=True,
                 model_key=left_model_key,
                 context=context,
+                tag=left_tag,
             )
             if rec_l is not None:
-                _render_card(rec_l, key=f"answer-h{message_index}-l", align_slots=True)
+                _render_card(rec_l, key=f"answer-h{message_index}-l", align_slots=True, model=left_tag)
         if st.session_state.get("last_cancelled") is True:
             wait.empty()
             return rec_l, rec_r
@@ -999,9 +990,10 @@ def _run_compare(
                 panel=True,
                 model_key=right_model_key,
                 context=context,
+                tag=right_tag,
             )
             if rec_r is not None:
-                _render_card(rec_r, key=f"answer-h{message_index}-r", align_slots=True)
+                _render_card(rec_r, key=f"answer-h{message_index}-r", align_slots=True, model=right_tag)
     return rec_l, rec_r
 
 
@@ -1015,14 +1007,15 @@ def _replay_message(msg, index, compact_compare=False):
         if compact_compare and left and right:
             st.markdown(compare_compact_html(left, right), unsafe_allow_html=True)
             return
+        left_tag, right_tag = compare_model_tags(left, right)
         with st.container(key=f"cmp-hist-{index}"):
             col_l, col_r = st.columns(2, gap="medium")
             with col_l:
                 if left:
-                    _render_card(left, key=f"answer-h{index}-l", align_slots=True)
+                    _render_card(left, key=f"answer-h{index}-l", align_slots=True, model=left_tag)
             with col_r:
                 if right:
-                    _render_card(right, key=f"answer-h{index}-r", align_slots=True)
+                    _render_card(right, key=f"answer-h{index}-r", align_slots=True, model=right_tag)
         return
     rec = msg.get("record")
     if rec:
@@ -1034,12 +1027,12 @@ def _replay_message(msg, index, compact_compare=False):
     st.markdown(msg.get("content") or "")
 
 
-def _render_card(record, key, align_slots=False, slot=None):
+def _render_card(record, key, align_slots=False, slot=None, model=""):
     mode = record.get("mode") or ""
     rag = uses_rag(mode)
     abstained = bool(record.get("abstained"))
     with (slot.container(key=key) if slot is not None else st.container(key=key)):
-        st.markdown(card_head_html(mode), unsafe_allow_html=True)
+        st.markdown(card_head_html(mode, model), unsafe_allow_html=True)
         if abstained:
             st.markdown(idk_card_html(record), unsafe_allow_html=True)
         elif mode in ("cot", "full"):

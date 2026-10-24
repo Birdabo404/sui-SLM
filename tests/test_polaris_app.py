@@ -26,6 +26,9 @@ except ImportError:
 APP = str(ROOT / "app" / "app.py")
 
 
+HIT = {"source": "tldr", "title": "tar", "path": "tldr/tar.md", "dense": 0.7, "rrf": 0.03, "bm25": 7.0, "text": "tar"}
+
+
 def _fake_answer(calls, extra=None):
     def answer(question, mode, model, retriever=None, chat_fn=None, **kw):
         calls.append({"question": question, "mode": mode, "retriever": retriever})
@@ -33,12 +36,13 @@ def _fake_answer(calls, extra=None):
             extra.append({"model": model, "model_key": kw.get("model_key"), "context": kw.get("context")})
         return {
             "text": "Use `tar -xzf file.tar.gz`.",
-            "hits": [],
+            "hits": [dict(HIT)] if retriever is not None else [],
             "weak": False,
             "latency_s": 1.5,
             "config": "base",
             "mode": mode,
             "model": model,
+            "model_key": kw.get("model_key", "base"),
             "question": question,
             "threshold": 0.3,
             "k": 5,
@@ -56,6 +60,14 @@ def _fake_answer(calls, extra=None):
         }
 
     return answer
+
+
+class _Retriever:
+    def __init__(self, index_dir):
+        self.index_dir = index_dir
+
+    def retrieve(self, query, k=5, tldr_lane=True):
+        return [dict(HIT)]
 
 
 class PolarisRunLoopTests(unittest.TestCase):
@@ -307,6 +319,57 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertIn("Couldn&#x27;t open chat history in", html)
         self.assertIsNone(self.at.session_state["chat_id"])
         self.assertEqual(self._rows(), [])
+
+    # ---------- compare ----------
+
+    def test_compare_starts_off_with_one_picker_per_side(self):
+        self.at.run()
+        self.assertFalse(self.at.toggle(key="compare").value)
+        self.assertEqual(self.at.toggle(key="compare").label, "Compare two configs")
+        self.assertNotIn("cmp-left-config", [s.key for s in self.at.selectbox])
+
+        self.at.toggle(key="compare").set_value(True).run()
+        left, right = self.at.selectbox(key="cmp-left-config"), self.at.selectbox(key="cmp-right-config")
+        self.assertEqual(left.options, ["BASE", "+CoT", "+RAG", "+RAG+CoT"])
+        self.assertEqual((left.value, right.value), ("base", "base+RAG+CoT"))
+        self.assertNotIn("BASE", right.options)
+        self.assertIn('<span class="m">qwen3.5:2b</span> <b>BASE</b><span class="vs">vs</span><b>+RAG+CoT</b>', self._html())
+
+        right.set_value("base+CoT").run()
+        self.assertEqual(self.at.session_state["cmp_right"], "cot")
+        self._ask("extract a .tar.gz file", "landing")
+        self.assertEqual([c["mode"] for c in self.calls], ["base", "cot"])
+        self.assertNotIn('class="model"', self._html())
+        # Still the same picks on the next run, so the browser never falls back to a default.
+        self.at.run()
+        self.assertEqual(self.at.selectbox(key="cmp-right-config").value, "base+CoT")
+
+    def test_compare_across_models_names_each_side(self):
+        rag = MagicMock(HybridRetriever=_Retriever)
+        with patch("app.engine.DISTILLED_MODEL", "student:latest"), patch("app.engine.index_ok", return_value=True), \
+                patch.dict(sys.modules, {"rag.query_hybrid": rag}):
+            self.at.run()
+            self.at.toggle(key="compare").set_value(True).run()
+            left, right = self.at.selectbox(key="cmp-left-config"), self.at.selectbox(key="cmp-right-config")
+            self.assertEqual(left.options[-1], "distilled+RAG+CoT")
+            self.assertEqual((left.value, right.value), ("base+RAG+CoT", "distilled+RAG+CoT"))
+            self._ask("extract a .tar.gz file", "landing")
+        self.assertFalse(self.at.exception)
+        self.assertEqual(
+            [(s["model"], s["model_key"]) for s in self.seen],
+            [("qwen3.5:2b", "base"), ("student:latest", "distilled")],
+        )
+        html = self._html()
+        self.assertIn('<span class="mode">+RAG+CoT</span><span class="model">qwen3.5:2b</span>', html)
+        self.assertIn('<span class="mode">+RAG+CoT</span><span class="model">student:latest</span>', html)
+        self.assertIn(
+            '<span class="m">qwen3.5:2b</span> <b>+RAG+CoT</b><span class="vs">vs</span>'
+            '<span class="m">student:latest</span> <b>+RAG+CoT</b>',
+            html,
+        )
+        (chat,) = self.store.list_chats()
+        left_rec, right_rec = self.store.load_chat(chat.chat_id).messages[1]["compare"]
+        self.assertEqual((left_rec["model"], right_rec["model"]), ("qwen3.5:2b", "student:latest"))
 
 
 if __name__ == "__main__":

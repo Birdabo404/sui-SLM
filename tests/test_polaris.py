@@ -102,6 +102,9 @@ from app.polaris import (
     DELETE_ASK,
     HISTORY_EMPTY,
     answer_stats_html,
+    compare_configs,
+    compare_model_tags,
+    compare_summary_html,
     history_error_text,
     history_note_html,
     plain_label,
@@ -441,8 +444,9 @@ class CompareTests(unittest.TestCase):
                 "threshold": 0.3,
             }
 
-        def render(rec, key, align_slots=False):
+        def render(rec, key, align_slots=False, model=""):
             events.append(("render", rec["mode"], key))
+            events.append(("tag", key, model))
 
         with patch.object(app_mod.st, "container", return_value=Box()), patch.object(
             app_mod.st, "columns", return_value=(Col(), Col())
@@ -472,6 +476,9 @@ class CompareTests(unittest.TestCase):
         )
         self.assertIn(("render", "base", "answer-h1-l"), events)
         self.assertIn(("render", "full", "answer-h1-r"), events)
+        # Different models on each side, so both heads name theirs.
+        self.assertIn(("tag", "answer-h1-l", "qwen3.5:2b"), events)
+        self.assertIn(("tag", "answer-h1-r", "student:latest"), events)
 
 
 class HtmlTests(unittest.TestCase):
@@ -909,6 +916,62 @@ class AnswerStatsTests(unittest.TestCase):
         rule = css.split(".stat b{", 1)[1].split("}", 1)[0]
         self.assertIn("font-variant-numeric:tabular-nums", rule)
         self.assertIn(".sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)", css)
+
+
+class CompareLabelTests(unittest.TestCase):
+    def test_card_head_names_a_model_only_when_asked(self):
+        self.assertEqual(
+            card_head_html("full"),
+            '<div class="card-head"><span class="mode">+RAG+CoT</span>'
+            '<span class="sub">Retrieved lab docs, step-by-step prompt</span></div>',
+        )
+        tagged = card_head_html("full", "student<1>")
+        self.assertIn('<span class="mode">+RAG+CoT</span><span class="model">student&lt;1&gt;</span>', tagged)
+        self.assertIn('<span class="model">qwen3.5:2b</span>', running_card_html("full", "x", "qwen3.5:2b"))
+        self.assertIn('<span class="model">student:latest</span>', waiting_html("full", "the left answer", "student:latest"))
+        self.assertIn("Starts when the left answer finishes", waiting_html("full", "the left answer"))
+
+    def test_model_tags_only_when_the_sides_differ(self):
+        base = {"mode": "full", "model": "qwen3.5:2b", "answer": "a"}
+        student = {"mode": "full", "model": "student:latest", "answer": "b"}
+        self.assertEqual(compare_model_tags(base, student), ("qwen3.5:2b", "student:latest"))
+        self.assertEqual(compare_model_tags(base, {**base, "mode": "base"}), ("", ""))
+        self.assertEqual(compare_model_tags(base, None), ("", ""))
+
+    def test_compact_compare_rows_carry_models_and_stats(self):
+        left = {"mode": "full", "model": "qwen3.5:2b", "answer": "Use tar.", "latency_s": 3.0, "tok_s": 18.3}
+        right = {"mode": "full", "model": "student:latest", "answer": "Use tar too.", "latency_s": 2.1, "tok_s": 26.4}
+        html = compare_compact_html(left, right)
+        self.assertEqual(html.count('<div class="cmp-top">'), 2)
+        self.assertIn('<span class="model">qwen3.5:2b</span>', html)
+        self.assertIn('<span class="model">student:latest</span>', html)
+        self.assertIn("<b>26.4</b> tok/s", html)
+        same = compare_compact_html({**left, "mode": "base"}, left)
+        self.assertNotIn('class="model"', same)
+
+    def test_composer_line_names_the_model_once_or_per_side(self):
+        self.assertEqual(
+            compare_summary_html("qwen3.5:2b", "base", "qwen3.5:2b", "full"),
+            '<p class="composer-cmp"><span class="m">qwen3.5:2b</span> <b>BASE</b>'
+            '<span class="vs">vs</span><b>+RAG+CoT</b></p>',
+        )
+        self.assertEqual(
+            compare_summary_html("qwen3.5:2b", "full", "student:latest", "full"),
+            '<p class="composer-cmp"><span class="m">qwen3.5:2b</span> <b>+RAG+CoT</b><span class="vs">vs</span>'
+            '<span class="m">student:latest</span> <b>+RAG+CoT</b></p>',
+        )
+
+    def test_compare_pickers_offer_the_thesis_configs(self):
+        self.assertEqual(
+            compare_configs(""),
+            {"base": ("base", "base"), "base+CoT": ("base", "cot"), "base+RAG": ("base", "rag"),
+             "base+RAG+CoT": ("base", "full")},
+        )
+        with_student = compare_configs("student:latest")
+        self.assertEqual(list(with_student)[-1], "distilled+RAG+CoT")
+        self.assertEqual(with_student["distilled+RAG+CoT"], ("distilled", "full"))
+        for cid, (model_key, mode) in with_student.items():
+            self.assertEqual(config_id(model_key, mode), cid)
 
 
 class HistoryHelperTests(unittest.TestCase):
