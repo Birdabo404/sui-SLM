@@ -365,9 +365,15 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(-
 .retr.ok .val b{color:var(--c-ok)}
 .retr.off{display:block}
 
-.metrics{display:flex;flex-wrap:wrap;gap:var(--s-1) var(--s-4);padding-top:var(--s-3);margin-top:var(--s-1);border-top:1px solid var(--c-line);
+.metrics{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-1) var(--s-4);padding-top:var(--s-3);margin-top:var(--s-1);border-top:1px solid var(--c-line);
   font:400 var(--fs-cap)/var(--lh-ui) var(--f-sans);color:var(--c-text-3)}
 .metrics b{font-weight:600;color:var(--c-text-2);font-variant-numeric:tabular-nums}
+/* response time and tok/s: the two numbers people compare, so they sit first, as chips */
+.stats{display:inline-flex;flex:none;gap:var(--s-1)}
+.stat{display:inline-flex;align-items:baseline;gap:3px;height:22px;padding:0 var(--s-2);border-radius:var(--r-pill);background:var(--c-raised);
+  font:400 var(--fs-cap)/22px var(--f-sans);color:var(--c-text-3);white-space:nowrap;cursor:default}
+.stat b{font-weight:600;color:var(--c-text);font-variant-numeric:tabular-nums}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 
 .idk-body{display:grid;grid-template-columns:24px 1fr;column-gap:var(--s-3);row-gap:var(--s-1)}
 .idk-star{grid-column:1;grid-row:1;padding-top:2px}
