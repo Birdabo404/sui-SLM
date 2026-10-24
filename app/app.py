@@ -59,6 +59,7 @@ from app.polaris import (
     mode_menu_css,
     mode_name,
     model_key_choices,
+    model_mode_choices,
     network_online,
     pair_compare_config_modes,
     pair_compare_model_keys,
@@ -477,6 +478,11 @@ def _render_sidebar(model, index_dir, frozen, up, online, chat=False):
         st.toggle("Daylight", key="daylight")
         if st.session_state.get("compare"):
             model_keys = model_key_choices(DISTILLED_MODEL)
+            left_model_key, right_model_key = pair_compare_model_keys(
+                st.session_state.get("cmp_left_model"),
+                st.session_state.get("cmp_right_model"),
+                DISTILLED_MODEL,
+            )
             if len(model_keys) > 1:
                 st.selectbox(
                     "Left model",
@@ -490,18 +496,28 @@ def _render_sidebar(model, index_dir, frozen, up, online, chat=False):
                     format_func=lambda key: model_name_for(key),
                     key="cmp_right_model",
                 )
-            modes = mode_choices()
-            st.selectbox("Left", modes, format_func=mode_name, key="cmp_left")
-            same_model = (
-                st.session_state.get("cmp_left_model")
-                == st.session_state.get("cmp_right_model")
+                left_model_key = st.session_state.get("cmp_left_model")
+                right_model_key = st.session_state.get("cmp_right_model")
+            left_mode, right_mode = pair_compare_config_modes(
+                st.session_state.get("cmp_left"),
+                st.session_state.get("cmp_right"),
+                left_model_key,
+                right_model_key,
             )
+            st.session_state.cmp_left = left_mode
+            st.session_state.cmp_right = right_mode
+            left_modes = model_mode_choices(left_model_key)
+            right_modes = model_mode_choices(right_model_key)
+            st.selectbox("Left", left_modes, format_func=mode_name, key="cmp_left")
+            same_model = left_model_key == right_model_key
             right_opts = [
-                m for m in modes
+                m for m in right_modes
                 if not same_model or m != st.session_state.get("cmp_left")
             ]
+            if not right_opts:
+                right_opts = right_modes
             current_right = st.session_state.get("cmp_right")
-            if current_right not in right_opts and right_opts:
+            if current_right not in right_opts:
                 st.session_state.cmp_right = right_opts[0]
             st.selectbox("Right", right_opts, format_func=mode_name, key="cmp_right")
 

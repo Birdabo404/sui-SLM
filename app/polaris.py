@@ -27,6 +27,7 @@ from app.engine import (
     MODE_LABELS,
     MODE_SUBS,
     OLLAMA_HOST,
+    THESIS_CONFIGS,
     mode_choices,
     ollama_chat_body,
     parse_ollama_chat_response,
@@ -491,6 +492,17 @@ def model_key_choices(distilled_model):
     return ("base",)
 
 
+def model_mode_choices(model_key):
+    modes = tuple(
+        mode
+        for config_model_key, mode in THESIS_CONFIGS
+        if config_model_key == model_key and mode in MODE_LABELS
+    )
+    if not modes:
+        raise ValueError(f"unknown model key: {model_key}")
+    return modes
+
+
 def default_compare_model_keys(distilled_model):
     choices = model_key_choices(distilled_model)
     if "distilled" in choices:
@@ -509,13 +521,14 @@ def pair_compare_model_keys(left, right, distilled_model):
 
 
 def pair_compare_config_modes(left, right, left_model_key, right_model_key):
-    if left_model_key == right_model_key:
-        return pair_compare_modes(left, right)
-    modes = mode_choices()
-    if left not in modes:
-        left = "full" if "full" in modes else modes[0]
-    if right not in modes:
-        right = "full" if "full" in modes else modes[-1]
+    left_modes = model_mode_choices(left_model_key)
+    right_modes = model_mode_choices(right_model_key)
+    if left not in left_modes:
+        left = left_modes[0]
+    if right not in right_modes:
+        right = right_modes[0]
+    if left_model_key == right_model_key and right == left and len(right_modes) > 1:
+        right = next(mode for mode in right_modes if mode != left)
     return left, right
 
 

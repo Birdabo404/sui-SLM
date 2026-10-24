@@ -75,6 +75,7 @@ from app.polaris import (
     compare_compact_html,
     default_compare_model_keys,
     model_key_choices,
+    model_mode_choices,
     mode_from_name,
     mode_name,
     pair_compare_config_modes,
@@ -356,6 +357,18 @@ class CompareTests(unittest.TestCase):
         )
         self.assertEqual(
             pair_compare_config_modes("full", "full", "base", "distilled"),
+            ("full", "full"),
+        )
+
+    def test_distilled_exposes_only_full_mode(self):
+        self.assertEqual(model_mode_choices("base"), ("base", "cot", "rag", "full"))
+        self.assertEqual(model_mode_choices("distilled"), ("full",))
+        self.assertEqual(
+            pair_compare_config_modes("base", "rag", "base", "distilled"),
+            ("base", "full"),
+        )
+        self.assertEqual(
+            pair_compare_config_modes("base", "cot", "distilled", "distilled"),
             ("full", "full"),
         )
 
