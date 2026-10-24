@@ -42,6 +42,7 @@ from app.polaris import (
     avg_latency,
     best_match_html,
     build_run_record,
+    cancelled_side_html,
     card_head_html,
     compare_compact_html,
     compare_configs,
@@ -437,7 +438,7 @@ def _answer_turn(
 
     if compare_on:
         slot.empty()
-        recs, failures = _run_compare(
+        recs, _ = _run_compare(
             question,
             left_mode,
             right_mode,
@@ -448,17 +449,7 @@ def _answer_turn(
             right_model_key=right_model_key,
             context=context,
         )
-        if recs[0] is None and recs[1] is None:
-            if st.session_state.pop("last_cancelled", False):
-                return False
-            error = next((failure["error"] for failure in failures if failure), "")
-            st.session_state.messages.append({"role": "assistant", "error": error})
-            return False
-        message = {"role": "assistant", "compare": recs}
-        if any(failures):
-            message["compare_errors"] = failures
-        st.session_state.messages.append(message)
-        return True
+        return any(recs)
 
     rec = _answer_record(
         question,
@@ -939,68 +930,106 @@ def _run_compare(
         distilled_model=DISTILLED_MODEL,
     )
     left_tag, right_tag = (left_model, right_model) if left_model != right_model else ("", "")
-    message_index = len(st.session_state.messages)
-    rec_l = rec_r = fail_l = fail_r = None
-    with st.container(key="cmp"):
-        col_l, col_r = st.columns(2, gap="medium")
-        wait = col_r.empty()
-        wait.markdown(
-            waiting_html(right_mode, "the left answer", right_tag),
-            unsafe_allow_html=True,
-        )
-        with col_l:
-            rec_l = _answer_record(
-                question,
-                left_mode,
-                left_model,
-                retriever,
-                index_dir,
-                panel=True,
-                model_key=left_model_key,
-                context=context,
-                tag=left_tag,
+    messages = st.session_state.messages
+    message_index = len(messages)
+    message = {"role": "assistant"}
+    recs = [None, None]
+    # A side counts as cancelled until it answers or fails, so a click that ends this run mid-compare (Stop, a new
+    # question) leaves the side that was running, and one not started yet, cancelled.
+    unanswered = [
+        {"mode": left_mode, "model": left_model, "state": "cancelled"},
+        {"mode": right_mode, "model": right_model, "state": "cancelled"},
+    ]
+    try:
+        with st.container(key="cmp"):
+            col_l, col_r = st.columns(2, gap="medium")
+            wait = col_r.empty()
+            wait.markdown(
+                waiting_html(right_mode, "the left answer", right_tag),
+                unsafe_allow_html=True,
             )
-            if rec_l is not None:
-                _render_card(rec_l, key=f"answer-h{message_index}-l", align_slots=True, model=left_tag)
-            else:
-                fail_l = _side_failure(left_mode, left_model)
-                if fail_l:
-                    _render_failed_side(fail_l, key=f"answer-h{message_index}-l", model=left_tag)
-        if st.session_state.get("last_cancelled") is True:
+            with col_l:
+                recs[0] = _answer_record(
+                    question,
+                    left_mode,
+                    left_model,
+                    retriever,
+                    index_dir,
+                    panel=True,
+                    model_key=left_model_key,
+                    context=context,
+                    tag=left_tag,
+                )
+                if recs[0] is not None:
+                    unanswered[0] = None
+                    _keep_compare(messages, message, recs, unanswered)
+                    _render_card(recs[0], key=f"answer-h{message_index}-l", align_slots=True, model=left_tag)
+                else:
+                    unanswered[0] = _side_outcome(left_mode, left_model)
+                    _render_unanswered_side(unanswered[0], key=f"answer-h{message_index}-l", model=left_tag)
             wait.empty()
-            return (rec_l, rec_r), (fail_l, fail_r)
-        wait.empty()
-        with col_r:
-            rec_r = _answer_record(
-                question,
-                right_mode,
-                right_model,
-                retriever,
-                index_dir,
-                panel=True,
-                model_key=right_model_key,
-                context=context,
-                tag=right_tag,
-            )
-            if rec_r is not None:
-                _render_card(rec_r, key=f"answer-h{message_index}-r", align_slots=True, model=right_tag)
-            else:
-                fail_r = _side_failure(right_mode, right_model)
-                if fail_r:
-                    _render_failed_side(fail_r, key=f"answer-h{message_index}-r", model=right_tag)
-    return (rec_l, rec_r), (fail_l, fail_r)
+            if unanswered[0] and unanswered[0]["state"] == "cancelled":
+                with col_r:
+                    _render_unanswered_side(unanswered[1], key=f"answer-h{message_index}-r", model=right_tag)
+                return tuple(recs), tuple(unanswered)
+            with col_r:
+                recs[1] = _answer_record(
+                    question,
+                    right_mode,
+                    right_model,
+                    retriever,
+                    index_dir,
+                    panel=True,
+                    model_key=right_model_key,
+                    context=context,
+                    tag=right_tag,
+                )
+                if recs[1] is not None:
+                    unanswered[1] = None
+                    _keep_compare(messages, message, recs, unanswered)
+                    _render_card(recs[1], key=f"answer-h{message_index}-r", align_slots=True, model=right_tag)
+                else:
+                    unanswered[1] = _side_outcome(right_mode, right_model)
+                    _render_unanswered_side(unanswered[1], key=f"answer-h{message_index}-r", model=right_tag)
+    finally:
+        _keep_compare(messages, message, recs, unanswered)
+    return tuple(recs), tuple(unanswered)
 
 
-def _side_failure(mode, model):
-    """The error a compare side came back with, kept with its config so a replay can say which side failed."""
-    error = st.session_state.pop("last_error", None)
-    return None if error is None else {"mode": mode, "model": model, "error": error}
+def _side_outcome(mode, model):
+    """Why a compare side has no record, kept with its config so a replay can say which side it was."""
+    if st.session_state.pop("last_cancelled", False):
+        return {"mode": mode, "model": model, "state": "cancelled"}
+    return {"mode": mode, "model": model, "state": "error", "error": st.session_state.pop("last_error", "")}
 
 
-def _render_failed_side(failure, key, model=""):
+def _keep_compare(messages, message, recs, unanswered):
+    """Put a compare turn in the thread as `message`, or bring it up to date there. Makes no st call, so it still runs
+    while a click is ending this run.
+
+    Called as soon as a side answers: a click starts the next run straight away, while this one is still unwinding,
+    and that run draws the thread as it is then. With no answer on either side, the turn is kept the way a single
+    answer's would be: nothing if it was stopped, so the thread shows it as stopped, or else its error.
+    """
+    if any(recs):
+        message["compare"] = tuple(recs)
+        if any(unanswered):
+            message["compare_unanswered"] = tuple(unanswered)
+        else:
+            message.pop("compare_unanswered", None)
+        if not any(kept is message for kept in messages):
+            messages.append(message)
+    elif not any(side["state"] == "cancelled" for side in unanswered):
+        messages.append({"role": "assistant", "error": unanswered[0]["error"] or unanswered[1]["error"]})
+
+
+def _render_unanswered_side(side, key, model=""):
     with st.container(key=key):
-        st.markdown(card_head_html(failure.get("mode") or "", model), unsafe_allow_html=True)
-        st.error(failure.get("error") or "That answer failed.")
+        st.markdown(card_head_html(side.get("mode") or "", model), unsafe_allow_html=True)
+        if side.get("state") == "cancelled":
+            st.markdown(cancelled_side_html(), unsafe_allow_html=True)
+        else:
+            st.error(side.get("error") or "That answer failed.")
 
 
 def _replay_message(msg, index, compact_compare=False):
@@ -1010,23 +1039,23 @@ def _replay_message(msg, index, compact_compare=False):
         return
     if msg.get("compare"):
         left, right = msg["compare"]
-        fail_l, fail_r = msg.get("compare_errors") or (None, None)
+        miss_l, miss_r = msg.get("compare_unanswered") or (None, None)
         if compact_compare and left and right:
             st.markdown(compare_compact_html(left, right), unsafe_allow_html=True)
             return
-        left_tag, right_tag = compare_model_tags(left or fail_l, right or fail_r)
+        left_tag, right_tag = compare_model_tags(left or miss_l, right or miss_r)
         with st.container(key=f"cmp-hist-{index}"):
             col_l, col_r = st.columns(2, gap="medium")
             with col_l:
                 if left:
                     _render_card(left, key=f"answer-h{index}-l", align_slots=True, model=left_tag)
-                elif fail_l:
-                    _render_failed_side(fail_l, key=f"answer-h{index}-l", model=left_tag)
+                elif miss_l:
+                    _render_unanswered_side(miss_l, key=f"answer-h{index}-l", model=left_tag)
             with col_r:
                 if right:
                     _render_card(right, key=f"answer-h{index}-r", align_slots=True, model=right_tag)
-                elif fail_r:
-                    _render_failed_side(fail_r, key=f"answer-h{index}-r", model=right_tag)
+                elif miss_r:
+                    _render_unanswered_side(miss_r, key=f"answer-h{index}-r", model=right_tag)
         return
     rec = msg.get("record")
     if rec:
