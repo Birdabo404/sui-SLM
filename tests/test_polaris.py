@@ -84,7 +84,9 @@ from app.polaris import (
     pair_compare_model_keys,
     preview_text,
     running_card_html,
+    ENGLISH_NOTE,
     MODE_HINTS,
+    composer_note_html,
     connection_html,
     flags_html,
     mode_menu_css,
@@ -757,6 +759,14 @@ class LoaderAndNamingTests(unittest.TestCase):
         self.assertEqual(body, "animation-play-state:paused!important")
         # Only the star and the sky: the loader and the one-shot entrances must keep running.
         self.assertEqual(selector, ":root:has(.polaris-generating) :is(.band *,.sky)")
+
+    def test_english_only_note_sits_in_the_composer(self):
+        self.assertEqual(ENGLISH_NOTE, "English questions only")
+        html = composer_note_html(connection_html(False, True))
+        self.assertTrue(html.startswith('<div class="composer-conn"><span class="conn offline"'))
+        self.assertIn('<span class="composer-note">English questions only</span>', html)
+        css = style_path().read_text(encoding="utf-8")
+        self.assertIn(".composer-note{", css)
 
     def test_mode_names_round_trip(self):
         for mode in ("base", "cot", "rag", "full"):

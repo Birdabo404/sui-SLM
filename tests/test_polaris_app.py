@@ -115,6 +115,7 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertIn('<span class="mode">BASE</span><span class="sub">Plain model, no documents</span>', html)
         self.assertIn('<span class="k">Answers</span><span class="v">1</span>', html)
         self.assertIn('<span class="k">Warm-up</span><span class="v">ready</span>', html)
+        self.assertIn("English questions only", html)
 
     def test_second_question_refreshes_the_sidebar_without_duplicate_keys(self):
         self.at.run()

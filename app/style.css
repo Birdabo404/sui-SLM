@@ -173,6 +173,8 @@ html,body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;o
 .conn.offline svg{color:var(--c-ok)}
 .conn.online svg{color:var(--c-text-2)}
 .conn.down{color:var(--c-danger);background:color-mix(in oklch,var(--c-danger) 14%,transparent)}
+.composer-conn{display:flex;align-items:center;gap:var(--s-3);min-width:0}
+.composer-note{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:400 var(--fs-cap)/1.2 var(--f-sans);color:var(--c-text-3)}
 
 /* ---------- sky: an ASCII starfield behind an empty chat, one step fainter per question ---------- */
 [data-testid="stMainBlockContainer"]{position:relative;z-index:0}
@@ -240,7 +242,8 @@ html,body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;o
 
 [class*="st-key-composer-"] [data-testid="stHorizontalBlock"]{flex-wrap:nowrap;align-items:center;gap:var(--s-2);padding:0 44px 0 var(--s-1)}
 [class*="st-key-composer-"] [data-testid="stColumn"]{min-width:0}
-[class*="st-key-composer-"] [data-testid="stColumn"]:last-child{display:flex;justify-content:flex-end}
+[class*="st-key-composer-"] [data-testid="stColumn"]:first-child{flex:1 1 0;width:auto}
+[class*="st-key-composer-"] [data-testid="stColumn"]:last-child{display:flex;justify-content:flex-end;flex:0 1 auto;width:auto}
 p.composer-cmp{margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right;font:400 var(--fs-ui)/32px var(--f-sans);color:var(--c-text-3)}
 .composer-cmp b{font-weight:600;color:var(--c-text)}
 
@@ -473,6 +476,10 @@ button:focus-visible,[role="radio"]:focus-visible,summary:focus-visible,a:focus-
   .hero{--k:1.9}
   .conn span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
   .conn{padding:0 7px}
+  /* no room beside the mode picker, so the note drops to a caption under the composer */
+  [class*="st-key-composer-"]{margin-bottom:var(--s-5)}
+  [class*="st-key-composer-"] [data-testid="stColumn"]:first-child :is([data-testid="stVerticalBlock"],[data-testid="stElementContainer"]){position:static}
+  .composer-note{position:absolute;inset:calc(100% + var(--s-1)) 0 auto;text-align:center}
   .st-key-examples button p{white-space:normal}
   .q{margin-top:var(--s-7)}
 }

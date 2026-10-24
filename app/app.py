@@ -42,6 +42,7 @@ from app.polaris import (
     build_run_record,
     card_head_html,
     compare_compact_html,
+    composer_note_html,
     connection_html,
     default_compare_modes,
     default_compare_model_keys,
@@ -638,7 +639,7 @@ def _render_composer(where, compare_on, left_mode, right_mode, model, conn, gene
     with st.container(key=f"composer-{where}"):
         typed = st.chat_input("Ask about Linux or the lab", key=f"chat-{where}")
         conn_col, ctl_col = st.columns([1, 1], gap="small", vertical_alignment="center")
-        conn_col.markdown(f'<div class="composer-conn">{conn}</div>', unsafe_allow_html=True)
+        conn_col.markdown(composer_note_html(conn), unsafe_allow_html=True)
         if compare_on:
             ctl_col.markdown(
                 f'<p class="composer-cmp"><b>{escape(model)}</b> {escape(mode_name(left_mode))}'
