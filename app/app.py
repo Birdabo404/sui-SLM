@@ -589,7 +589,7 @@ def _run_compare(question, left_mode, right_mode, model, retriever, index_dir):
             rec_l = _answer_record(question, left_mode, model, retriever, index_dir, panel=True)
             if rec_l is not None:
                 _render_card(rec_l, key=f"answer-h{message_index}-l", align_slots=True)
-        if st.session_state.get("last_cancelled"):
+        if st.session_state.get("last_cancelled") is True:
             wait.empty()
             return rec_l, rec_r
         wait.empty()
