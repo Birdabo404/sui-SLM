@@ -145,6 +145,15 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertIn('<span class="k">Answers</span><span class="v">0</span>', html)
         self.assertEqual(self.at.session_state["messages"], [])
 
+    def test_a_turn_that_raises_still_clears_stop_and_releases_the_sky(self):
+        self.at.run()
+        self.flags.reset_mock()
+        with patch("app.engine.answer_question", side_effect=RuntimeError("engine failed")):
+            self.at.chat_input(key="chat-landing").set_value("extract a .tar.gz file").run()
+        self.assertIn("engine failed", self.at.exception[0].message)
+        self.assertEqual(self._generating_args(), [True, False])
+        self.assertNotIn("stop-gen", [b.key for b in self.at.button])
+
 
 if __name__ == "__main__":
     unittest.main()

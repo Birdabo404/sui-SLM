@@ -389,21 +389,24 @@ def run_polaris():
     mode = st.session_state.get("mode", "full")
     context = build_chat_context(st.session_state.messages, question)
     st.session_state.messages.append({"role": "user", "content": question})
-    with thread:
-        answered = _answer_turn(
-            question,
-            mode,
-            compare_on,
-            left_mode,
-            right_mode,
-            model,
-            index_dir,
-            left_model_key=left_model_key,
-            right_model_key=right_model_key,
-            context=context,
-        )
-    stop_slot.empty()
-    mark(generating=False)
+    try:
+        with thread:
+            answered = _answer_turn(
+                question,
+                mode,
+                compare_on,
+                left_mode,
+                right_mode,
+                model,
+                index_dir,
+                left_model_key=left_model_key,
+                right_model_key=right_model_key,
+                context=context,
+            )
+    finally:
+        # A turn that raises still takes the Stop button away and lets the sky move again.
+        stop_slot.empty()
+        mark(generating=False)
     if answered:
         refresh_sidebar()
 
