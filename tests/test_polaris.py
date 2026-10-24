@@ -99,6 +99,16 @@ from app.polaris import (
     stopped_html,
     thinking_html,
     thinking_label,
+    DELETE_ASK,
+    HISTORY_EMPTY,
+    answer_stats_html,
+    compare_configs,
+    compare_model_tags,
+    compare_summary_html,
+    history_error_text,
+    history_note_html,
+    plain_label,
+    records_in,
 )
 
 
@@ -434,15 +444,16 @@ class CompareTests(unittest.TestCase):
                 "threshold": 0.3,
             }
 
-        def render(rec, key, align_slots=False):
+        def render(rec, key, align_slots=False, model=""):
             events.append(("render", rec["mode"], key))
+            events.append(("tag", key, model))
 
         with patch.object(app_mod.st, "container", return_value=Box()), patch.object(
             app_mod.st, "columns", return_value=(Col(), Col())
         ), patch.object(app_mod, "_answer_record", side_effect=answer), patch.object(
             app_mod, "_render_card", side_effect=render
         ), patch.object(app_mod, "DISTILLED_MODEL", "student:latest"):
-            left, right = app_mod._run_compare(
+            (left, right), unanswered = app_mod._run_compare(
                 "q",
                 "base",
                 "full",
@@ -453,6 +464,7 @@ class CompareTests(unittest.TestCase):
                 right_model_key="distilled",
             )
 
+        self.assertEqual(unanswered, (None, None))
         self.assertEqual(left["mode"], "base")
         self.assertEqual(right["mode"], "full")
         left_start = ("start", "base", "qwen3.5:2b", "base")
@@ -465,6 +477,9 @@ class CompareTests(unittest.TestCase):
         )
         self.assertIn(("render", "base", "answer-h1-l"), events)
         self.assertIn(("render", "full", "answer-h1-r"), events)
+        # Different models on each side, so both heads name theirs.
+        self.assertIn(("tag", "answer-h1-l", "qwen3.5:2b"), events)
+        self.assertIn(("tag", "answer-h1-r", "student:latest"), events)
 
 
 class HtmlTests(unittest.TestCase):
@@ -856,6 +871,144 @@ class LoaderAndNamingTests(unittest.TestCase):
         html = compare_compact_html({"mode": "base", "answer": "Use `tar`."}, {"mode": "cot", "answer": text})
         self.assertNotIn("```", html)
         self.assertNotIn("Think first", html)
+
+
+class AnswerStatsTests(unittest.TestCase):
+    TIMED = {
+        "mode": "full",
+        "answer": "Use `tar -xzf`.",
+        "latency_s": 3.24,
+        "tok_s": 18.43,
+        "gen_s": 2.46,
+        "prompt_s": 0.36,
+        "load_s": 0.18,
+        "eval_count": 45,
+        "total_mb": 2520,
+        "docs": ["a"],
+        "abstained": False,
+    }
+
+    def test_time_and_speed_chips_lead_the_metrics_row(self):
+        html = metrics_html(self.TIMED)
+        self.assertTrue(html.startswith('<div class="metrics"><span class="stats">'))
+        self.assertIn(
+            '<span class="stat" title="Question to answer: model load 0.18 s, prompt 0.36 s, generation 2.46 s">'
+            '<span class="sr">Response time </span><b>3.2</b> s</span>',
+            html,
+        )
+        self.assertIn(
+            '<span class="stat" title="45 tokens in 2.46 s of generation">'
+            '<span class="sr">Speed </span><b>18.4</b> tok/s</span>',
+            html,
+        )
+        self.assertLess(html.index("tok/s"), html.index("RAM total"))
+
+    def test_speed_chip_needs_generation_timing(self):
+        for missing in ({"tok_s": None}, {"tok_s": ""}):
+            html = metrics_html({**self.TIMED, **missing, "gen_s": None, "prompt_s": None, "load_s": None})
+            self.assertIn("<b>3.2</b> s", html)
+            self.assertNotIn("tok/s", html)
+            self.assertIn('title="Question to answer"', html)
+        # An abstained answer never reaches the model, so only its time shows.
+        self.assertEqual(answer_stats_html({"latency_s": 0.4}).count('class="stat"'), 1)
+
+    def test_stat_numbers_keep_their_width(self):
+        css = style_path().read_text(encoding="utf-8")
+        rule = css.split(".stat b{", 1)[1].split("}", 1)[0]
+        self.assertIn("font-variant-numeric:tabular-nums", rule)
+        self.assertIn(".sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)", css)
+
+
+class CompareLabelTests(unittest.TestCase):
+    def test_card_head_names_a_model_only_when_asked(self):
+        self.assertEqual(
+            card_head_html("full"),
+            '<div class="card-head"><span class="mode">+RAG+CoT</span>'
+            '<span class="sub">Retrieved lab docs, step-by-step prompt</span></div>',
+        )
+        tagged = card_head_html("full", "student<1>")
+        self.assertIn('<span class="mode">+RAG+CoT</span><span class="model">student&lt;1&gt;</span>', tagged)
+        self.assertIn('<span class="model">qwen3.5:2b</span>', running_card_html("full", "x", "qwen3.5:2b"))
+        self.assertIn('<span class="model">student:latest</span>', waiting_html("full", "the left answer", "student:latest"))
+        self.assertIn("Starts when the left answer finishes", waiting_html("full", "the left answer"))
+
+    def test_model_tags_only_when_the_sides_differ(self):
+        base = {"mode": "full", "model": "qwen3.5:2b", "answer": "a"}
+        student = {"mode": "full", "model": "student:latest", "answer": "b"}
+        self.assertEqual(compare_model_tags(base, student), ("qwen3.5:2b", "student:latest"))
+        self.assertEqual(compare_model_tags(base, {**base, "mode": "base"}), ("", ""))
+        self.assertEqual(compare_model_tags(base, None), ("", ""))
+
+    def test_compact_compare_rows_carry_models_and_stats(self):
+        left = {"mode": "full", "model": "qwen3.5:2b", "answer": "Use tar.", "latency_s": 3.0, "tok_s": 18.3}
+        right = {"mode": "full", "model": "student:latest", "answer": "Use tar too.", "latency_s": 2.1, "tok_s": 26.4}
+        html = compare_compact_html(left, right)
+        self.assertEqual(html.count('<div class="cmp-top">'), 2)
+        self.assertIn('<span class="model">qwen3.5:2b</span>', html)
+        self.assertIn('<span class="model">student:latest</span>', html)
+        self.assertIn("<b>26.4</b> tok/s", html)
+        same = compare_compact_html({**left, "mode": "base"}, left)
+        self.assertNotIn('class="model"', same)
+
+    def test_composer_line_names_the_model_once_or_per_side(self):
+        self.assertEqual(
+            compare_summary_html("qwen3.5:2b", "base", "qwen3.5:2b", "full"),
+            '<p class="composer-cmp"><span class="m">qwen3.5:2b</span> <b>BASE</b>'
+            '<span class="vs">vs</span><b>+RAG+CoT</b></p>',
+        )
+        self.assertEqual(
+            compare_summary_html("qwen3.5:2b", "full", "student:latest", "full"),
+            '<p class="composer-cmp"><span class="m">qwen3.5:2b</span> <b>+RAG+CoT</b><span class="vs">vs</span>'
+            '<span class="m">student:latest</span> <b>+RAG+CoT</b></p>',
+        )
+
+    def test_compare_pickers_offer_the_thesis_configs(self):
+        self.assertEqual(
+            compare_configs(""),
+            {"base": ("base", "base"), "base+CoT": ("base", "cot"), "base+RAG": ("base", "rag"),
+             "base+RAG+CoT": ("base", "full")},
+        )
+        with_student = compare_configs("student:latest")
+        self.assertEqual(list(with_student)[-1], "distilled+RAG+CoT")
+        self.assertEqual(with_student["distilled+RAG+CoT"], ("distilled", "full"))
+        for cid, (model_key, mode) in with_student.items():
+            self.assertEqual(config_id(model_key, mode), cid)
+
+
+class HistoryHelperTests(unittest.TestCase):
+    def test_saved_question_shows_as_typed(self):
+        label = plain_label("what is  $HOME vs *.tar.gz?\n`ls -a` [docs](x) :smile: #1")
+        self.assertEqual(
+            label,
+            "what is \\$HOME vs \\*\\.tar\\.gz? \\`ls \\-a\\` \\[docs\\]\\(x\\) :\u200bsmile:\u200b \\#1",
+        )
+        self.assertNotIn(":smile:", label)
+
+    def test_records_come_back_in_answer_order(self):
+        a, b, c = {"mode": "base"}, {"mode": "cot"}, {"mode": "full"}
+        messages = [
+            {"role": "user", "content": "q1"},
+            {"role": "assistant", "record": a},
+            {"role": "user", "content": "q2"},
+            {"role": "assistant", "compare": [b, None]},
+            {"role": "user", "content": "q3"},
+            {"role": "assistant", "error": "Could not reach Ollama"},
+            {"role": "user", "content": "q4"},
+            {"role": "assistant", "compare": [c, a]},
+        ]
+        self.assertEqual(records_in(messages), [a, b, c, a])
+
+    def test_history_notes_and_errors(self):
+        self.assertEqual(history_note_html(HISTORY_EMPTY), '<p class="side-note">Chats you start are saved on this machine.</p>')
+        error = history_error_text(Path.home() / ".local" / "share" / "sui-slm")
+        self.assertEqual(
+            error,
+            "Couldn't open chat history in ~/.local/share/sui-slm, so chats aren't being saved. "
+            "Check that the folder is writable.",
+        )
+        self.assertIn('class="side-note err"', history_note_html(error, error=True))
+        self.assertIn("/srv/x", history_error_text("/srv/x"))
+        self.assertEqual(DELETE_ASK, "Delete this chat? This can't be undone.")
 
 
 class _Interrupted(Exception):
