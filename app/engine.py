@@ -24,6 +24,7 @@ LOG_CSV = Path(os.environ.get("LOG_CSV", str(ROOT / "logs" / "answers.csv")))
 _FROZEN = load_frozen()
 K = _FROZEN["k"]
 EVAL_SEED = 42
+NUM_CTX = 4096
 # MiniLM cosine: abstain if none of the top-k fused hits reach this.
 # RRF is a rank score, not relevance (any rank-0 hit scores 1/60).
 # 0.30 and k=5 in shared/frozen.json are provisional defaults, not a
@@ -198,7 +199,7 @@ def keep_alive_setting(environ=None):
 
 
 def ollama_chat_body(messages, model, temperature=0.2, seed=None, keep_alive=None):
-    options = {"temperature": temperature, "num_ctx": 4096}
+    options = {"temperature": temperature, "num_ctx": NUM_CTX}
     if seed is not None:
         options["seed"] = seed
     body = {
@@ -456,6 +457,7 @@ def answer_question(
     keep_alive=None,
     git_sha=None,
     model_info=None,
+    context=None,
 ):
     k = K if k is None else k
     threshold = WEAK_DENSE if threshold is None else threshold
@@ -487,14 +489,21 @@ def answer_question(
         if uses_rag(mode):
             if retriever is None:
                 raise RuntimeError("RAG index is not loaded")
-            hits = retriever.retrieve(question, k=k, tldr_lane=True)
+            retrieval_query = question if context is None else context.retrieval_query
+            hits = retriever.retrieve(retrieval_query, k=k, tldr_lane=True)
             weak = is_weak(hits, threshold=threshold)
             if weak:
                 result = OllamaChatResult(text=ABSTAIN)
             else:
-                result = _chat_result(chat_fn(build_messages(question, hits, mode), model))
+                messages = build_messages(question, hits, mode)
+                if context is not None:
+                    messages = context.apply(messages)
+                result = _chat_result(chat_fn(messages, model))
         else:
-            result = _chat_result(chat_fn(build_messages(question, hits, mode), model))
+            messages = build_messages(question, hits, mode)
+            if context is not None:
+                messages = context.apply(messages)
+            result = _chat_result(chat_fn(messages, model))
     finally:
         ram = sampler.stop()
     text = result.text
