@@ -8,6 +8,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+import requests
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
@@ -447,6 +449,49 @@ class PolarisRunLoopTests(unittest.TestCase):
         (chat,) = self.store.list_chats()
         left_rec, right_rec = self.store.load_chat(chat.chat_id).messages[1]["compare"]
         self.assertEqual((left_rec["model"], right_rec["model"]), ("qwen3.5:2b", "student:latest"))
+
+    def test_a_compare_side_that_fails_shows_its_error_live_on_rerun_and_from_history(self):
+        answer = _fake_answer(self.calls)
+
+        def left_fails(question, mode, model, **kw):
+            if mode == "base":
+                raise requests.ConnectionError("connection refused")
+            return answer(question, mode, model, **kw)
+
+        self.at.run()
+        self.at.toggle(key="compare").set_value(True).run()
+        self.at.selectbox(key="cmp-right-config").set_value("base+CoT").run()
+        with patch("app.engine.answer_question", side_effect=left_fails):
+            self._ask("extract a .tar.gz file", "landing")
+        self.assertEqual([c["mode"] for c in self.calls], ["cot"])
+        self.assertNotIn("last_error", self.at.session_state)
+
+        def shown():
+            (error,) = self.at.error
+            self.assertIn("Could not reach Ollama", error.value)
+            self.assertIn("connection refused", error.value)
+            html = self._html()
+            # The failed side keeps its config head, so it's clear which one failed.
+            self.assertIn('<span class="mode">BASE</span>', html)
+            self.assertIn('<span class="mode">+CoT</span>', html)
+            self.assertIn("Use `tar -xzf file.tar.gz`.", [m.value for m in self.at.markdown])
+
+        shown()
+        cid = self._chat_id()
+        (reply,) = self.store.load_chat(cid).messages[1:]
+        self.assertIsNone(reply["compare"][0])
+        self.assertEqual(reply["compare"][1]["mode"], "cot")
+        failed, ok = reply["compare_errors"]
+        self.assertEqual((failed["mode"], failed["model"], ok), ("base", "qwen3.5:2b", None))
+        self.assertIn("connection refused", failed["error"])
+
+        self.at.run()
+        shown()
+        self.at.button(key="new-chat").click().run()
+        self.assertEqual(self.at.error, [])
+        self.at.button(key=f"hist-open-{cid}").click().run()
+        self.assertFalse(self.at.exception)
+        shown()
 
 
 if __name__ == "__main__":

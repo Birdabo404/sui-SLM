@@ -446,7 +446,7 @@ def _answer_turn(
 
     if compare_on:
         slot.empty()
-        recs = _run_compare(
+        recs, failures = _run_compare(
             question,
             left_mode,
             right_mode,
@@ -460,9 +460,13 @@ def _answer_turn(
         if recs[0] is None and recs[1] is None:
             if st.session_state.pop("last_cancelled", False):
                 return False
-            st.session_state.messages.append({"role": "assistant", "error": st.session_state.pop("last_error", "")})
+            error = next((failure["error"] for failure in failures if failure), "")
+            st.session_state.messages.append({"role": "assistant", "error": error})
             return False
-        st.session_state.messages.append({"role": "assistant", "compare": recs})
+        message = {"role": "assistant", "compare": recs}
+        if any(failures):
+            message["compare_errors"] = failures
+        st.session_state.messages.append(message)
         return True
 
     rec = _answer_record(
@@ -903,7 +907,6 @@ def _answer_record(
             slot.error(message)
         else:
             slot.empty()
-            st.error(message)
         return None
     if not keep:
         slot.empty()
@@ -948,7 +951,7 @@ def _run_compare(
     )
     left_tag, right_tag = (left_model, right_model) if left_model != right_model else ("", "")
     message_index = len(st.session_state.messages)
-    rec_l = rec_r = None
+    rec_l = rec_r = fail_l = fail_r = None
     with st.container(key="cmp"):
         col_l, col_r = st.columns(2, gap="medium")
         wait = col_r.empty()
@@ -970,9 +973,13 @@ def _run_compare(
             )
             if rec_l is not None:
                 _render_card(rec_l, key=f"answer-h{message_index}-l", align_slots=True, model=left_tag)
+            else:
+                fail_l = _side_failure(left_mode, left_model)
+                if fail_l:
+                    _render_failed_side(fail_l, key=f"answer-h{message_index}-l", model=left_tag)
         if st.session_state.get("last_cancelled") is True:
             wait.empty()
-            return rec_l, rec_r
+            return (rec_l, rec_r), (fail_l, fail_r)
         wait.empty()
         with col_r:
             rec_r = _answer_record(
@@ -988,7 +995,23 @@ def _run_compare(
             )
             if rec_r is not None:
                 _render_card(rec_r, key=f"answer-h{message_index}-r", align_slots=True, model=right_tag)
-    return rec_l, rec_r
+            else:
+                fail_r = _side_failure(right_mode, right_model)
+                if fail_r:
+                    _render_failed_side(fail_r, key=f"answer-h{message_index}-r", model=right_tag)
+    return (rec_l, rec_r), (fail_l, fail_r)
+
+
+def _side_failure(mode, model):
+    """The error a compare side came back with, kept with its config so a replay can say which side failed."""
+    error = st.session_state.pop("last_error", None)
+    return None if error is None else {"mode": mode, "model": model, "error": error}
+
+
+def _render_failed_side(failure, key, model=""):
+    with st.container(key=key):
+        st.markdown(card_head_html(failure.get("mode") or "", model), unsafe_allow_html=True)
+        st.error(failure.get("error") or "That answer failed.")
 
 
 def _replay_message(msg, index, compact_compare=False):
@@ -998,18 +1021,23 @@ def _replay_message(msg, index, compact_compare=False):
         return
     if msg.get("compare"):
         left, right = msg["compare"]
+        fail_l, fail_r = msg.get("compare_errors") or (None, None)
         if compact_compare and left and right:
             st.markdown(compare_compact_html(left, right), unsafe_allow_html=True)
             return
-        left_tag, right_tag = compare_model_tags(left, right)
+        left_tag, right_tag = compare_model_tags(left or fail_l, right or fail_r)
         with st.container(key=f"cmp-hist-{index}"):
             col_l, col_r = st.columns(2, gap="medium")
             with col_l:
                 if left:
                     _render_card(left, key=f"answer-h{index}-l", align_slots=True, model=left_tag)
+                elif fail_l:
+                    _render_failed_side(fail_l, key=f"answer-h{index}-l", model=left_tag)
             with col_r:
                 if right:
                     _render_card(right, key=f"answer-h{index}-r", align_slots=True, model=right_tag)
+                elif fail_r:
+                    _render_failed_side(fail_r, key=f"answer-h{index}-r", model=right_tag)
         return
     rec = msg.get("record")
     if rec:
