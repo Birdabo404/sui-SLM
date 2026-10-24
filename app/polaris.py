@@ -127,6 +127,8 @@ MODE_HINTS = {
 TAGLINE = "Offline help for the Linux lab"
 STILL_WORKING = "The model runs on this machine, so this can take a moment."
 ENGLISH_NOTE = "English questions only"
+HISTORY_EMPTY = "Chats you start are saved on this machine."
+DELETE_ASK = "Delete this chat? This can't be undone."
 _WIFI_SVG = (
     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 8.5a15 15 0 0 1 20 0M5 12a10.5 10.5 0 0 1 14 0'
     'M8.5 15.5a5.5 5.5 0 0 1 7 0"/><circle class="d" cx="12" cy="19" r="1.2"/></svg>'
@@ -1185,6 +1187,42 @@ def compare_compact_html(left, right):
         )
 
     return '<div class="cmp-compact">' + block(left) + block(right) + "</div>"
+
+
+def records_in(messages):
+    """Run records in the order they were answered, compare pairs left then right."""
+    records = []
+    for message in messages:
+        if message.get("record"):
+            records.append(message["record"])
+        for rec in message.get("compare") or ():
+            if rec:
+                records.append(rec)
+    return records
+
+
+_MD_PUNCT = re.compile(r"([\\`*_{}\[\]()#+\-.!|~<>$])")
+
+
+def plain_label(text):
+    """Widget labels are Markdown; escape a saved question so it shows exactly as typed ($HOME, *.tar.gz, `ls`).
+    Streamlit swaps :name: for an emoji or icon even when the colons are escaped, so each colon gets a zero-width
+    space after it instead."""
+    flat = " ".join(str(text or "").split())
+    return _MD_PUNCT.sub(r"\\\1", flat).replace(":", ":\u200b")
+
+
+def history_note_html(text, error=False):
+    klass = "side-note err" if error else "side-note"
+    return f'<p class="{klass}">{escape(text)}</p>'
+
+
+def history_error_text(path):
+    home = str(Path.home())
+    shown = str(path)
+    if shown == home or shown.startswith(home + os.sep):
+        shown = "~" + shown[len(home):]
+    return f"Couldn't open chat history in {shown}, so chats aren't being saved. Check that the folder is writable."
 
 
 def avg_latency(records):
