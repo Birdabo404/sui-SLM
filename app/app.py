@@ -37,6 +37,7 @@ from app.engine import (
 from app.polaris import (
     EXAMPLES,
     CancellableChat,
+    ChatCancelled,
     avg_latency,
     best_match_html,
     build_run_record,
@@ -309,6 +310,7 @@ def run_polaris():
 
 
 def _answer_turn(question, mode, compare_on, left_mode, right_mode, model, index_dir):
+    st.session_state.pop("last_cancelled", None)
     st.markdown(user_turn_html(question), unsafe_allow_html=True)
     slot = st.empty()
 
@@ -326,6 +328,8 @@ def _answer_turn(question, mode, compare_on, left_mode, right_mode, model, index
         slot.empty()
         recs = _run_compare(question, left_mode, right_mode, model, retriever, index_dir)
         if recs[0] is None and recs[1] is None:
+            if st.session_state.pop("last_cancelled", False):
+                return False
             st.session_state.messages.append({"role": "assistant", "error": st.session_state.pop("last_error", "")})
             return False
         st.session_state.messages.append({"role": "assistant", "compare": recs})
@@ -333,6 +337,8 @@ def _answer_turn(question, mode, compare_on, left_mode, right_mode, model, index
 
     rec = _answer_record(question, mode, model, retriever, index_dir, slot=slot)
     if rec is None:
+        if st.session_state.pop("last_cancelled", False):
+            return False
         st.session_state.messages.append({"role": "assistant", "error": st.session_state.pop("last_error", "")})
         return False
     _render_card(rec, key=f"answer-{len(st.session_state.messages)}", slot=slot)
@@ -537,10 +543,20 @@ def _answer_record(question, mode, model, retriever, index_dir, panel=False, slo
     try:
         result = _run_stoppable(
             lambda chat: answer_question(
-                question, mode, model, retriever=retriever, chat_fn=chat, model_key="base"
+                question,
+                mode,
+                model,
+                retriever=retriever,
+                chat_fn=chat,
+                model_key="base",
+                log_commit=chat.commit,
             ),
             lambda: slot.markdown(loader, unsafe_allow_html=True),
         )
+    except ChatCancelled:
+        st.session_state.last_cancelled = True
+        slot.empty()
+        return None
     except requests.RequestException as e:
         message = f"Could not reach Ollama at {OLLAMA_HOST}. Start it with `ollama serve`.\n\n{e}"
         st.session_state.last_error = message
@@ -560,6 +576,7 @@ def _answer_record(question, mode, model, retriever, index_dir, panel=False, slo
 
 def _run_compare(question, left_mode, right_mode, model, retriever, index_dir):
     left_mode, right_mode = pair_compare_modes(left_mode, right_mode)
+    message_index = len(st.session_state.messages)
     rec_l = rec_r = None
     with st.container(key="cmp"):
         col_l, col_r = st.columns(2, gap="medium")
@@ -571,12 +588,15 @@ def _run_compare(question, left_mode, right_mode, model, retriever, index_dir):
         with col_l:
             rec_l = _answer_record(question, left_mode, model, retriever, index_dir, panel=True)
             if rec_l is not None:
-                _render_card(rec_l, key="answer-cmp-left", align_slots=True)
+                _render_card(rec_l, key=f"answer-h{message_index}-l", align_slots=True)
+        if st.session_state.get("last_cancelled"):
+            wait.empty()
+            return rec_l, rec_r
         wait.empty()
         with col_r:
             rec_r = _answer_record(question, right_mode, model, retriever, index_dir, panel=True)
             if rec_r is not None:
-                _render_card(rec_r, key="answer-cmp-right", align_slots=True)
+                _render_card(rec_r, key=f"answer-h{message_index}-r", align_slots=True)
     return rec_l, rec_r
 
 
