@@ -17,10 +17,13 @@ class Turn:
 class ChatContext:
     retrieval_query: str
     turns: tuple[Turn, ...]
+    retrieval_turns: int = 0
 
     def apply(self, messages):
-        if not self.turns:
-            return list(messages)
+        applied, _count = self.apply_with_count(messages)
+        return applied
+
+    def apply_with_count(self, messages):
         remaining = NUM_CTX - ANSWER_RESERVE - _message_tokens(messages)
         kept = []
         for turn in reversed(self.turns):
@@ -34,23 +37,42 @@ class ChatContext:
             kept.append(pair)
             remaining -= cost
         history = [message for pair in reversed(kept) for message in pair]
-        return [messages[0], *history, *messages[1:]]
+        applied = [messages[0], *history, *messages[1:]]
+        return applied, max(self.retrieval_turns, len(kept))
 
 
 def build_chat_context(messages, question):
-    previous = next(
-        (
-            str(message.get("content") or "")
-            for message in reversed(messages)
-            if message.get("role") == "user"
-        ),
-        "",
-    )
+    previous = _previous_completed_question(messages)
     query = f"{previous} {question}" if previous else question
     turns = _completed_turns(messages)
     if not previous and not turns:
         return None
-    return ChatContext(retrieval_query=query, turns=turns)
+    return ChatContext(
+        retrieval_query=query,
+        turns=turns,
+        retrieval_turns=int(bool(previous)),
+    )
+
+
+def _previous_completed_question(messages):
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if message.get("role") != "user":
+            continue
+        assistant = next(
+            (
+                candidate
+                for candidate in messages[index + 1:]
+                if candidate.get("role") == "assistant"
+            ),
+            None,
+        )
+        if assistant is None or "error" in assistant:
+            return ""
+        if any(key in assistant for key in ("record", "compare", "content")):
+            return str(message.get("content") or "")
+        return ""
+    return ""
 
 
 def _completed_turns(messages):

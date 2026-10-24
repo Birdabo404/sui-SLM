@@ -194,13 +194,16 @@ def run_legacy():
     with st.chat_message("user"):
         st.markdown(question)
 
+    failed = False
     with st.chat_message("assistant"):
         if model_key == "distilled" and not model:
             text = "The distilled model name is empty."
             hits, weak, stats = [], False, ""
+            failed = True
         elif uses_rag(mode) and retriever is None:
             text = "The RAG index is missing, so I cannot answer in this mode."
             hits, weak, stats = [], False, ""
+            failed = True
         else:
             try:
                 result = answer_question(
@@ -230,20 +233,22 @@ def run_legacy():
                     f"Start it with `ollama serve`.\n\n{e}"
                 )
                 hits, weak, stats = [], False, ""
+                failed = True
         st.markdown(text)
         sources = hits if uses_rag(mode) else []
         _show_sources(sources)
         if stats:
             st.caption(stats)
 
-    st.session_state.messages.append(
-        {
-            "role": "assistant",
-            "content": text,
-            "sources": sources if uses_rag(mode) else [],
-            "stats": stats,
-        }
-    )
+    message = {
+        "role": "assistant",
+        "content": text,
+        "sources": sources if uses_rag(mode) else [],
+        "stats": stats,
+    }
+    if failed:
+        message["error"] = text
+    st.session_state.messages.append(message)
 
 
 def _show_sources(sources):

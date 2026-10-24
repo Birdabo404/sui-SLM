@@ -70,7 +70,7 @@ def mode_choices():
         seen.append(mode)
     return seen
 CSV_FIELDS = [
-    "ts", "git_commit", "config", "model", "mode", "latency_s",
+    "ts", "git_commit", "config", "model", "mode", "context_turns", "latency_s",
     "app_rss_mb", "ollama_rss_mb", "total_mb", "system_used_mb",
     "n_chunks", "weak_retrieval", "threshold", "k",
     "tok_s", "gen_s", "prompt_s", "load_s", "ollama_version", "model_digest",
@@ -484,6 +484,7 @@ def answer_question(
     sampler.start()
     hits = []
     weak = False
+    context_turns = 0
     result = OllamaChatResult(text="")
     try:
         if uses_rag(mode):
@@ -492,17 +493,17 @@ def answer_question(
             retrieval_query = question if context is None else context.retrieval_query
             hits = retriever.retrieve(retrieval_query, k=k, tldr_lane=True)
             weak = is_weak(hits, threshold=threshold)
+            messages = build_messages(question, hits, mode)
+            if context is not None:
+                messages, context_turns = context.apply_with_count(messages)
             if weak:
                 result = OllamaChatResult(text=ABSTAIN)
             else:
-                messages = build_messages(question, hits, mode)
-                if context is not None:
-                    messages = context.apply(messages)
                 result = _chat_result(chat_fn(messages, model))
         else:
             messages = build_messages(question, hits, mode)
             if context is not None:
-                messages = context.apply(messages)
+                messages, context_turns = context.apply_with_count(messages)
             result = _chat_result(chat_fn(messages, model))
     finally:
         ram = sampler.stop()
@@ -520,6 +521,7 @@ def answer_question(
         "model": model,
         "model_key": model_key,
         "mode": mode,
+        "context_turns": context_turns,
         "latency_s": f"{latency:.4f}",
         "app_rss_mb": f"{ram['app_rss_mb']:.1f}",
         "ollama_rss_mb": f"{ram['ollama_rss_mb']:.1f}",
@@ -558,6 +560,7 @@ def answer_question(
         "model": model,
         "model_key": model_key,
         "mode": mode,
+        "context_turns": context_turns,
         "question": question,
         "threshold": float(threshold),
         "k": int(k),

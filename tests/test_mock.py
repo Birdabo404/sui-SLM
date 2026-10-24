@@ -445,6 +445,7 @@ class MockRunTests(unittest.TestCase):
         self.assertEqual(rows[0]["mode"], "base")
         self.assertEqual(rows[0]["model"], "qwen3.5:2b")
         self.assertEqual(rows[0]["config"], "base")
+        self.assertEqual(rows[0]["context_turns"], "0")
         self.assertEqual(rows[0]["n_chunks"], "0")
         self.assertGreaterEqual(float(rows[0]["latency_s"]), 0)
         self.assertGreater(float(rows[0]["app_rss_mb"]), 0)
