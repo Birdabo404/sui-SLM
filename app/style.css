@@ -246,6 +246,8 @@ html,body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;o
 [class*="st-key-composer-"] [data-testid="stColumn"]:last-child{display:flex;justify-content:flex-end;flex:0 1 auto;width:auto}
 p.composer-cmp{margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right;font:400 var(--fs-ui)/32px var(--f-sans);color:var(--c-text-3)}
 .composer-cmp b{font-weight:600;color:var(--c-text)}
+.composer-cmp .m{font:400 var(--fs-cap)/1 var(--f-mono);color:var(--c-text-3)}
+.composer-cmp .vs{margin:0 var(--s-2);color:var(--c-text-3)}
 
 /* model + mode: a text dropdown like a chat app's model picker; the model name rides in front of the mode */
 [class*="st-key-mode-"][class*="-box"]{width:auto}
@@ -308,6 +310,7 @@ p.stopped{margin:0;font:400 var(--fs-ui)/var(--lh-ui) var(--f-sans);color:var(--
 [class*="st-key-answer"]:has(.polaris-idk-flag){border:1px dashed var(--c-idk);border-radius:var(--r-lg);padding:var(--s-4)}
 .card-head{display:flex;align-items:center;gap:var(--s-2);min-width:0;font:400 var(--fs-cap)/1 var(--f-sans);color:var(--c-text-3)}
 .card-head .mode{flex:none;padding:5px var(--s-2);border-radius:var(--r-xs);background:var(--c-raised);color:var(--c-text);font-weight:600;letter-spacing:.01em}
+.card-head .model{flex:0 1 auto;min-width:0;max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--f-mono);color:var(--c-text-2)}
 .card-head .sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 .prose{font:400 var(--fs-body)/var(--lh-body) var(--f-sans);color:var(--c-text);margin:0 0 var(--s-3)}
@@ -407,6 +410,10 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(-
 .cmp-compact{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--s-3)}
 .cmp-compact .cmp-cell{display:flex;flex-direction:column;gap:var(--s-2);padding:var(--s-3) var(--s-4);border-radius:var(--r-md);background:var(--c-surface);border:1px solid var(--c-line)}
 .cmp-compact p.preview{margin:0;font:400 var(--fs-ui)/var(--lh-ui) var(--f-sans);color:var(--c-text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cmp-top{display:flex;align-items:center;justify-content:space-between;gap:var(--s-2);min-width:0}
+.cmp-top .card-head{flex:1 1 auto}
+.cmp-top .card-head .sub{display:none}
+.cmp-top .card-head .model{max-width:none}
 
 /* ---------- loader: a 3×3 constellation breathing out from its star ---------- */
 .thinking{display:flex;align-items:center;gap:var(--s-3);min-height:40px;font:400 var(--fs-ui)/var(--lh-ui) var(--f-sans);color:var(--c-text-2)}
@@ -494,6 +501,9 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(-
   [class*="st-key-hist-yes-"] button:hover{background:color-mix(in oklch,var(--c-danger) 14%,transparent);border-color:var(--c-danger);color:var(--c-danger)}
   [class*="st-key-hist-no-"] button:hover{background:var(--c-thumb);border-color:var(--c-line-strong);color:var(--c-text)}
 }
+/* compare pickers hang off their toggle */
+.st-key-cmp-pickers{gap:var(--s-2);padding-left:var(--s-2);border-left:2px solid var(--c-line)}
+.st-key-cmp-pickers [data-baseweb="select"] > div{font-size:13px}
 [data-testid="stSidebar"] .side-h{margin:var(--s-6) 0 0;font:600 var(--fs-cap)/1 var(--f-sans);color:var(--c-text-3);letter-spacing:.01em}
 [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p,[data-testid="stSidebar"] label p{font:400 var(--fs-ui)/var(--lh-ui) var(--f-sans);color:var(--c-text)}
 [data-testid="stSidebar"] [data-baseweb="select"] > div{background:var(--c-raised);border-color:var(--c-line);border-radius:var(--r-sm);color:var(--c-text)}

@@ -29,6 +29,7 @@ from app.engine import (
     MODE_SUFFIX,
     OLLAMA_HOST,
     THESIS_CONFIGS,
+    config_id,
     mode_choices,
     ollama_chat_body,
     parse_ollama_chat_response,
@@ -514,6 +515,15 @@ def pair_compare_model_keys(left, right, distilled_model):
     return left, right
 
 
+def compare_configs(distilled_model):
+    """Thesis config id -> (model_key, mode), for every config the compare pickers can offer."""
+    return {
+        config_id(model_key, mode): (model_key, mode)
+        for model_key in model_key_choices(distilled_model)
+        for mode in model_mode_choices(model_key)
+    }
+
+
 def pair_compare_config_modes(left, right, left_model_key, right_model_key):
     left_modes = model_mode_choices(left_model_key)
     right_modes = model_mode_choices(right_model_key)
@@ -797,10 +807,13 @@ def empty_hero_html():
     )
 
 
-def card_head_html(mode):
+def card_head_html(mode, model=""):
+    """model is set only when two answers side by side come from different models, so the heads tell them apart."""
+    tag = f'<span class="model">{escape(model)}</span>' if model else ""
     return (
         '<div class="card-head">'
         f'<span class="mode">{escape(mode_name(mode))}</span>'
+        f"{tag}"
         f'<span class="sub">{escape(mode_hint(mode))}</span>'
         "</div>"
     )
@@ -1136,8 +1149,8 @@ def stopped_html():
     return '<p class="stopped">Stopped before an answer came back.</p>'
 
 
-def running_card_html(mode, label):
-    return '<div class="card running-card">' + card_head_html(mode) + thinking_html(label) + "</div>"
+def running_card_html(mode, label, model=""):
+    return '<div class="card running-card">' + card_head_html(mode, model) + thinking_html(label) + "</div>"
 
 
 def thinking_label(mode, loading_index=False):
@@ -1149,10 +1162,10 @@ def thinking_label(mode, loading_index=False):
     return "Generating an answer"
 
 
-def waiting_html(mode, after_label):
+def waiting_html(mode, after_label, model=""):
     return (
         '<div class="card waiting-card">'
-        + card_head_html(mode)
+        + card_head_html(mode, model)
         + '<div class="slot-empty body"><div class="thinking queued">'
         + _dots_html()
         + f'<span class="thinking-text"><span class="queued-label">Starts when {escape(after_label)} finishes</span></span>'
@@ -1175,18 +1188,47 @@ def preview_text(answer):
     return first_line(prose.replace("`", ""))
 
 
+def compare_model_tags(left, right):
+    """Model names for the two heads of a compare, or blanks when both sides ran the same model."""
+    left_model = str((left or {}).get("model") or "")
+    right_model = str((right or {}).get("model") or "")
+    if left and right and left_model != right_model:
+        return left_model, right_model
+    return "", ""
+
+
 def compare_compact_html(left, right):
-    def block(rec):
+    left_tag, right_tag = compare_model_tags(left, right)
+
+    def block(rec, tag):
         mode = rec.get("mode") or ""
         preview = preview_text(rec.get("answer") or "")
         return (
             '<div class="cmp-cell">'
-            + card_head_html(mode)
+            + '<div class="cmp-top">'
+            + card_head_html(mode, tag)
+            + answer_stats_html(rec)
+            + "</div>"
             + f'<p class="preview">{escape(preview)}</p>'
             + "</div>"
         )
 
-    return '<div class="cmp-compact">' + block(left) + block(right) + "</div>"
+    return '<div class="cmp-compact">' + block(left, left_tag) + block(right, right_tag) + "</div>"
+
+
+def compare_summary_html(left_model, left_mode, right_model, right_mode):
+    """The composer's line while compare is on: which config answers on each side. The model is named once when
+    both sides share it, and per side when they don't."""
+    left = f"<b>{escape(mode_name(left_mode))}</b>"
+    right = f"<b>{escape(mode_name(right_mode))}</b>"
+    if left_model == right_model:
+        body = f'<span class="m">{escape(left_model)}</span> {left}<span class="vs">vs</span>{right}'
+    else:
+        body = (
+            f'<span class="m">{escape(left_model)}</span> {left}<span class="vs">vs</span>'
+            f'<span class="m">{escape(right_model)}</span> {right}'
+        )
+    return f'<p class="composer-cmp">{body}</p>'
 
 
 def records_in(messages):
