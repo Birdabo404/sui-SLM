@@ -29,9 +29,9 @@ from app.engine import (
     git_commit,
     index_ok,
     keep_alive_setting,
-    model_digest,
     model_name_for,
     mode_choices,
+    ollama_info,
     ollama_reachable,
     uses_rag,
     warm_model,
@@ -93,8 +93,8 @@ def _ollama_up():
 
 
 @st.cache_data(ttl=30, show_spinner=False)
-def _model_digest(model):
-    return model_digest(model)
+def _model_info(model):
+    return ollama_info(model)
 
 
 @st.cache_data(ttl=10, show_spinner=False)
@@ -205,6 +205,7 @@ def run_legacy():
                     model_key=model_key,
                     keep_alive=keep_alive_setting(),
                     git_sha=session_git_sha,
+                    model_info=_model_info(model),
                 )
                 text = result["text"]
                 hits = result["hits"]
@@ -452,7 +453,7 @@ def _render_sidebar(model, index_dir, frozen, up, online, chat=False):
                 use_container_width=True,
             )
 
-        digest = _model_digest(model)
+        info = _model_info(model)
         loaded = index_ok(index_dir)
         chunks = _chunk_count(index_dir) if loaded else 0
         sha = st.session_state.get("git_sha", "")
@@ -461,7 +462,7 @@ def _render_sidebar(model, index_dir, frozen, up, online, chat=False):
             sidebar_kv_html(
                 [
                     ("Model", model),
-                    ("Weights", digest or "—"),
+                    ("Weights", info.model_digest or "—"),
                     ("Index", Path(index_dir).name),
                     ("Chunks", f"{chunks:,}" if loaded else "not loaded"),
                     ("IDK threshold", f"cos {format_threshold(frozen['threshold'])}"),
@@ -577,6 +578,7 @@ def _answer_record(question, mode, model, retriever, index_dir, panel=False, slo
     loader = running_card_html(mode, label) if panel else thinking_html(label)
     keep_alive = keep_alive_setting()
     git_sha = _session_git_commit()
+    model_info = _model_info(model)
     slot.markdown(loader, unsafe_allow_html=True)
     try:
         result = _run_stoppable(
@@ -590,6 +592,7 @@ def _answer_record(question, mode, model, retriever, index_dir, panel=False, slo
                 log_commit=chat.commit,
                 keep_alive=keep_alive,
                 git_sha=git_sha,
+                model_info=model_info,
             ),
             lambda: slot.markdown(loader, unsafe_allow_html=True),
         )

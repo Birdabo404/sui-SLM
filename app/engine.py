@@ -4,6 +4,7 @@ import os
 import subprocess
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -70,8 +71,26 @@ def mode_choices():
 CSV_FIELDS = [
     "ts", "git_commit", "config", "model", "mode", "latency_s",
     "app_rss_mb", "ollama_rss_mb", "total_mb", "system_used_mb",
-    "n_chunks", "weak_retrieval", "threshold", "k", "question",
+    "n_chunks", "weak_retrieval", "threshold", "k",
+    "tok_s", "gen_s", "prompt_s", "load_s", "ollama_version", "model_digest",
+    "question",
 ]
+
+
+@dataclass(frozen=True)
+class OllamaChatResult:
+    text: str
+    eval_count: int | None = None
+    eval_duration: int | None = None
+    prompt_eval_count: int | None = None
+    prompt_eval_duration: int | None = None
+    load_duration: int | None = None
+
+
+@dataclass(frozen=True)
+class OllamaInfo:
+    version: str = ""
+    model_digest: str = ""
 
 
 def uses_rag(mode):
@@ -194,7 +213,26 @@ def ollama_chat_body(messages, model, temperature=0.2, seed=None, keep_alive=Non
     return body
 
 
-def ollama_chat(messages, model, host=None, temperature=0.2, seed=None, keep_alive=None):
+def parse_ollama_chat_response(payload):
+    message = payload["message"]
+    return OllamaChatResult(
+        text=message["content"],
+        eval_count=payload.get("eval_count"),
+        eval_duration=payload.get("eval_duration"),
+        prompt_eval_count=payload.get("prompt_eval_count"),
+        prompt_eval_duration=payload.get("prompt_eval_duration"),
+        load_duration=payload.get("load_duration"),
+    )
+
+
+def ollama_chat_result(
+    messages,
+    model,
+    host=None,
+    temperature=0.2,
+    seed=None,
+    keep_alive=None,
+):
     host = host or OLLAMA_HOST
     url = host.rstrip("/") + "/api/chat"
     body = ollama_chat_body(
@@ -206,7 +244,18 @@ def ollama_chat(messages, model, host=None, temperature=0.2, seed=None, keep_ali
     )
     r = requests.post(url, json=body, timeout=300)
     r.raise_for_status()
-    return r.json()["message"]["content"]
+    return parse_ollama_chat_response(r.json())
+
+
+def ollama_chat(messages, model, host=None, temperature=0.2, seed=None, keep_alive=None):
+    return ollama_chat_result(
+        messages,
+        model,
+        host=host,
+        temperature=temperature,
+        seed=seed,
+        keep_alive=keep_alive,
+    ).text
 
 
 def warm_model(model, host=None, keep_alive=None):
@@ -256,6 +305,24 @@ def model_digest(model, host=None, timeout=1.5):
     except Exception:
         return ""
     return ""
+
+
+def ollama_version(host=None, timeout=1.5):
+    base = (host or OLLAMA_HOST).rstrip("/")
+    try:
+        r = requests.get(base + "/api/version", timeout=timeout)
+        if r.ok:
+            return str((r.json() or {}).get("version") or "")
+    except requests.RequestException:
+        pass
+    return ""
+
+
+def ollama_info(model, host=None, timeout=1.5):
+    return OllamaInfo(
+        version=ollama_version(host=host, timeout=timeout),
+        model_digest=model_digest(model, host=host, timeout=timeout),
+    )
 
 
 def ollama_reachable(host=None, timeout=1.0):
@@ -352,6 +419,30 @@ def log_answer(row, path=None, fields=None):
         w.writerow({k: row.get(k, "") for k in fields})
 
 
+def _chat_result(value):
+    if isinstance(value, OllamaChatResult):
+        return value
+    if isinstance(value, str):
+        return OllamaChatResult(text=value)
+    raise TypeError("chat function must return str or OllamaChatResult")
+
+
+def _seconds(nanoseconds):
+    if nanoseconds is None:
+        return None
+    return nanoseconds / 1_000_000_000
+
+
+def _tokens_per_second(count, duration):
+    if count is None or not duration:
+        return None
+    return count / duration * 1_000_000_000
+
+
+def _csv_metric(value):
+    return "" if value is None else f"{value:.4f}"
+
+
 def answer_question(
     question,
     mode,
@@ -369,12 +460,13 @@ def answer_question(
     log_commit=None,
     keep_alive=None,
     git_sha=None,
+    model_info=None,
 ):
     k = K if k is None else k
     threshold = WEAK_DENSE if threshold is None else threshold
     if chat_fn is None:
         def chat_fn(messages, model_name):
-            return ollama_chat(
+            return ollama_chat_result(
                 messages,
                 model_name,
                 temperature=temperature,
@@ -395,7 +487,7 @@ def answer_question(
     sampler.start()
     hits = []
     weak = False
-    text = ""
+    result = OllamaChatResult(text="")
     try:
         if uses_rag(mode):
             if retriever is None:
@@ -403,14 +495,20 @@ def answer_question(
             hits = retriever.retrieve(question, k=k, tldr_lane=True)
             weak = is_weak(hits, threshold=threshold)
             if weak:
-                text = ABSTAIN
+                result = OllamaChatResult(text=ABSTAIN)
             else:
-                text = chat_fn(build_messages(question, hits, mode), model)
+                result = _chat_result(chat_fn(build_messages(question, hits, mode), model))
         else:
-            text = chat_fn(build_messages(question, hits, mode), model)
+            result = _chat_result(chat_fn(build_messages(question, hits, mode), model))
     finally:
         ram = sampler.stop()
+    text = result.text
     latency = time.perf_counter() - t0
+    gen_s = _seconds(result.eval_duration)
+    prompt_s = _seconds(result.prompt_eval_duration)
+    load_s = _seconds(result.load_duration)
+    tok_s = _tokens_per_second(result.eval_count, result.eval_duration)
+    model_info = model_info or OllamaInfo()
     row = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "git_commit": git_commit() if git_sha is None else git_sha,
@@ -426,6 +524,12 @@ def answer_question(
         "weak_retrieval": int(weak) if uses_rag(mode) else "",
         "threshold": format_threshold(threshold),
         "k": int(k),
+        "tok_s": _csv_metric(tok_s),
+        "gen_s": _csv_metric(gen_s),
+        "prompt_s": _csv_metric(prompt_s),
+        "load_s": _csv_metric(load_s),
+        "ollama_version": model_info.version,
+        "model_digest": model_info.model_digest,
         "question": question.replace("\n", " "),
         "cited_sources": format_cited_sources(hits),
         "answer": text,
@@ -451,5 +555,16 @@ def answer_question(
         "question": question,
         "threshold": float(threshold),
         "k": int(k),
+        "eval_count": result.eval_count,
+        "eval_duration": result.eval_duration,
+        "prompt_eval_count": result.prompt_eval_count,
+        "prompt_eval_duration": result.prompt_eval_duration,
+        "load_duration": result.load_duration,
+        "tok_s": tok_s,
+        "gen_s": gen_s,
+        "prompt_s": prompt_s,
+        "load_s": load_s,
+        "ollama_version": model_info.version,
+        "model_digest": model_info.model_digest,
         **ram,
     }
