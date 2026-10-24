@@ -768,6 +768,20 @@ class LoaderAndNamingTests(unittest.TestCase):
         css = style_path().read_text(encoding="utf-8")
         self.assertIn(".composer-note{", css)
 
+    def test_mode_menu_fits_a_narrow_screen(self):
+        css = style_path().read_text(encoding="utf-8")
+        wide, narrow = css.split("@media (max-width:640px){", 1)
+        narrow = narrow.split("\n}", 1)[0]
+        menu = ':root:has([class*="st-key-mode-"] [aria-expanded="true"]) [data-baseweb="popover"]'
+        self.assertIn(menu + " > div{min-width:340px}", wide)
+        self.assertIn(menu + " > div{min-width:min(340px,calc(100vw - 2 * var(--s-4)));margin:0 var(--s-4)}", narrow)
+        # The rows are a fixed height, so the hint gives way and the config name keeps its room.
+        self.assertIn(menu + ' li[role="option"] > div{flex:1 1 0;min-width:5em}', narrow)
+        self.assertIn(
+            menu + ' li[role="option"]::after{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}',
+            narrow,
+        )
+
     def test_mode_names_round_trip(self):
         for mode in ("base", "cot", "rag", "full"):
             self.assertEqual(mode_from_name(mode_name(mode)), mode)
