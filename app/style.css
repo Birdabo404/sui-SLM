@@ -256,7 +256,7 @@ p.composer-cmp{margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsi
 [class*="st-key-mode-"] [data-baseweb="select"] > div > div:first-child::before{content:var(--polaris-model);margin-right:var(--s-2);font-weight:600;color:var(--c-text)}
 [class*="st-key-mode-"] [data-baseweb="select"] input{caret-color:transparent;width:1px!important}
 [class*="st-key-mode-"] [data-baseweb="select"] svg{color:var(--c-text-3)}
-:root:has([class*="st-key-mode-"] [aria-expanded="true"]) [data-baseweb="popover"] > div{min-width:300px}
+:root:has([class*="st-key-mode-"] [aria-expanded="true"]) [data-baseweb="popover"] > div{min-width:340px}
 :root:has([class*="st-key-mode-"] [aria-expanded="true"]) [data-baseweb="popover"] > div > div{width:100%!important}
 [data-baseweb="popover"] ul[role="listbox"]{padding:var(--s-1);border:1px solid var(--c-line);border-radius:var(--r-md);background:var(--c-surface);
   box-shadow:0 16px 40px -16px oklch(0 0 0 / 0.5)}
@@ -409,23 +409,8 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(-
 .thinking .dots i:is(:nth-child(1),:nth-child(3),:nth-child(7),:nth-child(9)){--d:.32s}
 @keyframes polaris-breathe{0%,100%{opacity:.2;transform:scale(.55)}42%{opacity:1;transform:scale(1)}}
 .thinking-text{display:flex;flex-direction:column;gap:2px;min-width:0}
-/* stage label, then a cycle of thinking phrases, 2.2s each; a light band sweeps across the active one */
-.thinking-label{--shimmer-bg:var(--c-bg);position:relative;display:grid;overflow:hidden;color:var(--c-text)}
-.card .thinking-label{--shimmer-bg:var(--c-surface)}
-.thinking-label > span{grid-area:1 / 1;white-space:nowrap;opacity:0;
-  animation:polaris-cycle 17.6s var(--ease-out) infinite both}
-.thinking-label > span:nth-child(2){animation-delay:2.2s}
-.thinking-label > span:nth-child(3){animation-delay:4.4s}
-.thinking-label > span:nth-child(4){animation-delay:6.6s}
-.thinking-label > span:nth-child(5){animation-delay:8.8s}
-.thinking-label > span:nth-child(6){animation-delay:11.0s}
-.thinking-label > span:nth-child(7){animation-delay:13.2s}
-.thinking-label > span:nth-child(8){animation-delay:15.4s}
-@keyframes polaris-cycle{0%{opacity:0;transform:translateY(4px)}1.7%,10.8%{opacity:1;transform:none}12.5%,100%{opacity:0;transform:translateY(-4px)}}
-.thinking-label::after{content:"";position:absolute;top:0;bottom:0;left:0;width:300%;pointer-events:none;
-  background:linear-gradient(90deg,color-mix(in oklch,var(--shimmer-bg) 32%,transparent) 0 40%,transparent 50%,color-mix(in oklch,var(--shimmer-bg) 32%,transparent) 60% 100%);
-  transform:translateX(-66.667%);animation:polaris-shimmer 2.4s linear infinite}
-@keyframes polaris-shimmer{to{transform:translateX(0)}}
+/* one plain label for what is running; the dots are the only thing that moves */
+.thinking-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--c-text)}
 .thinking-note{font-size:var(--fs-cap);color:var(--c-text-3);opacity:0;animation:polaris-fade-in .4s var(--ease-out) 15s forwards}
 @keyframes polaris-fade-in{to{opacity:1}}
 .queued-label{color:var(--c-text-3)}
@@ -437,9 +422,6 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(-
   .q,.thinking,p.stopped,.cmp-compact,.card,[class*="st-key-answer"] > *,.st-key-composer-dock,.st-key-stop-gen{animation:polaris-fade-in .15s linear both!important}
   .thinking .dots i{transform:none;animation-name:polaris-breathe-reduced;animation-duration:2.4s}
   @keyframes polaris-breathe-reduced{0%,100%{opacity:.3}50%{opacity:.9}}
-  .thinking-label > span{animation:none}
-  .thinking-label > span:first-child{opacity:1}
-  .thinking-label::after{display:none}
   .thinking-note{animation-duration:1ms}
 }
 

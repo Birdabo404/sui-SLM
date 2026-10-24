@@ -861,7 +861,7 @@ def _render_card(record, key, align_slots=False, slot=None):
         elif mode in ("cot", "full"):
             reason, answer = split_reasoning(record.get("answer") or "")
             if reason:
-                with st.expander("Reasoning", expanded=False):
+                with st.expander("Steps", expanded=False):
                     st.markdown(reason)
                 _render_answer_body(answer)
             else:
