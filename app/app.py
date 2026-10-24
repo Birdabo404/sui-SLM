@@ -48,6 +48,7 @@ from app.polaris import (
     empty_hero_html,
     empty_slot_html,
     evidence_block_html,
+    flags_html,
     header_band_html,
     idk_card_html,
     index_chunk_count,
@@ -300,22 +301,31 @@ def run_polaris():
         st.session_state.warmed = False
         _warmed_models().discard(model)
     online = _network_online()
-    incoming = st.session_state.get("pending_q") or st.session_state.get("chat-dock")
-
-    chat = bool(st.session_state.messages or incoming or st.session_state.get("chat-landing"))
-    _render_sidebar(model, index_dir, frozen, up, online, chat=chat)
-
+    # A question from the landing (typed or an example chip) is answered in the run it arrives in. The layout is
+    # chosen here, before anything renders, so this run builds the thread exactly where every later run does.
+    landing_q = st.session_state.get("pending_q") or st.session_state.get("chat-landing")
+    incoming = landing_q or st.session_state.get("chat-dock")
+    msgs = st.session_state.messages
     compare_on = bool(st.session_state.get("compare"))
-    asked = sum(1 for m in st.session_state.messages if m.get("role") == "user") + (1 if incoming else 0)
-    flags = ["polaris-flags", f"polaris-sky-{sky_level(asked)}"]
-    if st.session_state.get("daylight"):
-        flags.append("polaris-daylight")
-    if compare_on:
-        flags.append("polaris-compare")
-    st.markdown(
-        f'<div class="{" ".join(flags)}"></div>' + mode_menu_css(model, mode_choices()),
-        unsafe_allow_html=True,
-    )
+    asked = sum(1 for m in msgs if m.get("role") == "user") + (1 if incoming else 0)
+
+    flags = st.empty()
+
+    def mark(generating):
+        flags.markdown(
+            flags_html(
+                sky_level(asked),
+                daylight=bool(st.session_state.get("daylight")),
+                compare=compare_on,
+                generating=generating,
+            )
+            + mode_menu_css(model, mode_choices()),
+            unsafe_allow_html=True,
+        )
+
+    # Before the sidebar, so the star's first wrap starts out paused while this run generates.
+    mark(generating=bool(incoming))
+    refresh_sidebar = _render_sidebar(model, index_dir, frozen, up, online, chat=bool(msgs or incoming))
     st.markdown(sky_html(), unsafe_allow_html=True)
 
     left_model_key, right_model_key = pair_compare_model_keys(
@@ -351,28 +361,23 @@ def run_polaris():
         conn=conn,
     )
 
-    if not (st.session_state.messages or st.session_state.get("pending_q")):
+    if not (msgs or incoming):
         with st.container(key="landing"):
             st.markdown(empty_hero_html(), unsafe_allow_html=True)
-            typed, _ = _render_composer("landing", **composer)
+            _render_composer("landing", **composer)
             _render_examples()
-        if typed:
-            # Hand the question to a fresh run so the thread layout is built from the start; swapping it in
-            # here would shift every later element and remount the thread on the next run.
-            st.session_state.pending_q = typed
-            st.rerun()
         return
 
     st.markdown(header_band_html(slim=True), unsafe_allow_html=True)
     thread = st.container(key="thread")
     with thread:
-        msgs = st.session_state.messages
         for i, msg in enumerate(msgs):
             _replay_message(msg, i, compact_compare=True)
             if msg.get("role") == "user" and (i + 1 == len(msgs) or msgs[i + 1].get("role") == "user"):
                 st.markdown(stopped_html(), unsafe_allow_html=True)
     typed, stop_slot = _render_composer("dock", generating=bool(incoming), **composer)
-    question = st.session_state.pop("pending_q", None) or typed
+    st.session_state.pop("pending_q", None)
+    question = landing_q or typed
     if not question:
         return
 
@@ -393,9 +398,9 @@ def run_polaris():
             context=context,
         )
     stop_slot.empty()
+    mark(generating=False)
     if answered:
-        # The sidebar was drawn before this answer existed; one cheap rerun brings its counts up to date.
-        st.rerun()
+        refresh_sidebar()
 
 
 def _answer_turn(
@@ -475,19 +480,23 @@ def _retriever_with_loader(index_dir, slot):
     return retriever
 
 
+def _new_chat():
+    st.session_state.messages = []
+    st.session_state.run_records = []
+
+
 def _render_sidebar(model, index_dir, frozen, up, online, chat=False):
+    """Draw the sidebar and return refresh(), which redraws the parts an answer changes in place."""
     with st.sidebar:
         with st.container(key="side-top"):
             st.markdown(side_logo_html(play=chat), unsafe_allow_html=True)
-            if st.button(
+            st.button(
                 "New chat",
                 key="new-chat",
                 icon=":material/edit_square:",
                 use_container_width=True,
-            ):
-                st.session_state.messages = []
-                st.session_state.run_records = []
-                st.rerun()
+                on_click=_new_chat,
+            )
 
         st.markdown('<p class="side-h">View</p>', unsafe_allow_html=True)
         st.toggle("Compare two modes", key="compare")
@@ -537,9 +546,27 @@ def _render_sidebar(model, index_dir, frozen, up, online, chat=False):
                 st.session_state.cmp_right = right_opts[0]
             st.selectbox("Right", right_opts, format_func=mode_name, key="cmp_right")
 
-        records = st.session_state.get("run_records") or []
+        session = st.empty()
+        system = st.empty()
+        st.markdown(
+            '<p class="footer-license">Ubuntu Sans, Ubuntu Font Licence 1.0<br>'
+            "JetBrains Mono, SIL OFL 1.1</p>",
+            unsafe_allow_html=True,
+        )
+
+    def refresh():
+        _session_panel(session)
+        _system_panel(system, model, index_dir, frozen, up, online)
+
+    refresh()
+    return refresh
+
+
+def _session_panel(slot):
+    records = st.session_state.get("run_records") or []
+    avg = avg_latency(records)
+    with slot.container():
         st.markdown('<p class="side-h">Session</p>', unsafe_allow_html=True)
-        avg = avg_latency(records)
         st.markdown(
             sidebar_kv_html(
                 [
@@ -549,31 +576,38 @@ def _render_sidebar(model, index_dir, frozen, up, online, chat=False):
             ),
             unsafe_allow_html=True,
         )
-        if records:
-            csv_col, json_col = st.columns(2, gap="small")
-            csv_col.download_button(
-                "CSV",
-                data=records_to_csv(records),
-                file_name="polaris-runs.csv",
-                mime="text/csv",
-                key="export-csv",
-                icon=":material/download:",
-                use_container_width=True,
-            )
-            json_col.download_button(
-                "JSON",
-                data=records_to_json(records),
-                file_name="polaris-runs.json",
-                mime="application/json",
-                key="export-json",
-                icon=":material/download:",
-                use_container_width=True,
-            )
+        if not records:
+            return
+        # Keyed by the record count: an answer fills this slot a second time in the same run, and widget keys
+        # must be unique per run.
+        n = len(records)
+        csv_col, json_col = st.columns(2, gap="small")
+        csv_col.download_button(
+            "CSV",
+            data=records_to_csv(records),
+            file_name="polaris-runs.csv",
+            mime="text/csv",
+            key=f"export-csv-{n}",
+            icon=":material/download:",
+            use_container_width=True,
+        )
+        json_col.download_button(
+            "JSON",
+            data=records_to_json(records),
+            file_name="polaris-runs.json",
+            mime="application/json",
+            key=f"export-json-{n}",
+            icon=":material/download:",
+            use_container_width=True,
+        )
 
-        info = _model_info(model)
-        loaded = index_ok(index_dir)
-        chunks = _chunk_count(index_dir) if loaded else 0
-        sha = st.session_state.get("git_sha", "")
+
+def _system_panel(slot, model, index_dir, frozen, up, online):
+    info = _model_info(model)
+    loaded = index_ok(index_dir)
+    chunks = _chunk_count(index_dir) if loaded else 0
+    sha = st.session_state.get("git_sha", "")
+    with slot.container():
         st.markdown('<p class="side-h">System</p>', unsafe_allow_html=True)
         st.markdown(
             sidebar_kv_html(
@@ -590,12 +624,6 @@ def _render_sidebar(model, index_dir, frozen, up, online, chat=False):
                     ("Commit", sha[:7] if sha else "—"),
                 ]
             ),
-            unsafe_allow_html=True,
-        )
-
-        st.markdown(
-            '<p class="footer-license">Ubuntu Sans, Ubuntu Font Licence 1.0<br>'
-            "JetBrains Mono, SIL OFL 1.1</p>",
             unsafe_allow_html=True,
         )
 
@@ -658,11 +686,20 @@ def _render_examples():
         )
 
 
-def _run_stoppable(work, heartbeat, tick=0.2):
+def _check_for_stop():
+    """Let a Stop click or a new question interrupt this run without sending anything to the browser.
+
+    Reading session state runs the same interrupt check as any st.* call that draws something, so the
+    loader is drawn once instead of being re-sent every tick.
+    """
+    st.session_state.get("stop-gen")
+
+
+def _run_stoppable(work, heartbeat=_check_for_stop, tick=0.2):
     """Run work(chat) on a worker thread and wait for it.
 
-    The heartbeat is a Streamlit call, which is where a Stop click or a new question interrupts this
-    script; the finally then cancels the request so Ollama stops generating.
+    The heartbeat is where a Stop click or a new question interrupts this script; the finally then
+    cancels the request so Ollama stops generating.
     """
     chat = CancellableChat()
     box = {}
@@ -723,7 +760,6 @@ def _answer_record(
                 model_info=model_info,
                 context=context,
             ),
-            lambda: slot.markdown(loader, unsafe_allow_html=True),
         )
     except ChatCancelled:
         st.session_state.last_cancelled = True

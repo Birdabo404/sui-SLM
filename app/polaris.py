@@ -1052,7 +1052,7 @@ def _dots_html():
 
 def thinking_html(label, still=STILL_WORKING):
     """Loader for a running answer: a 3x3 constellation breathing out from its center star beside one plain
-    label. Pure CSS, so it keeps moving while the main thread is busy."""
+    label. Sent once per answer; the dots are pure CSS, so they keep moving while the script waits."""
     return (
         '<div class="thinking" role="status">'
         + _dots_html()
@@ -1061,6 +1061,18 @@ def thinking_html(label, still=STILL_WORKING):
         f'<span class="thinking-note">{escape(still)}</span>'
         "</span></div>"
     )
+
+
+def flags_html(sky, daylight=False, compare=False, generating=False):
+    """The hidden marker the stylesheet reads through :root:has(); polaris-generating holds the ambient motion."""
+    flags = ["polaris-flags", f"polaris-sky-{sky}"]
+    if daylight:
+        flags.append("polaris-daylight")
+    if compare:
+        flags.append("polaris-compare")
+    if generating:
+        flags.append("polaris-generating")
+    return f'<div class="{" ".join(flags)}"></div>'
 
 
 def _css_string(text):

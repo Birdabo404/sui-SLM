@@ -425,6 +425,12 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(-
   .thinking-note{animation-duration:1ms}
 }
 
+/* ---------- while an answer generates, ambient motion holds still so the CPU stays with Ollama ----------
+ * The star (including the sidebar's first wrap, which waits at its rest frame and plays when the answer lands)
+ * and the sky pause. The loader and the one-shot entrances keep running: a paused entrance would sit on its
+ * first, invisible frame. */
+:root:has(.polaris-generating) :is(.band *,.sky){animation-play-state:paused!important}
+
 /* ---------- sidebar ---------- */
 [data-testid="stSidebar"]{background:var(--c-surface);border-right:1px solid var(--c-line)}
 [data-testid="stSidebar"][aria-expanded="true"]{width:248px!important;min-width:248px!important;max-width:248px!important}

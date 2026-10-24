@@ -86,6 +86,7 @@ from app.polaris import (
     running_card_html,
     MODE_HINTS,
     connection_html,
+    flags_html,
     mode_menu_css,
     network_online,
     SKY_LEVELS,
@@ -741,6 +742,22 @@ class LoaderAndNamingTests(unittest.TestCase):
         menu = mode_menu_css("qwen3.5:2b", ["base", "cot", "rag", "full"])
         self.assertIn('nth-child(1)::after{content:"Plain model, no documents"}', menu)
 
+    def test_ambient_motion_pauses_while_generating(self):
+        self.assertIn("polaris-generating", flags_html(1, generating=True))
+        self.assertNotIn("polaris-generating", flags_html(1))
+        self.assertEqual(
+            flags_html(2, daylight=True, compare=True, generating=True),
+            '<div class="polaris-flags polaris-sky-2 polaris-daylight polaris-compare polaris-generating"></div>',
+        )
+        css = style_path().read_text(encoding="utf-8")
+        rules = [r for r in css.split("}") if ":root:has(.polaris-generating)" in r]
+        self.assertEqual(len(rules), 1)
+        selector, body = rules[0].rsplit("{", 1)
+        selector = selector.rsplit("*/", 1)[-1].strip()
+        self.assertEqual(body, "animation-play-state:paused!important")
+        # Only the star and the sky: the loader and the one-shot entrances must keep running.
+        self.assertEqual(selector, ":root:has(.polaris-generating) :is(.band *,.sky)")
+
     def test_mode_names_round_trip(self):
         for mode in ("base", "cot", "rag", "full"):
             self.assertEqual(mode_from_name(mode_name(mode)), mode)
@@ -1192,6 +1209,30 @@ class StopTests(unittest.TestCase):
         self.assertIsNone(rec)
         self.assertIs(st.session_state.last_cancelled, True)
         slot.empty.assert_called_once()
+
+    def test_loader_is_sent_once_while_the_answer_runs(self):
+        st = MagicMock()
+        st.cache_resource = _cache_stub
+        st.cache_data = _cache_stub
+        st.session_state = MagicMock()
+        st.session_state.run_records = []
+        sys.modules["streamlit"] = st
+        if "app.app" in sys.modules:
+            del sys.modules["app.app"]
+        app_mod = importlib.import_module("app.app")
+        slot = MagicMock()
+
+        def slow_answer(question, mode, model, **kw):
+            time.sleep(0.7)
+            return {"mode": mode, "text": "use tar", "hits": [], "weak": False, "latency_s": 0.7}
+
+        with patch.object(app_mod, "answer_question", side_effect=slow_answer):
+            rec = app_mod._answer_record("q", "base", "m", None, "idx", slot=slot)
+        self.assertEqual(rec["answer"], "use tar")
+        self.assertEqual(slot.markdown.call_count, 1)
+        self.assertIn("Generating an answer…", slot.markdown.call_args.args[0])
+        stop_checks = [c for c in st.session_state.get.call_args_list if c.args == ("stop-gen",)]
+        self.assertGreaterEqual(len(stop_checks), 2)
 
 
 class HelperTests(unittest.TestCase):
