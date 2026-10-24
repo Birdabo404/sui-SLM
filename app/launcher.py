@@ -16,6 +16,19 @@ from app.engine import index_ok, ollama_reachable
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
 DEFAULT_PORT = 8501
+DRY_RUN_ENV_KEYS = (
+    "OLLAMA_HOST",
+    "OLLAMA_MODEL",
+    "OLLAMA_DISTILLED_MODEL",
+    "OLLAMA_KEEP_ALIVE",
+    "RAG_INDEX",
+    "INCLUDE_UBUNTU_SERVER",
+    "HF_HUB_OFFLINE",
+    "TRANSFORMERS_OFFLINE",
+    "HF_DATASETS_OFFLINE",
+    "ANONYMIZED_TELEMETRY",
+    "STREAMLIT_BROWSER_GATHER_USAGE_STATS",
+)
 
 
 def pick_index(rag_dir):
@@ -123,7 +136,8 @@ def main(argv=None):
     env = launch_environment()
     command = streamlit_command(sys.executable, args.port)
     if args.dry_run:
-        print(json.dumps({"command": command, "environment": env}, sort_keys=True))
+        visible_env = {key: env[key] for key in DRY_RUN_ENV_KEYS if key in env}
+        print(json.dumps({"command": command, "environment": visible_env}, sort_keys=True))
         return 0
 
     if not ensure_ollama(env):

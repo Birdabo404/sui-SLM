@@ -140,6 +140,7 @@ class LauncherTests(unittest.TestCase):
         env = os.environ.copy()
         env.pop("OLLAMA_MODEL", None)
         env.pop("RAG_INDEX", None)
+        env["SUI_SLM_TEST_SECRET"] = "do-not-print"
         result = subprocess.run(
             [str(ROOT / ".venv" / "bin" / "python"), "-m", "app.launcher", "--dry-run"],
             cwd=ROOT,
@@ -151,6 +152,8 @@ class LauncherTests(unittest.TestCase):
         plan = json.loads(result.stdout)
         self.assertEqual(plan["environment"]["OLLAMA_MODEL"], "qwen3.5:2b")
         self.assertIn("--server.fileWatcherType", plan["command"])
+        self.assertNotIn("SUI_SLM_TEST_SECRET", plan["environment"])
+        self.assertNotIn("do-not-print", result.stdout)
 
     def test_readme_documents_english_only_scope(self):
         readme = (ROOT / "README.md").read_text(encoding="utf-8")
