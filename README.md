@@ -30,7 +30,7 @@ sui-slm
 
 `install.sh` installs `sui-slm` in `~/.local/bin` and a desktop launcher. The command starts local Ollama when needed, uses `rag/rag-index-v2` unless `RAG_INDEX` is set, starts Streamlit without file watching, and opens the local app in the browser. It sets offline defaults without overriding explicit environment values.
 
-The default UI is Polaris (dark, compact). Modes are BASE / COT / RAG / FULL. The sidebar is read-only (model, index, frozen threshold/k, git, Ollama, warm-up). Export CSV/JSON from the session records, not from `logs/answers.csv`. Compare runs the selected pair one after the other; when a distilled model is configured, it defaults to base FULL versus distilled FULL. `POLARIS_ENABLED=0` restores the old settings sidebar. Fonts are local OFL files under `app/static/` — no CDN.
+The default UI is Polaris (dark, compact). Modes are the thesis configs BASE / +CoT / +RAG / +RAG+CoT; BASE is the plain model with no documents, and +CoT is a step-by-step prompt (every request sends `think: false`). The sidebar is read-only (model, index, frozen threshold/k, git, Ollama, warm-up). Export CSV/JSON from the session records, not from `logs/answers.csv`. Compare runs the selected pair one after the other; when a distilled model is configured, it defaults to base+RAG+CoT versus distilled+RAG+CoT. `POLARIS_ENABLED=0` restores the old settings sidebar. Fonts are local OFL files under `app/static/` — no CDN.
 
 The app and bundled lab corpus are English-only. Questions in other languages are outside this thesis build's scope.
 

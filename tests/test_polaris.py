@@ -6,6 +6,7 @@ import importlib
 import io
 import json
 import os
+import re
 import socket
 import sys
 import tempfile
@@ -27,6 +28,7 @@ from app.engine import (
     WEAK_DENSE,
     answer_question,
     build_messages,
+    config_id,
     is_weak,
     model_digest,
     ollama_info,
@@ -82,7 +84,7 @@ from app.polaris import (
     pair_compare_model_keys,
     preview_text,
     running_card_html,
-    THINKING_WORDS,
+    MODE_HINTS,
     connection_html,
     mode_menu_css,
     network_online,
@@ -464,13 +466,13 @@ class CompareTests(unittest.TestCase):
 
 class HtmlTests(unittest.TestCase):
     def test_card_head_and_retrieval_off(self):
-        self.assertIn('<span class="mode">Base</span>', card_head_html("base"))
-        self.assertIn("Model only", card_head_html("base"))
-        self.assertIn('<span class="mode">Full</span>', card_head_html("full"))
+        self.assertIn('<span class="mode">BASE</span>', card_head_html("base"))
+        self.assertIn("Plain model, no documents", card_head_html("base"))
+        self.assertIn('<span class="mode">+RAG+CoT</span>', card_head_html("full"))
         self.assertNotIn("[", card_head_html("full"))
         self.assertIn("No retrieval", retrieval_bar_html(None, 0.30, retrieval_off=True))
         self.assertIn(
-            "No retrieval in Base",
+            "No retrieval in BASE",
             retrieval_bar_html(None, 0.30, retrieval_off=True, mode="base"),
         )
         self.assertNotIn("retrieval off", retrieval_bar_html(None, 0.30, retrieval_off=True))
@@ -646,13 +648,13 @@ class HtmlTests(unittest.TestCase):
         }
         left = card_html(base, align_slots=True)
         right = card_html(full, align_slots=True)
-        self.assertIn('<span class="mode">Base</span>', left)
-        self.assertIn("Model only", left)
-        self.assertIn('<span class="mode">Full</span>', right)
-        self.assertIn("Lab docs, reasoned step by step", right)
+        self.assertIn('<span class="mode">BASE</span>', left)
+        self.assertIn("Plain model, no documents", left)
+        self.assertIn('<span class="mode">+RAG+CoT</span>', right)
+        self.assertIn("Retrieved lab docs, step-by-step prompt", right)
         self.assertIn("slot-empty ev", left)
-        self.assertIn("No sources in Base", left)
-        self.assertIn("No retrieval in Base", left)
+        self.assertIn("No sources in BASE", left)
+        self.assertIn("No retrieval in BASE", left)
         self.assertIn("retr off", left)
         self.assertIn('<span class="count">1 source</span>', right)
         self.assertIn("retr ok", right)
@@ -665,7 +667,7 @@ class HtmlTests(unittest.TestCase):
         self.assertIn("slot-empty ev", wait)
         self.assertIn("No sources yet", wait)
         self.assertIn("No retrieval yet", wait)
-        self.assertIn('<span class="mode">Full</span>', wait)
+        self.assertIn('<span class="mode">+RAG+CoT</span>', wait)
         self.assertNotIn("dashed", wait)
         css = style_path().read_text(encoding="utf-8")
         compact = css.replace(" ", "").replace("\n", "")
@@ -691,15 +693,53 @@ class LoaderAndNamingTests(unittest.TestCase):
                 self.assertNotIn(prop, body, f"loader keyframes animate {prop}")
 
     def test_thinking_label_follows_mode(self):
-        self.assertEqual(thinking_label("full"), "Searching the lab docs")
-        self.assertEqual(thinking_label("rag"), "Searching the lab docs")
-        self.assertEqual(thinking_label("cot"), "Thinking it through")
-        self.assertEqual(thinking_label("base"), "Writing an answer")
+        self.assertEqual(thinking_label("full"), "Generating an answer from the lab docs")
+        self.assertEqual(thinking_label("rag"), "Generating an answer from the lab docs")
+        self.assertEqual(thinking_label("cot"), "Generating an answer")
+        self.assertEqual(thinking_label("base"), "Generating an answer")
         self.assertEqual(thinking_label("full", loading_index=True), "Loading the lab docs index")
         self.assertIn("Stopped", stopped_html())
-        card = running_card_html("cot", "Thinking it through")
+        card = running_card_html("cot", thinking_label("cot"))
         self.assertIn("running-card", card)
-        self.assertIn('<span class="mode">CoT</span>', card)
+        self.assertIn('<span class="mode">+CoT</span>', card)
+
+    def test_loader_text_is_neutral(self):
+        banned = (
+            "think", "reason", "grepping", "man page", "untarring", "piping",
+            "charting", "stargazing", "checking permissions",
+        )
+        css = style_path().read_text(encoding="utf-8")
+        for mode in ("base", "cot", "rag", "full"):
+            label = thinking_label(mode)
+            html = thinking_html(label)
+            text = re.sub(r"<[^>]+>", " ", html).lower()
+            for word in banned:
+                self.assertNotIn(word, text, f"{mode} loader says {word!r}")
+            self.assertEqual(html.count('class="thinking-label"'), 1)
+            self.assertIn(f'<span class="thinking-label">{label}…</span>', html)
+            self.assertNotIn('aria-hidden="true"><span class="thinking-label"', html)
+        for mode in ("base", "cot"):
+            self.assertNotRegex(thinking_label(mode).lower(), "doc|search|retriev|index")
+        self.assertNotIn("polaris-cycle", css)
+        self.assertNotIn("polaris-shimmer", css)
+        self.assertNotIn(".thinking-label > span", css)
+
+    def test_base_label_says_plain_model_no_documents(self):
+        head = card_head_html("base")
+        self.assertIn('<span class="mode">BASE</span><span class="sub">Plain model, no documents</span>', head)
+        self.assertEqual(mode_name("base"), "BASE")
+        names = {mode: mode_name(mode) for mode in ("base", "cot", "rag", "full")}
+        self.assertEqual(names, {"base": "BASE", "cot": "+CoT", "rag": "+RAG", "full": "+RAG+CoT"})
+        for mode, name in names.items():
+            self.assertEqual(config_id("base", mode), "base" if name == "BASE" else "base" + name)
+        for mode in ("base", "cot"):
+            self.assertIn("no documents", MODE_HINTS[mode])
+        for mode in ("rag", "full"):
+            self.assertIn("Retrieved lab docs", MODE_HINTS[mode])
+        for hint in MODE_HINTS.values():
+            self.assertNotRegex(hint.lower(), "think|reason")
+        menu = mode_menu_css("qwen3.5:2b", ["base", "cot", "rag", "full"])
+        self.assertIn('nth-child(1)::after{content:"Plain model, no documents"}', menu)
 
     def test_mode_names_round_trip(self):
         for mode in ("base", "cot", "rag", "full"):
@@ -732,7 +772,7 @@ class LoaderAndNamingTests(unittest.TestCase):
     def test_mode_menu_css_names_model_and_hints(self):
         css = mode_menu_css('qwen"3.5:2b', ["base", "cot", "rag", "full"])
         self.assertIn('--polaris-model:"qwen\\"3.5:2b"', css)
-        self.assertIn('nth-child(4)::after{content:"Lab docs, reasoned step by step"}', css)
+        self.assertIn('nth-child(4)::after{content:"Retrieved lab docs, step-by-step prompt"}', css)
         self.assertTrue(css.startswith("<style>") and css.endswith("</style>"))
 
     def test_sidebar_logo_and_star_ids(self):
@@ -765,14 +805,8 @@ class LoaderAndNamingTests(unittest.TestCase):
             self.assertIn(rule.replace("opacity:0.", "opacity:."), css)
         self.assertIn("visibility:hidden", css.split(".polaris-sky-4", 1)[1].split("}", 1)[0])
 
-    def test_thinking_phrases_match_css_cycle(self):
-        html = thinking_html("Writing an answer")
-        self.assertEqual(html.count("<span>"), len(THINKING_WORDS) + 1)
-        self.assertIn("<span>Writing an answer…</span>", html)
+    def test_status_widget_stays_hidden(self):
         css = style_path().read_text(encoding="utf-8")
-        self.assertIn("polaris-cycle 17.6s", css)
-        self.assertIn(".thinking-label > span:nth-child(8){animation-delay:15.4s}", css)
-        self.assertEqual(len(THINKING_WORDS), 7)
         self.assertIn('[data-testid="stStatusWidget"]{display:none!important}', css)
 
     def test_compare_preview_skips_reasoning_and_fences(self):

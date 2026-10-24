@@ -26,6 +26,7 @@ import requests
 from app.engine import (
     MODE_LABELS,
     MODE_SUBS,
+    MODE_SUFFIX,
     OLLAMA_HOST,
     THESIS_CONFIGS,
     mode_choices,
@@ -114,30 +115,17 @@ EXAMPLES = (
     "connect to the lab printer",
     "what's the lab wi-fi password?",
 )
-MODE_NAMES = {
-    "base": "Base",
-    "cot": "CoT",
-    "rag": "RAG",
-    "full": "Full",
-}
+# The thesis config names (base, base+CoT, base+RAG, base+RAG+CoT), so the UI and the eval CSVs say the same thing.
+MODE_NAMES = {mode: suffix or "BASE" for mode, suffix in MODE_SUFFIX.items()}
+# CoT here is a prompt that asks for written steps; requests send think=false, so nothing is hidden reasoning.
 MODE_HINTS = {
-    "base": "Model only",
-    "cot": "Reasons step by step",
-    "rag": "Answers from the lab docs",
-    "full": "Lab docs, reasoned step by step",
+    "base": "Plain model, no documents",
+    "cot": "Step-by-step prompt, no documents",
+    "rag": "Retrieved lab docs, short cited answer",
+    "full": "Retrieved lab docs, step-by-step prompt",
 }
 TAGLINE = "Offline help for the Linux lab"
 STILL_WORKING = "The model runs on this machine, so this can take a moment."
-# Shown one after another while an answer is running, after the stage label (always 7: the CSS cycle is built for 8).
-THINKING_WORDS = (
-    "Grepping…",
-    "Reading man pages…",
-    "Untarring thoughts…",
-    "Piping it through…",
-    "Charting a course…",
-    "Stargazing…",
-    "Checking permissions…",
-)
 _WIFI_SVG = (
     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 8.5a15 15 0 0 1 20 0M5 12a10.5 10.5 0 0 1 14 0'
     'M8.5 15.5a5.5 5.5 0 0 1 7 0"/><circle class="d" cx="12" cy="19" r="1.2"/></svg>'
@@ -1063,14 +1051,13 @@ def _dots_html():
 
 
 def thinking_html(label, still=STILL_WORKING):
-    """Loader for a running answer: a 3x3 constellation breathing out from its center star, the stage label,
-    then a cycle of thinking phrases. Pure CSS, so it keeps moving while the main thread is busy."""
-    words = "".join(f"<span>{escape(w)}</span>" for w in (label + "…", *THINKING_WORDS))
+    """Loader for a running answer: a 3x3 constellation breathing out from its center star beside one plain
+    label. Pure CSS, so it keeps moving while the main thread is busy."""
     return (
-        f'<div class="thinking" role="status" aria-label="{escape(label)}">'
+        '<div class="thinking" role="status">'
         + _dots_html()
-        + '<span class="thinking-text" aria-hidden="true">'
-        f'<span class="thinking-label">{words}</span>'
+        + '<span class="thinking-text">'
+        f'<span class="thinking-label">{escape(label)}…</span>'
         f'<span class="thinking-note">{escape(still)}</span>'
         "</span></div>"
     )
@@ -1098,13 +1085,12 @@ def running_card_html(mode, label):
 
 
 def thinking_label(mode, loading_index=False):
+    """Names only work that runs: BASE and +CoT never touch the docs, and no mode has a hidden thinking phase."""
     if loading_index:
         return "Loading the lab docs index"
     if uses_rag(mode):
-        return "Searching the lab docs"
-    if mode == "cot":
-        return "Thinking it through"
-    return "Writing an answer"
+        return "Generating an answer from the lab docs"
+    return "Generating an answer"
 
 
 def waiting_html(mode, after_label):
