@@ -17,7 +17,32 @@ case "$py_mm" in
     exit 1
     ;;
 esac
+
+install_launcher() {
+  local data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+  case "$data_home" in
+    /*) ;;
+    *) data_home="$HOME/.local/share" ;;
+  esac
+  local launcher="$HOME/.local/bin/sui-slm"
+  local applications="$data_home/applications"
+  local icons="$data_home/icons/hicolor/scalable/apps"
+  mkdir -p "$(dirname "$launcher")" "$applications" "$icons"
+  ln -sfn "$ROOT/bin/sui-slm" "$launcher"
+  install -m 0644 "$ROOT/app/static/sui-slm.svg" "$icons/sui-slm.svg"
+  local desktop
+  desktop="$(<"$ROOT/packaging/sui-slm.desktop")"
+  desktop="${desktop//@LAUNCHER@/$launcher}"
+  printf '%s\n' "$desktop" > "$applications/.sui-slm.desktop.tmp"
+  chmod 0644 "$applications/.sui-slm.desktop.tmp"
+  mv -f "$applications/.sui-slm.desktop.tmp" "$applications/sui-slm.desktop"
+}
+
 if [ "${1:-}" = --check-python ]; then
+  exit 0
+fi
+if [ "${1:-}" = --install-launcher ]; then
+  install_launcher
   exit 0
 fi
 
@@ -56,6 +81,7 @@ if ! ollama list >/dev/null 2>&1; then
   exit 1
 fi
 ollama pull qwen3.5:2b
+install_launcher
 
 cat <<'EOF'
 
@@ -73,5 +99,5 @@ chromadb 1.0.8 cannot read an index built with chromadb 0.6.3. Rebuild; do not r
   python rag/trim/make_trimmed_index.py --src rag/rag-index --snap corpus/snapshot-YYYY-MM-DD --out rag/rag-index-v2
 
 Start Ollama if it is not running, then:
-  streamlit run app/app.py
+  sui-slm
 EOF

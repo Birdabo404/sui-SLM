@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT="$(readlink -f "$0")"
+ROOT="$(cd "$(dirname "$SCRIPT")/.." && pwd)"
+cd "$ROOT"
+exec "$ROOT/.venv/bin/python" -m app.launcher "$@"

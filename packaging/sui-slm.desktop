@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Polaris
+Comment=Offline Linux lab assistant
+Exec="@LAUNCHER@"
+Icon=sui-slm
+Terminal=false
+Categories=Education;Utility;
