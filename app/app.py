@@ -47,6 +47,7 @@ from app.polaris import (
     compare_compact_html,
     connection_html,
     default_compare_modes,
+    default_compare_model_keys,
     empty_hero_html,
     empty_slot_html,
     evidence_block_html,
@@ -57,8 +58,10 @@ from app.polaris import (
     metrics_html,
     mode_menu_css,
     mode_name,
+    model_key_choices,
     network_online,
-    pair_compare_modes,
+    pair_compare_config_modes,
+    pair_compare_model_keys,
     polaris_on,
     records_to_csv,
     records_to_json,
@@ -262,9 +265,16 @@ def _init_session():
     st.session_state.setdefault("compare", False)
     _session_git_commit()
     if "cmp_left" not in st.session_state or "cmp_right" not in st.session_state:
-        left, right = default_compare_modes()
+        if len(model_key_choices(DISTILLED_MODEL)) > 1:
+            left, right = "full", "full"
+        else:
+            left, right = default_compare_modes()
         st.session_state.setdefault("cmp_left", left)
         st.session_state.setdefault("cmp_right", right)
+    if "cmp_left_model" not in st.session_state or "cmp_right_model" not in st.session_state:
+        left, right = default_compare_model_keys(DISTILLED_MODEL)
+        st.session_state.setdefault("cmp_left_model", left)
+        st.session_state.setdefault("cmp_right_model", right)
 
 
 @st.cache_resource
@@ -303,13 +313,37 @@ def run_polaris():
     )
     st.markdown(sky_html(), unsafe_allow_html=True)
 
-    left_mode, right_mode = pair_compare_modes(
+    left_model_key, right_model_key = pair_compare_model_keys(
+        st.session_state.get("cmp_left_model"),
+        st.session_state.get("cmp_right_model"),
+        DISTILLED_MODEL,
+    )
+    left_mode, right_mode = pair_compare_config_modes(
         st.session_state.get("cmp_left"),
         st.session_state.get("cmp_right"),
+        left_model_key,
+        right_model_key,
     )
     conn = connection_html(online, up)
+    compare_model = model
+    if left_model_key != right_model_key:
+        left_model = model_name_for(
+            left_model_key,
+            base_model=BASE_MODEL,
+            distilled_model=DISTILLED_MODEL,
+        )
+        right_model = model_name_for(
+            right_model_key,
+            base_model=BASE_MODEL,
+            distilled_model=DISTILLED_MODEL,
+        )
+        compare_model = f"{left_model} vs {right_model}"
     composer = dict(
-        compare_on=compare_on, left_mode=left_mode, right_mode=right_mode, model=model, conn=conn
+        compare_on=compare_on,
+        left_mode=left_mode,
+        right_mode=right_mode,
+        model=compare_model,
+        conn=conn,
     )
 
     if not (st.session_state.messages or st.session_state.get("pending_q")):
@@ -340,14 +374,35 @@ def run_polaris():
     mode = st.session_state.get("mode", "full")
     st.session_state.messages.append({"role": "user", "content": question})
     with thread:
-        answered = _answer_turn(question, mode, compare_on, left_mode, right_mode, model, index_dir)
+        answered = _answer_turn(
+            question,
+            mode,
+            compare_on,
+            left_mode,
+            right_mode,
+            model,
+            index_dir,
+            left_model_key=left_model_key,
+            right_model_key=right_model_key,
+        )
     stop_slot.empty()
     if answered:
         # The sidebar was drawn before this answer existed; one cheap rerun brings its counts up to date.
         st.rerun()
 
 
-def _answer_turn(question, mode, compare_on, left_mode, right_mode, model, index_dir):
+def _answer_turn(
+    question,
+    mode,
+    compare_on,
+    left_mode,
+    right_mode,
+    model,
+    index_dir,
+    *,
+    left_model_key="base",
+    right_model_key="base",
+):
     st.session_state.pop("last_cancelled", None)
     st.markdown(user_turn_html(question), unsafe_allow_html=True)
     slot = st.empty()
@@ -364,7 +419,16 @@ def _answer_turn(question, mode, compare_on, left_mode, right_mode, model, index
 
     if compare_on:
         slot.empty()
-        recs = _run_compare(question, left_mode, right_mode, model, retriever, index_dir)
+        recs = _run_compare(
+            question,
+            left_mode,
+            right_mode,
+            model,
+            retriever,
+            index_dir,
+            left_model_key=left_model_key,
+            right_model_key=right_model_key,
+        )
         if recs[0] is None and recs[1] is None:
             if st.session_state.pop("last_cancelled", False):
                 return False
@@ -412,9 +476,30 @@ def _render_sidebar(model, index_dir, frozen, up, online, chat=False):
         st.toggle("Compare two modes", key="compare")
         st.toggle("Daylight", key="daylight")
         if st.session_state.get("compare"):
+            model_keys = model_key_choices(DISTILLED_MODEL)
+            if len(model_keys) > 1:
+                st.selectbox(
+                    "Left model",
+                    model_keys,
+                    format_func=lambda key: model_name_for(key),
+                    key="cmp_left_model",
+                )
+                st.selectbox(
+                    "Right model",
+                    model_keys,
+                    format_func=lambda key: model_name_for(key),
+                    key="cmp_right_model",
+                )
             modes = mode_choices()
             st.selectbox("Left", modes, format_func=mode_name, key="cmp_left")
-            right_opts = [m for m in modes if m != st.session_state.get("cmp_left")]
+            same_model = (
+                st.session_state.get("cmp_left_model")
+                == st.session_state.get("cmp_right_model")
+            )
+            right_opts = [
+                m for m in modes
+                if not same_model or m != st.session_state.get("cmp_left")
+            ]
             current_right = st.session_state.get("cmp_right")
             if current_right not in right_opts and right_opts:
                 st.session_state.cmp_right = right_opts[0]
@@ -571,7 +656,17 @@ def _run_stoppable(work, heartbeat, tick=0.2):
     return box["value"]
 
 
-def _answer_record(question, mode, model, retriever, index_dir, panel=False, slot=None):
+def _answer_record(
+    question,
+    mode,
+    model,
+    retriever,
+    index_dir,
+    panel=False,
+    slot=None,
+    *,
+    model_key="base",
+):
     keep = slot is not None
     slot = slot if keep else st.empty()
     label = thinking_label(mode)
@@ -588,7 +683,7 @@ def _answer_record(question, mode, model, retriever, index_dir, panel=False, slo
                 model,
                 retriever=retriever,
                 chat_fn=chat,
-                model_key="base",
+                model_key=model_key,
                 log_commit=chat.commit,
                 keep_alive=keep_alive,
                 git_sha=git_sha,
@@ -617,8 +712,38 @@ def _answer_record(question, mode, model, retriever, index_dir, panel=False, slo
     return rec
 
 
-def _run_compare(question, left_mode, right_mode, model, retriever, index_dir):
-    left_mode, right_mode = pair_compare_modes(left_mode, right_mode)
+def _run_compare(
+    question,
+    left_mode,
+    right_mode,
+    model,
+    retriever,
+    index_dir,
+    *,
+    left_model_key="base",
+    right_model_key="base",
+):
+    left_model_key, right_model_key = pair_compare_model_keys(
+        left_model_key,
+        right_model_key,
+        DISTILLED_MODEL,
+    )
+    left_mode, right_mode = pair_compare_config_modes(
+        left_mode,
+        right_mode,
+        left_model_key,
+        right_model_key,
+    )
+    left_model = model_name_for(
+        left_model_key,
+        base_model=model,
+        distilled_model=DISTILLED_MODEL,
+    )
+    right_model = model_name_for(
+        right_model_key,
+        base_model=model,
+        distilled_model=DISTILLED_MODEL,
+    )
     message_index = len(st.session_state.messages)
     rec_l = rec_r = None
     with st.container(key="cmp"):
@@ -629,7 +754,15 @@ def _run_compare(question, left_mode, right_mode, model, retriever, index_dir):
             unsafe_allow_html=True,
         )
         with col_l:
-            rec_l = _answer_record(question, left_mode, model, retriever, index_dir, panel=True)
+            rec_l = _answer_record(
+                question,
+                left_mode,
+                left_model,
+                retriever,
+                index_dir,
+                panel=True,
+                model_key=left_model_key,
+            )
             if rec_l is not None:
                 _render_card(rec_l, key=f"answer-h{message_index}-l", align_slots=True)
         if st.session_state.get("last_cancelled") is True:
@@ -637,7 +770,15 @@ def _run_compare(question, left_mode, right_mode, model, retriever, index_dir):
             return rec_l, rec_r
         wait.empty()
         with col_r:
-            rec_r = _answer_record(question, right_mode, model, retriever, index_dir, panel=True)
+            rec_r = _answer_record(
+                question,
+                right_mode,
+                right_model,
+                retriever,
+                index_dir,
+                panel=True,
+                model_key=right_model_key,
+            )
             if rec_r is not None:
                 _render_card(rec_r, key=f"answer-h{message_index}-r", align_slots=True)
     return rec_l, rec_r
