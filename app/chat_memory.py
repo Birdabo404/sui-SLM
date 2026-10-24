@@ -185,9 +185,10 @@ class ChatStore:
         appending to the same chat can't drop these messages or have its own dropped."""
         self._validate_id(chat_id)
         added = list(messages)
-        updated_at = _now()
         with closing(self._connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
+            # Stamped under the write lock, so appends commit in the order of their updated_at.
+            updated_at = _now()
             current = db.execute(
                 "SELECT title, created_at, messages FROM chats WHERE id = ?",
                 (chat_id,),

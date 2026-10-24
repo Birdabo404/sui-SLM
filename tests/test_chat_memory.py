@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """App-only multi-turn context tests."""
 import csv
+import sqlite3
 import tempfile
 import threading
 import unittest
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
@@ -253,6 +255,27 @@ class ChatStoreTests(unittest.TestCase):
         self.assertEqual((second.created_at, second.updated_at), ("2026-10-24T09:00:00+00:00", "2026-10-24T09:02:00+00:00"))
         self.assertEqual(self.store.load_chat(chat.chat_id), second)
         self.assertEqual(self.store.list_chats()[0].turn_count, 2)
+
+    def test_append_stamps_updated_at_while_it_holds_the_write_lock(self):
+        chat = self.store.new_chat()
+        probes = []
+
+        def now():
+            with closing(sqlite3.connect(self.store.path, timeout=0)) as other:
+                try:
+                    other.execute("BEGIN IMMEDIATE")
+                except sqlite3.OperationalError as e:
+                    probes.append(str(e))
+                else:
+                    other.rollback()
+                    probes.append("free")
+            return "2026-10-24T09:05:00+00:00"
+
+        with patch("app.chat_memory._now", side_effect=now):
+            stored = self.store.append_messages(chat.chat_id, [{"role": "user", "content": "q"}])
+        self.assertEqual(probes, ["database is locked"])
+        self.assertEqual(stored.updated_at, "2026-10-24T09:05:00+00:00")
+        self.assertEqual(self.store.list_chats()[0].updated_at, "2026-10-24T09:05:00+00:00")
 
     def test_two_stores_appending_to_one_chat_keep_both_turns(self):
         chat = self.store.new_chat()
