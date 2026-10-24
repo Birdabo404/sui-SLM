@@ -29,6 +29,7 @@ from app.engine import (
     model_digest,
     ollama_chat_body,
     ollama_reachable,
+    warm_model,
 )
 from app.polaris import (
     EXPORT_FIELDS,
@@ -119,6 +120,25 @@ class FlagTests(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if k != "POLARIS_ENABLED"}
         with patch.dict(os.environ, env, clear=True):
             self.assertTrue(polaris_on())
+
+
+class SessionStartupTests(unittest.TestCase):
+    def test_compare_defaults_off_and_git_is_read_once(self):
+        import importlib
+
+        app_mod = importlib.import_module("app.app")
+        fake_st = MagicMock()
+        fake_st.session_state = {}
+        with patch.object(app_mod, "st", fake_st), patch.object(
+            app_mod,
+            "git_commit",
+            return_value="abc1234",
+        ) as commit:
+            app_mod._init_session()
+            app_mod._init_session()
+            self.assertEqual(app_mod._session_git_commit(), "abc1234")
+        self.assertFalse(fake_st.session_state["compare"])
+        commit.assert_called_once_with()
 
 
 class RunRecordTests(unittest.TestCase):
@@ -749,6 +769,7 @@ class StopTests(unittest.TestCase):
                 log_path=Path(td) / "answers.csv",
                 temperature=0,
                 seed=42,
+                keep_alive="30m",
                 log_commit=chat.commit,
             )
         self.assertEqual(out["text"], "use tar -xzf")
@@ -759,8 +780,18 @@ class StopTests(unittest.TestCase):
                 "qwen3.5:2b",
                 temperature=0,
                 seed=42,
+                keep_alive="30m",
             ),
         )
+
+    def test_warm_model_makes_a_real_non_streaming_call(self):
+        _SlowOllama.delay = 0
+        self.assertTrue(warm_model("qwen3.5:2b", host=self.host, keep_alive="45m"))
+        self.assertEqual(len(_SlowOllama.bodies), 1)
+        body = _SlowOllama.bodies[0]
+        self.assertEqual(body["messages"], [])
+        self.assertEqual(body["keep_alive"], "45m")
+        self.assertFalse(body["stream"])
 
     def test_cancel_aborts_a_slow_answer(self):
         _SlowOllama.delay = 5

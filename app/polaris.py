@@ -148,20 +148,22 @@ class CancellableChat:
     thread and makes Ollama abandon the generation instead of finishing it in the background.
     """
 
-    def __init__(self, host=None, timeout=300, temperature=0.2, seed=None):
+    def __init__(self, host=None, timeout=300, temperature=0.2, seed=None, keep_alive=None):
         self._url = urlsplit((host or OLLAMA_HOST).rstrip("/") + "/api/chat")
         self._timeout = timeout
         self._temperature = temperature
         self._seed = seed
+        self._keep_alive = keep_alive
         self._lock = threading.Lock()
         self._conn = None
         self._committed = False
         self.cancelled = False
 
-    def configure(self, *, temperature, seed):
+    def configure(self, *, temperature, seed, keep_alive):
         with self._lock:
             self._temperature = temperature
             self._seed = seed
+            self._keep_alive = keep_alive
 
     def __call__(self, messages, model):
         conn = http.client.HTTPConnection(self._url.hostname, self._url.port or 80, timeout=self._timeout)
@@ -172,6 +174,7 @@ class CancellableChat:
                 model,
                 temperature=self._temperature,
                 seed=self._seed,
+                keep_alive=self._keep_alive,
             )
         ).encode("utf-8")
         try:

@@ -28,11 +28,13 @@ from app.engine import (
     config_id,
     git_commit,
     index_ok,
+    keep_alive_setting,
     model_digest,
     model_name_for,
     mode_choices,
     ollama_reachable,
     uses_rag,
+    warm_model,
 )
 from app.polaris import (
     EXAMPLES,
@@ -105,6 +107,17 @@ def _chunk_count(index_dir):
     return index_chunk_count(index_dir)
 
 
+@st.cache_resource(show_spinner=False)
+def _warm_model_at_startup(model, keep_alive):
+    return warm_model(model, keep_alive=keep_alive)
+
+
+def _session_git_commit():
+    if "git_sha" not in st.session_state:
+        st.session_state["git_sha"] = git_commit()
+    return st.session_state["git_sha"]
+
+
 def main():
     if polaris_on():
         st.set_page_config(page_title="Polaris", layout="centered")
@@ -117,6 +130,7 @@ def main():
 def run_legacy():
     st.title("CCIS Linux lab assistant")
     st.caption("Runs offline. Docs come from the local index; the model is local Ollama.")
+    session_git_sha = _session_git_commit()
 
     with st.sidebar:
         st.header("Settings")
@@ -174,7 +188,13 @@ def run_legacy():
         else:
             try:
                 result = answer_question(
-                    question, mode, model, retriever=retriever, model_key=model_key
+                    question,
+                    mode,
+                    model,
+                    retriever=retriever,
+                    model_key=model_key,
+                    keep_alive=keep_alive_setting(),
+                    git_sha=session_git_sha,
                 )
                 text = result["text"]
                 hits = result["hits"]
@@ -228,6 +248,8 @@ def _init_session():
     st.session_state.setdefault("run_records", [])
     st.session_state.setdefault("warmed", False)
     st.session_state.setdefault("mode", "full")
+    st.session_state.setdefault("compare", False)
+    _session_git_commit()
     if "cmp_left" not in st.session_state or "cmp_right" not in st.session_state:
         left, right = default_compare_modes()
         st.session_state.setdefault("cmp_left", left)
@@ -246,6 +268,8 @@ def run_polaris():
     model = BASE_MODEL
     frozen = load_frozen()
     up = _ollama_up()
+    if up:
+        st.session_state.warmed = _warm_model_at_startup(model, keep_alive_setting())
     online = _network_online()
     incoming = st.session_state.get("pending_q") or st.session_state.get("chat-dock")
 
@@ -368,7 +392,6 @@ def _render_sidebar(model, index_dir, frozen, up, online, chat=False):
             ):
                 st.session_state.messages = []
                 st.session_state.run_records = []
-                st.session_state.warmed = False
                 st.rerun()
 
         st.markdown('<p class="side-h">View</p>', unsafe_allow_html=True)
@@ -419,7 +442,7 @@ def _render_sidebar(model, index_dir, frozen, up, online, chat=False):
         digest = _model_digest(model)
         loaded = index_ok(index_dir)
         chunks = _chunk_count(index_dir) if loaded else 0
-        sha = git_commit()
+        sha = st.session_state.get("git_sha", "")
         st.markdown('<p class="side-h">System</p>', unsafe_allow_html=True)
         st.markdown(
             sidebar_kv_html(
@@ -539,6 +562,8 @@ def _answer_record(question, mode, model, retriever, index_dir, panel=False, slo
     slot = slot if keep else st.empty()
     label = thinking_label(mode)
     loader = running_card_html(mode, label) if panel else thinking_html(label)
+    keep_alive = keep_alive_setting()
+    git_sha = _session_git_commit()
     slot.markdown(loader, unsafe_allow_html=True)
     try:
         result = _run_stoppable(
@@ -550,6 +575,8 @@ def _answer_record(question, mode, model, retriever, index_dir, panel=False, slo
                 chat_fn=chat,
                 model_key="base",
                 log_commit=chat.commit,
+                keep_alive=keep_alive,
+                git_sha=git_sha,
             ),
             lambda: slot.markdown(loader, unsafe_allow_html=True),
         )
