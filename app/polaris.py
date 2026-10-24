@@ -82,6 +82,7 @@ EXPORT_FIELDS = (
     "mode",
     "model",
     "model_key",
+    "context_turns",
     "answer",
     "latency_s",
     "eval_count",
@@ -326,6 +327,7 @@ class RunRecord(TypedDict):
     mode: str
     model: str
     model_key: str
+    context_turns: int
     answer: str
     latency_s: float
     eval_count: int | None
@@ -414,6 +416,7 @@ def build_run_record(result, index_path=""):
         "mode": str(result.get("mode") or ""),
         "model": str(result.get("model") or ""),
         "model_key": str(result.get("model_key") or "base"),
+        "context_turns": int(result.get("context_turns") or 0),
         "answer": str(result.get("text") or ""),
         "latency_s": float(result.get("latency_s") or 0.0),
         "eval_count": _opt_int(result.get("eval_count")),

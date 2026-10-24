@@ -305,6 +305,7 @@ class RunRecordTests(unittest.TestCase):
                 "config": "base",
                 "mode": "base",
                 "model": "qwen3.5:2b",
+                "context_turns": 2,
                 "text": "hi",
                 "latency_s": 1.25,
                 "app_rss_mb": 100,
@@ -322,10 +323,12 @@ class RunRecordTests(unittest.TestCase):
         rows = list(csv.DictReader(io.StringIO(csv_text)))
         self.assertEqual(list(rows[0].keys()), list(EXPORT_FIELDS))
         self.assertEqual(rows[0]["question"], "q")
+        self.assertEqual(rows[0]["context_turns"], "2")
         self.assertEqual(rows[0]["total_mb"], "300.0")
         self.assertNotIn("answers.csv", csv_text)
         payload = json.loads(records_to_json([rec]))
         self.assertEqual(payload[0]["answer"], "hi")
+        self.assertEqual(payload[0]["context_turns"], 2)
         self.assertEqual(payload[0]["index_path"], "/tmp/index")
 
 

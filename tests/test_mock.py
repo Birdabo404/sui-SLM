@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -17,6 +18,7 @@ os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 from shared.prompt import ABSTAIN, SYSTEM, system_for_mode, user_msg
 from rag.query_hybrid import dense_scores, retrieve, rrf_fuse, tokenize
+from app.chat_memory import ChatContext, Turn
 from app.engine import (
     CSV_FIELDS,
     MODE_LABELS,
@@ -443,6 +445,7 @@ class MockRunTests(unittest.TestCase):
         self.assertEqual(rows[0]["mode"], "base")
         self.assertEqual(rows[0]["model"], "qwen3.5:2b")
         self.assertEqual(rows[0]["config"], "base")
+        self.assertEqual(rows[0]["context_turns"], "0")
         self.assertEqual(rows[0]["n_chunks"], "0")
         self.assertGreaterEqual(float(rows[0]["latency_s"]), 0)
         self.assertGreater(float(rows[0]["app_rss_mb"]), 0)
@@ -538,6 +541,81 @@ class EvalTests(unittest.TestCase):
         rows = load_questions(self.questions)
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["id"], "q1")
+
+    def test_eval_csv_bytes_stay_single_turn_after_app_context(self):
+        context_log = self.dir / "context.csv"
+        answer_question(
+            "current",
+            "base",
+            "qwen3.5:2b",
+            chat_fn=lambda messages, model: "context answer",
+            log_path=context_log,
+            context=ChatContext(
+                retrieval_query="previous current",
+                turns=(Turn("previous", "previous answer"),),
+            ),
+        )
+        one_question = self.dir / "one.jsonl"
+        one_question.write_text(
+            json.dumps({
+                "id": "q1",
+                "question": "how do I list files",
+                "answerable": True,
+                "gold_answer": "ls",
+                "source": "tldr ls",
+            }) + "\n",
+            encoding="utf-8",
+        )
+
+        class FixedDateTime:
+            @classmethod
+            def now(cls, tz):
+                return datetime(2026, 1, 15, tzinfo=timezone.utc)
+
+        class FixedSampler:
+            def start(self):
+                pass
+
+            def stop(self):
+                return {
+                    "app_rss_mb": 1.0,
+                    "ollama_rss_mb": 2.0,
+                    "total_mb": 3.0,
+                    "system_used_mb": 4.0,
+                }
+
+        with patch("app.engine.datetime", FixedDateTime), patch(
+            "app.engine.RamSampler",
+            FixedSampler,
+        ), patch(
+            "app.engine.time.perf_counter",
+            side_effect=(10.0, 11.25),
+        ), patch(
+            "app.engine.git_commit",
+            return_value="ENGINESHA",
+        ), patch(
+            "eval.run_eval.git_commit",
+            return_value="EVALSHA",
+        ):
+            run_eval(
+                one_question,
+                self.out,
+                configs=[("base", "base")],
+                chat_fn=lambda messages, model: "mock-answer",
+                split="dev",
+                sweep=False,
+            )
+
+        expected = (
+            "ts,git_commit,split,threshold,k,config,model,mode,question_id,"
+            "question,answerable,gold_answer,gold_source,answer,cited_sources,"
+            "n_chunks,weak_retrieval,latency_s,app_rss_mb,ollama_rss_mb,total_mb,"
+            "system_used_mb\r\n"
+            "2026-01-15T00:00:00+00:00,EVALSHA,dev,0.30,5,base,qwen3.5:2b,"
+            "base,q1,how do I list files,True,ls,tldr ls,mock-answer,,0,,1.2500,"
+            "1.0,2.0,3.0,4.0\r\n"
+        ).encode("utf-8")
+        self.assertEqual(self.out.read_bytes(), expected)
 
     def test_run_eval_skips_empty_distilled_and_logs_four_configs(self):
         hits = [{

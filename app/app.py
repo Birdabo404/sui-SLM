@@ -18,6 +18,7 @@ if str(ROOT) not in sys.path:
 import requests
 import streamlit as st
 
+from app.chat_memory import build_chat_context
 from app.engine import (
     BASE_MODEL,
     DEFAULT_INDEX,
@@ -188,17 +189,21 @@ def run_legacy():
     if not question:
         return
 
+    context = build_chat_context(st.session_state.messages, question)
     st.session_state.messages.append({"role": "user", "content": question})
     with st.chat_message("user"):
         st.markdown(question)
 
+    failed = False
     with st.chat_message("assistant"):
         if model_key == "distilled" and not model:
             text = "The distilled model name is empty."
             hits, weak, stats = [], False, ""
+            failed = True
         elif uses_rag(mode) and retriever is None:
             text = "The RAG index is missing, so I cannot answer in this mode."
             hits, weak, stats = [], False, ""
+            failed = True
         else:
             try:
                 result = answer_question(
@@ -210,6 +215,7 @@ def run_legacy():
                     keep_alive=keep_alive_setting(),
                     git_sha=session_git_sha,
                     model_info=_model_info(model),
+                    context=context,
                 )
                 text = result["text"]
                 hits = result["hits"]
@@ -227,20 +233,22 @@ def run_legacy():
                     f"Start it with `ollama serve`.\n\n{e}"
                 )
                 hits, weak, stats = [], False, ""
+                failed = True
         st.markdown(text)
         sources = hits if uses_rag(mode) else []
         _show_sources(sources)
         if stats:
             st.caption(stats)
 
-    st.session_state.messages.append(
-        {
-            "role": "assistant",
-            "content": text,
-            "sources": sources if uses_rag(mode) else [],
-            "stats": stats,
-        }
-    )
+    message = {
+        "role": "assistant",
+        "content": text,
+        "sources": sources if uses_rag(mode) else [],
+        "stats": stats,
+    }
+    if failed:
+        message["error"] = text
+    st.session_state.messages.append(message)
 
 
 def _show_sources(sources):
@@ -373,6 +381,7 @@ def run_polaris():
         return
 
     mode = st.session_state.get("mode", "full")
+    context = build_chat_context(st.session_state.messages, question)
     st.session_state.messages.append({"role": "user", "content": question})
     with thread:
         answered = _answer_turn(
@@ -385,6 +394,7 @@ def run_polaris():
             index_dir,
             left_model_key=left_model_key,
             right_model_key=right_model_key,
+            context=context,
         )
     stop_slot.empty()
     if answered:
@@ -403,6 +413,7 @@ def _answer_turn(
     *,
     left_model_key="base",
     right_model_key="base",
+    context=None,
 ):
     st.session_state.pop("last_cancelled", None)
     st.markdown(user_turn_html(question), unsafe_allow_html=True)
@@ -429,6 +440,7 @@ def _answer_turn(
             index_dir,
             left_model_key=left_model_key,
             right_model_key=right_model_key,
+            context=context,
         )
         if recs[0] is None and recs[1] is None:
             if st.session_state.pop("last_cancelled", False):
@@ -438,7 +450,15 @@ def _answer_turn(
         st.session_state.messages.append({"role": "assistant", "compare": recs})
         return True
 
-    rec = _answer_record(question, mode, model, retriever, index_dir, slot=slot)
+    rec = _answer_record(
+        question,
+        mode,
+        model,
+        retriever,
+        index_dir,
+        slot=slot,
+        context=context,
+    )
     if rec is None:
         if st.session_state.pop("last_cancelled", False):
             return False
@@ -682,6 +702,7 @@ def _answer_record(
     slot=None,
     *,
     model_key="base",
+    context=None,
 ):
     keep = slot is not None
     slot = slot if keep else st.empty()
@@ -704,6 +725,7 @@ def _answer_record(
                 keep_alive=keep_alive,
                 git_sha=git_sha,
                 model_info=model_info,
+                context=context,
             ),
             lambda: slot.markdown(loader, unsafe_allow_html=True),
         )
@@ -738,6 +760,7 @@ def _run_compare(
     *,
     left_model_key="base",
     right_model_key="base",
+    context=None,
 ):
     left_model_key, right_model_key = pair_compare_model_keys(
         left_model_key,
@@ -778,6 +801,7 @@ def _run_compare(
                 index_dir,
                 panel=True,
                 model_key=left_model_key,
+                context=context,
             )
             if rec_l is not None:
                 _render_card(rec_l, key=f"answer-h{message_index}-l", align_slots=True)
@@ -794,6 +818,7 @@ def _run_compare(
                 index_dir,
                 panel=True,
                 model_key=right_model_key,
+                context=context,
             )
             if rec_r is not None:
                 _render_card(rec_r, key=f"answer-h{message_index}-r", align_slots=True)
