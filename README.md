@@ -30,7 +30,7 @@ ollama serve
 streamlit run app/app.py
 ```
 
-The default UI is Polaris (dark, compact). Modes are BASE / COT / RAG / FULL. The sidebar is read-only (model, index, frozen threshold/k, git, Ollama, warm-up). Export CSV/JSON from the session records, not from `logs/answers.csv`. Compare modes runs BASE then FULL one after the other. `POLARIS_ENABLED=0` restores the old settings sidebar. Fonts are local OFL files under `app/static/` — no CDN.
+The default UI is Polaris (dark, compact). Modes are BASE / COT / RAG / FULL. The sidebar is read-only (model, index, frozen threshold/k, git, Ollama, warm-up). Export CSV/JSON from the session records, not from `logs/answers.csv`. Compare runs the selected pair one after the other; when a distilled model is configured, it defaults to base FULL versus distilled FULL. `POLARIS_ENABLED=0` restores the old settings sidebar. Fonts are local OFL files under `app/static/` — no CDN.
 
 Pick the model and the mode separately in the sidebar when Polaris is off.
 

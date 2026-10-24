@@ -27,6 +27,7 @@ from app.engine import (
     MODE_LABELS,
     MODE_SUBS,
     OLLAMA_HOST,
+    THESIS_CONFIGS,
     mode_choices,
     ollama_chat_body,
     parse_ollama_chat_response,
@@ -80,6 +81,7 @@ EXPORT_FIELDS = (
     "config",
     "mode",
     "model",
+    "model_key",
     "answer",
     "latency_s",
     "eval_count",
@@ -323,6 +325,7 @@ class RunRecord(TypedDict):
     config: str
     mode: str
     model: str
+    model_key: str
     answer: str
     latency_s: float
     eval_count: int | None
@@ -410,6 +413,7 @@ def build_run_record(result, index_path=""):
         "config": str(result.get("config") or ""),
         "mode": str(result.get("mode") or ""),
         "model": str(result.get("model") or ""),
+        "model_key": str(result.get("model_key") or "base"),
         "answer": str(result.get("text") or ""),
         "latency_s": float(result.get("latency_s") or 0.0),
         "eval_count": _opt_int(result.get("eval_count")),
@@ -479,6 +483,52 @@ def pair_compare_modes(left, right):
         left = modes[0]
     if right not in modes or right == left:
         right = next(m for m in modes if m != left)
+    return left, right
+
+
+def model_key_choices(distilled_model):
+    if (distilled_model or "").strip():
+        return ("base", "distilled")
+    return ("base",)
+
+
+def model_mode_choices(model_key):
+    modes = tuple(
+        mode
+        for config_model_key, mode in THESIS_CONFIGS
+        if config_model_key == model_key and mode in MODE_LABELS
+    )
+    if not modes:
+        raise ValueError(f"unknown model key: {model_key}")
+    return modes
+
+
+def default_compare_model_keys(distilled_model):
+    choices = model_key_choices(distilled_model)
+    if "distilled" in choices:
+        return "base", "distilled"
+    return "base", "base"
+
+
+def pair_compare_model_keys(left, right, distilled_model):
+    choices = model_key_choices(distilled_model)
+    default_left, default_right = default_compare_model_keys(distilled_model)
+    if left not in choices:
+        left = default_left
+    if right not in choices:
+        right = default_right
+    return left, right
+
+
+def pair_compare_config_modes(left, right, left_model_key, right_model_key):
+    left_modes = model_mode_choices(left_model_key)
+    right_modes = model_mode_choices(right_model_key)
+    if left not in left_modes:
+        left = left_modes[0]
+    if right not in right_modes:
+        right = right_modes[0]
+    if left_model_key == right_model_key and right == left and len(right_modes) > 1:
+        right = next(mode for mode in right_modes if mode != left)
     return left, right
 
 

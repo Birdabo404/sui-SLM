@@ -73,8 +73,13 @@ from app.polaris import (
     CancellableChat,
     ChatCancelled,
     compare_compact_html,
+    default_compare_model_keys,
+    model_key_choices,
+    model_mode_choices,
     mode_from_name,
     mode_name,
+    pair_compare_config_modes,
+    pair_compare_model_keys,
     preview_text,
     running_card_html,
     THINKING_WORDS,
@@ -333,6 +338,40 @@ class CompareTests(unittest.TestCase):
         self.assertEqual(pair_compare_modes("full", "full"), ("full", "base"))
         self.assertEqual(pair_compare_modes("base", "full"), ("base", "full"))
 
+    def test_distilled_model_choices_are_hidden_when_unset(self):
+        self.assertEqual(model_key_choices(""), ("base",))
+        self.assertEqual(default_compare_model_keys(""), ("base", "base"))
+        self.assertEqual(
+            pair_compare_model_keys("base", "distilled", ""),
+            ("base", "base"),
+        )
+
+    def test_distilled_compare_allows_the_same_mode(self):
+        self.assertEqual(
+            default_compare_model_keys("student:latest"),
+            ("base", "distilled"),
+        )
+        self.assertEqual(
+            pair_compare_model_keys("base", "distilled", "student:latest"),
+            ("base", "distilled"),
+        )
+        self.assertEqual(
+            pair_compare_config_modes("full", "full", "base", "distilled"),
+            ("full", "full"),
+        )
+
+    def test_distilled_exposes_only_full_mode(self):
+        self.assertEqual(model_mode_choices("base"), ("base", "cot", "rag", "full"))
+        self.assertEqual(model_mode_choices("distilled"), ("full",))
+        self.assertEqual(
+            pair_compare_config_modes("base", "rag", "base", "distilled"),
+            ("base", "full"),
+        )
+        self.assertEqual(
+            pair_compare_config_modes("base", "cot", "distilled", "distilled"),
+            ("full", "full"),
+        )
+
     def test_run_compare_clears_waiting_before_right_starts(self):
         st = MagicMock()
         st.cache_resource = _cache_stub
@@ -371,8 +410,8 @@ class CompareTests(unittest.TestCase):
             def __exit__(self, *a):
                 return False
 
-        def answer(question, mode, *a, **k):
-            events.append(("start", mode))
+        def answer(question, mode, model, *a, **k):
+            events.append(("start", mode, model, k.get("model_key")))
             return {
                 "mode": mode,
                 "answer": "x",
@@ -394,16 +433,27 @@ class CompareTests(unittest.TestCase):
             app_mod.st, "columns", return_value=(Col(), Col())
         ), patch.object(app_mod, "_answer_record", side_effect=answer), patch.object(
             app_mod, "_render_card", side_effect=render
-        ):
-            left, right = app_mod._run_compare("q", "base", "full", "m", None, "idx")
+        ), patch.object(app_mod, "DISTILLED_MODEL", "student:latest"):
+            left, right = app_mod._run_compare(
+                "q",
+                "base",
+                "full",
+                "qwen3.5:2b",
+                None,
+                "idx",
+                left_model_key="base",
+                right_model_key="distilled",
+            )
 
         self.assertEqual(left["mode"], "base")
         self.assertEqual(right["mode"], "full")
-        self.assertLess(events.index(("start", "base")), events.index("clear_wait"))
-        self.assertLess(events.index("clear_wait"), events.index(("start", "full")))
+        left_start = ("start", "base", "qwen3.5:2b", "base")
+        right_start = ("start", "full", "student:latest", "distilled")
+        self.assertLess(events.index(left_start), events.index("clear_wait"))
+        self.assertLess(events.index("clear_wait"), events.index(right_start))
         self.assertEqual(
             [e for e in events if isinstance(e, tuple) and e[0] == "start"],
-            [("start", "base"), ("start", "full")],
+            [left_start, right_start],
         )
         self.assertIn(("render", "base", "answer-h1-l"), events)
         self.assertIn(("render", "full", "answer-h1-r"), events)
