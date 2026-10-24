@@ -180,6 +180,44 @@ class ChatStore:
             messages=tuple(messages),
         )
 
+    def append_messages(self, chat_id, messages):
+        """Add messages to the end of a chat. The read and the write share one write transaction, so another tab
+        appending to the same chat can't drop these messages or have its own dropped."""
+        self._validate_id(chat_id)
+        added = list(messages)
+        updated_at = _now()
+        with closing(self._connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            current = db.execute(
+                "SELECT title, created_at, messages FROM chats WHERE id = ?",
+                (chat_id,),
+            ).fetchone()
+            if current is None:
+                raise KeyError(chat_id)
+            messages = [*json.loads(current["messages"]), *added]
+            chat_title = _chat_title(messages) or current["title"]
+            db.execute(
+                """
+                UPDATE chats
+                SET title = ?, updated_at = ?, messages = ?, turn_count = ?
+                WHERE id = ?
+                """,
+                (
+                    chat_title,
+                    updated_at,
+                    json.dumps(messages, ensure_ascii=False, sort_keys=True, separators=(",", ":")),
+                    sum(message.get("role") == "user" for message in messages),
+                    chat_id,
+                ),
+            )
+        return StoredChat(
+            chat_id=chat_id,
+            title=chat_title,
+            created_at=current["created_at"],
+            updated_at=updated_at,
+            messages=tuple(messages),
+        )
+
     def delete_chat(self, chat_id):
         self._validate_id(chat_id)
         with closing(self._connect()) as db, db:

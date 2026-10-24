@@ -282,8 +282,7 @@ def _init_session():
     st.session_state.setdefault("warmed", False)
     st.session_state.setdefault("mode", "full")
     st.session_state.setdefault("compare", False)
-    # None until the first question: an empty chat is never written to the history store.
-    st.session_state.setdefault("chat_id", None)
+    st.session_state.setdefault("chat", _chat_state())
     _session_git_commit()
     if "cmp_left" not in st.session_state or "cmp_right" not in st.session_state:
         if len(model_key_choices(DISTILLED_MODEL)) > 1:
@@ -321,9 +320,10 @@ def run_polaris():
     landing_q = st.session_state.get("pending_q") or st.session_state.get("chat-landing")
     incoming = landing_q or st.session_state.get("chat-dock")
     msgs = st.session_state.messages
-    if incoming:
-        # Saved with its question before the sidebar draws, so a new chat is listed as current in this same run.
-        _save_chat([*msgs, {"role": "user", "content": incoming}])
+    chat = st.session_state.chat
+    if incoming and chat["id"] is None:
+        # Stored with its question before the sidebar draws, so a new chat is listed as current in this same run.
+        _sync_chat(chat, [*msgs, {"role": "user", "content": incoming}])
     compare_on = bool(st.session_state.get("compare"))
     asked = sum(1 for m in msgs if m.get("role") == "user") + (1 if incoming else 0)
 
@@ -392,8 +392,6 @@ def run_polaris():
     mode = st.session_state.get("mode", "full")
     context = build_chat_context(msgs, question)
     msgs.append({"role": "user", "content": question})
-    chat_id = st.session_state.get("chat_id")
-    asked_at = len(msgs)
     try:
         with thread:
             answered = _answer_turn(
@@ -408,12 +406,10 @@ def run_polaris():
                 right_model_key=right_model_key,
                 context=context,
             )
-        # Written before the next st call: once the answer is in, a click can end this run at any st call, and
-        # reading session state counts as one.
-        error = _write_chat(chat_id, msgs) if len(msgs) > asked_at else None
-        if error:
-            st.session_state.history_error = error
     finally:
+        # Stored before the next st call: a click can end this run at any st call, and reading session state counts
+        # as one. A stopped or failed turn still keeps its question.
+        _sync_chat(chat, msgs)
         # A turn that raises still takes the Stop button away and lets the sky move again.
         stop_slot.empty()
         mark(generating=False)
@@ -498,46 +494,44 @@ def _retriever_with_loader(index_dir, slot):
     return retriever
 
 
+def _chat_state(chat_id=None, saved=0):
+    """The open chat's history-store id (None until its first question, so an empty chat is never stored), how many
+    of its messages the store has, and the last history error. Changed in place, so a turn's end can record a save
+    without an st call."""
+    return {"id": chat_id, "saved": saved, "error": None}
+
+
 def _new_chat():
     st.session_state.messages = []
     st.session_state.run_records = []
-    st.session_state.chat_id = None
+    st.session_state.chat = _chat_state()
     st.session_state.pop("hist_confirm", None)
 
 
-def _save_chat(messages):
-    """Write the open chat to the history store, creating it on its first question."""
-    store = ChatStore()
-    chat_id = st.session_state.get("chat_id")
-    try:
-        if chat_id is not None:
-            try:
-                store.save_chat(chat_id, messages)
-            except KeyError:
-                chat_id = None  # deleted from another tab; the turn goes to a fresh chat
-        if chat_id is None:
-            chat_id = store.new_chat().chat_id
-            store.save_chat(chat_id, messages)
-    except (sqlite3.Error, OSError):
-        st.session_state.chat_id = None
-        st.session_state.history_error = history_error_text(store.root)
+def _sync_chat(chat, messages):
+    """Store the messages the history store doesn't have yet. Makes no st call, so a click can't interrupt it.
+
+    Only new messages are appended, so another tab adding turns to the same chat keeps them. A chat deleted
+    elsewhere since the last save is stored again as a new chat with the whole thread.
+    """
+    if not messages or (chat["id"] is not None and chat["saved"] >= len(messages)):
         return
-    st.session_state.chat_id = chat_id
-    st.session_state.pop("history_error", None)
-
-
-def _write_chat(chat_id, messages):
-    """Save an answered turn without touching st, so nothing can interrupt it. Returns an error line or None."""
-    if chat_id is None:
-        return None
     store = ChatStore()
     try:
-        store.save_chat(chat_id, messages)
-    except KeyError:
-        return None
+        if chat["id"] is not None:
+            try:
+                store.append_messages(chat["id"], messages[chat["saved"]:])
+            except KeyError:
+                chat.update(id=None, saved=0)
+            else:
+                chat.update(saved=len(messages), error=None)
+                return
+        chat["id"] = store.new_chat().chat_id
+        store.save_chat(chat["id"], messages)
     except (sqlite3.Error, OSError):
-        return history_error_text(store.root)
-    return None
+        chat["error"] = history_error_text(store.root)
+        return
+    chat.update(saved=len(messages), error=None)
 
 
 def _open_chat(chat_id):
@@ -548,11 +542,11 @@ def _open_chat(chat_id):
     except KeyError:
         return
     except (sqlite3.Error, OSError, ValueError):
-        st.session_state.history_error = history_error_text(store.root)
+        st.session_state.chat["error"] = history_error_text(store.root)
         return
     st.session_state.messages = list(stored.messages)
     st.session_state.run_records = records_in(st.session_state.messages)
-    st.session_state.chat_id = stored.chat_id
+    st.session_state.chat = _chat_state(stored.chat_id, len(stored.messages))
     st.session_state.pop("pending_q", None)
 
 
@@ -570,9 +564,9 @@ def _delete_chat(chat_id):
     try:
         store.delete_chat(chat_id)
     except (sqlite3.Error, OSError):
-        st.session_state.history_error = history_error_text(store.root)
+        st.session_state.chat["error"] = history_error_text(store.root)
         return
-    if chat_id == st.session_state.get("chat_id"):
+    if chat_id == st.session_state.chat["id"]:
         _new_chat()
 
 
@@ -584,14 +578,14 @@ def _history_panel():
     except (sqlite3.Error, OSError):
         st.markdown(history_note_html(history_error_text(store.root), error=True), unsafe_allow_html=True)
         return
-    error = st.session_state.get("history_error")
+    error = st.session_state.chat["error"]
     if error:
         st.markdown(history_note_html(error, error=True), unsafe_allow_html=True)
     if not chats:
         if not error:
             st.markdown(history_note_html(HISTORY_EMPTY), unsafe_allow_html=True)
         return
-    current = st.session_state.get("chat_id")
+    current = st.session_state.chat["id"]
     confirm = st.session_state.get("hist_confirm")
     with st.container(key="history"):
         for chat in chats:

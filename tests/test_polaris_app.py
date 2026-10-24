@@ -202,6 +202,12 @@ class PolarisRunLoopTests(unittest.TestCase):
     def _rows(self):
         return [b for b in self.at.button if b.key and b.key.startswith("hist-open-")]
 
+    def _chat_id(self, at=None):
+        return (at or self.at).session_state["chat"]["id"]
+
+    def _stored(self, chat_id):
+        return [m.get("content") or m.get("record", {}).get("answer") for m in self.store.load_chat(chat_id).messages]
+
     def test_first_question_saves_a_chat_listed_as_current(self):
         self.at.run()
         self.assertIn("Chats you start are saved on this machine.", self._html())
@@ -214,7 +220,7 @@ class PolarisRunLoopTests(unittest.TestCase):
         stored = self.store.load_chat(chat.chat_id).messages
         self.assertEqual([m["role"] for m in stored], ["user", "assistant"])
         self.assertEqual(stored[1]["record"]["answer"], "Use `tar -xzf file.tar.gz`.")
-        self.assertEqual(self.at.session_state["chat_id"], chat.chat_id)
+        self.assertEqual(self._chat_id(), chat.chat_id)
         # Listed in the run that asked it, as the open chat; its row is disabled so a click can't stop an answer.
         (row,) = self._rows()
         self.assertEqual(row.key, f"hist-open-{chat.chat_id}")
@@ -224,12 +230,12 @@ class PolarisRunLoopTests(unittest.TestCase):
     def test_new_chat_keeps_history_and_switching_restores_a_chat(self):
         self.at.run()
         self._ask("extract a .tar.gz file", "landing")
-        first = self.at.session_state["chat_id"]
+        first = self._chat_id()
         self.at.button(key="new-chat").click().run()
-        self.assertIsNone(self.at.session_state["chat_id"])
+        self.assertIsNone(self._chat_id())
         self._ask("make a file readable only by me", "landing")
         self._ask("and for a folder?")
-        second = self.at.session_state["chat_id"]
+        second = self._chat_id()
         self.assertNotEqual(first, second)
         self.assertEqual([c.chat_id for c in self.store.list_chats()], [second, first])
         self.assertEqual(self.store.list_chats()[0].turn_count, 2)
@@ -237,7 +243,7 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.at.button(key=f"hist-open-{first}").click().run()
         self.assertFalse(self.at.exception)
         self.rerun.assert_not_called()
-        self.assertEqual(self.at.session_state["chat_id"], first)
+        self.assertEqual(self._chat_id(), first)
         self.assertEqual(self._html().count('class="q"'), 1)
         self.assertIn(">extract a .tar.gz file<", self._html())
         self.assertEqual(len(self.at.session_state["run_records"]), 1)
@@ -254,47 +260,118 @@ class PolarisRunLoopTests(unittest.TestCase):
     def test_delete_asks_first_and_cancel_keeps_the_chat(self):
         self.at.run()
         self._ask("extract a .tar.gz file", "landing")
-        cid = self.at.session_state["chat_id"]
+        cid = self._chat_id()
         self.at.button(key=f"hist-del-{cid}").click().run()
         self.assertIn(polaris.history_note_html(polaris.DELETE_ASK), self._html())
         self.assertEqual(len(self.store.list_chats()), 1)
         self.at.button(key=f"hist-no-{cid}").click().run()
         self.assertNotIn("Delete this chat?", self._html())
         self.assertEqual(len(self.store.list_chats()), 1)
-        self.assertEqual(self.at.session_state["chat_id"], cid)
+        self.assertEqual(self._chat_id(), cid)
 
         self.at.button(key=f"hist-del-{cid}").click().run()
         self.at.button(key=f"hist-yes-{cid}").click().run()
         self.assertFalse(self.at.exception)
         self.rerun.assert_not_called()
         self.assertEqual(self.store.list_chats(), [])
-        self.assertIsNone(self.at.session_state["chat_id"])
+        self.assertIsNone(self._chat_id())
         self.assertIn('class="hero"', self._html())
         self.assertIn("Chats you start are saved on this machine.", self._html())
 
     def test_deleting_another_chat_leaves_the_open_one(self):
         self.at.run()
         self._ask("extract a .tar.gz file", "landing")
-        first = self.at.session_state["chat_id"]
+        first = self._chat_id()
         self.at.button(key="new-chat").click().run()
         self._ask("make a file readable only by me", "landing")
-        second = self.at.session_state["chat_id"]
+        second = self._chat_id()
         self.at.button(key=f"hist-del-{first}").click().run()
         self.at.button(key=f"hist-yes-{first}").click().run()
         self.assertEqual([c.chat_id for c in self.store.list_chats()], [second])
-        self.assertEqual(self.at.session_state["chat_id"], second)
+        self.assertEqual(self._chat_id(), second)
         self.assertIn(">make a file readable only by me<", self._html())
 
     def test_a_chat_deleted_elsewhere_continues_in_a_new_one(self):
         self.at.run()
         self._ask("extract a .tar.gz file", "landing")
-        gone = self.at.session_state["chat_id"]
+        gone = self._chat_id()
         self.store.delete_chat(gone)
         self._ask("and a .zip?")
         (chat,) = self.store.list_chats()
         self.assertNotEqual(chat.chat_id, gone)
-        self.assertEqual(self.at.session_state["chat_id"], chat.chat_id)
+        self.assertEqual(self._chat_id(), chat.chat_id)
         self.assertEqual(chat.turn_count, 2)
+
+    def test_two_tabs_on_one_chat_keep_each_others_turns(self):
+        answer = "Use `tar -xzf file.tar.gz`."
+        self.at.run()
+        self._ask("extract a .tar.gz file", "landing")
+        cid = self._chat_id()
+        other = self.AppTest.from_file(APP, default_timeout=20)
+        other.session_state["mode"] = "base"
+        other.run()
+        other.button(key=f"hist-open-{cid}").click().run()
+        other.chat_input(key="chat-dock").set_value("and a .zip?").run()
+        self.assertFalse(other.exception)
+        # This tab never saw the other tab's turn; its next turn is added after it, not written over it.
+        self._ask("and a .tar.xz?")
+        self.assertEqual(
+            self._stored(cid),
+            ["extract a .tar.gz file", answer, "and a .zip?", answer, "and a .tar.xz?", answer],
+        )
+        self.assertEqual(self.store.list_chats()[0].turn_count, 3)
+        other.chat_input(key="chat-dock").set_value("and a .7z?").run()
+        self.assertEqual(self._stored(cid)[-2:], ["and a .7z?", answer])
+        self.assertEqual(len(self._stored(cid)), 8)
+
+    def test_an_answer_whose_chat_is_deleted_mid_turn_moves_to_a_new_chat(self):
+        self.at.run()
+        self._ask("extract a .tar.gz file", "landing")
+        gone = self._chat_id()
+        answer = _fake_answer(self.calls)
+
+        def delete_then_answer(*args, **kw):
+            self.store.delete_chat(gone)
+            return answer(*args, **kw)
+
+        with patch("app.engine.answer_question", side_effect=delete_then_answer):
+            self._ask("and a .zip?")
+        (chat,) = self.store.list_chats()
+        self.assertNotEqual(chat.chat_id, gone)
+        self.assertEqual(self._chat_id(), chat.chat_id)
+        self.assertEqual(chat.turn_count, 2)
+        self.assertEqual(
+            self._stored(chat.chat_id),
+            ["extract a .tar.gz file", "Use `tar -xzf file.tar.gz`.", "and a .zip?", "Use `tar -xzf file.tar.gz`."],
+        )
+        # Later turns go to the replacement chat.
+        self._ask("and a .7z?")
+        self.assertEqual(self.store.list_chats()[0].turn_count, 3)
+
+    def test_a_turn_that_raises_keeps_its_question_in_an_existing_chat(self):
+        self.at.run()
+        self._ask("extract a .tar.gz file", "landing")
+        cid = self._chat_id()
+        with patch("app.engine.answer_question", side_effect=RuntimeError("engine failed")):
+            self.at.chat_input(key="chat-dock").set_value("and a .zip?").run()
+        self.assertIn("engine failed", self.at.exception[0].message)
+        self.assertEqual(self._stored(cid), ["extract a .tar.gz file", "Use `tar -xzf file.tar.gz`.", "and a .zip?"])
+
+    def test_turns_missed_while_history_is_unwritable_are_stored_with_the_next_one(self):
+        self.at.run()
+        self._ask("extract a .tar.gz file", "landing")
+        cid = self._chat_id()
+        with patch.object(ChatStore, "append_messages", side_effect=sqlite3.OperationalError("database is locked")):
+            self._ask("and a .zip?")
+        self.assertEqual(len(self._stored(cid)), 2)
+        # The sidebar is drawn before the turn ends, so the note shows from the next run.
+        self.at.run()
+        self.assertIn("Couldn&#x27;t open chat history in", self._html())
+        self._ask("and a .7z?")
+        self.assertEqual(self._stored(cid)[2::2], ["and a .zip?", "and a .7z?"])
+        self.assertEqual(len(self._stored(cid)), 6)
+        self.at.run()
+        self.assertNotIn("Couldn&#x27;t open chat history in", self._html())
 
     def test_a_stopped_turn_is_saved_with_its_question(self):
         self.at.run()
@@ -317,7 +394,7 @@ class PolarisRunLoopTests(unittest.TestCase):
         html = self._html()
         self.assertIn("<b>1.5</b> s", html)
         self.assertIn("Couldn&#x27;t open chat history in", html)
-        self.assertIsNone(self.at.session_state["chat_id"])
+        self.assertIsNone(self._chat_id())
         self.assertEqual(self._rows(), [])
 
     # ---------- compare ----------
