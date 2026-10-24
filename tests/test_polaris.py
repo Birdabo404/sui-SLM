@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Polaris UI helpers. No live Ollama."""
 import csv
+import http.client
 import io
 import json
 import os
@@ -897,6 +898,58 @@ class StopTests(unittest.TestCase):
         self.assertIsInstance(box.get("err"), ChatCancelled)
         self.assertNotIn("request", calls)
         self.assertIn("close", calls)
+
+    def test_cancel_before_request_cannot_reconnect(self):
+        request_entered = threading.Event()
+        release = threading.Event()
+        calls = []
+
+        class Sock:
+            def shutdown(self, how):
+                calls.append(("shutdown", how))
+
+        class Conn:
+            auto_open = 1
+            sock = None
+
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def connect(self):
+                self.sock = Sock()
+
+            def request(self, *args, **kwargs):
+                request_entered.set()
+                release.wait(2)
+                if self.sock is None and self.auto_open:
+                    calls.append(("reconnect", None))
+                    self.connect()
+                if self.sock is None:
+                    raise http.client.NotConnected()
+
+            def close(self):
+                self.sock = None
+                calls.append(("close", None))
+
+        chat = CancellableChat(self.host)
+        box = {}
+
+        def run():
+            try:
+                chat([{"role": "user", "content": "hi"}], "m")
+            except BaseException as e:
+                box["err"] = e
+
+        with patch("app.polaris.http.client.HTTPConnection", Conn):
+            worker = threading.Thread(target=run)
+            worker.start()
+            self.assertTrue(request_entered.wait(2))
+            chat.cancel()
+            release.set()
+            worker.join(2)
+        self.assertFalse(worker.is_alive())
+        self.assertIsInstance(box.get("err"), ChatCancelled)
+        self.assertNotIn(("reconnect", None), calls)
 
     def test_unreachable_ollama_is_a_requests_error(self):
         with socket.socket() as probe:

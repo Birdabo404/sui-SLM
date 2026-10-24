@@ -165,6 +165,7 @@ class CancellableChat:
 
     def __call__(self, messages, model):
         conn = http.client.HTTPConnection(self._url.hostname, self._url.port or 80, timeout=self._timeout)
+        conn.auto_open = 0
         body = json.dumps(
             ollama_chat_body(
                 messages,
