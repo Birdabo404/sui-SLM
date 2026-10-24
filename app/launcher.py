@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 
 import requests
 
-from app.engine import index_ok, ollama_reachable
+from app.engine import ollama_reachable
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
@@ -32,16 +32,7 @@ DRY_RUN_ENV_KEYS = (
 
 
 def pick_index(rag_dir):
-    rag_dir = Path(rag_dir)
-    selected = rag_dir / "rag-index-v2"
-    version = 2
-    for candidate in rag_dir.glob("rag-index-v*"):
-        suffix = candidate.name.removeprefix("rag-index-v")
-        if not suffix.isdigit() or int(suffix) <= version or not index_ok(candidate):
-            continue
-        selected = candidate
-        version = int(suffix)
-    return selected
+    return Path(rag_dir) / "rag-index-v2"
 
 
 def launch_environment(environ=None, root=None):

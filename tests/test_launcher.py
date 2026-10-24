@@ -14,27 +14,16 @@ from app.launcher import (
     pick_index,
     streamlit_command,
 )
+from app.engine import is_ollama_process
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def _valid_index(path):
-    path.mkdir(parents=True)
-    (path / "chunks.jsonl").write_text("{}\n", encoding="utf-8")
-    (path / "chroma").mkdir()
-
-
 class LauncherTests(unittest.TestCase):
-    def test_picks_v2_unless_a_newer_valid_version_exists(self):
+    def test_default_index_stays_v2_when_newer_indexes_exist(self):
         with tempfile.TemporaryDirectory() as td:
             rag = Path(td)
-            _valid_index(rag / "rag-index-v2")
-            _valid_index(rag / "rag-index-v3")
-            (rag / "rag-index-v4").mkdir()
-            _valid_index(rag / "rag-index-v10")
-            self.assertEqual(pick_index(rag), rag / "rag-index-v10")
-        with tempfile.TemporaryDirectory() as td:
-            rag = Path(td)
+            (rag / "rag-index-v10").mkdir()
             self.assertEqual(pick_index(rag), rag / "rag-index-v2")
 
     def test_environment_sets_offline_defaults_without_overrides(self):
@@ -86,6 +75,7 @@ class LauncherTests(unittest.TestCase):
             )
         )
         self.assertEqual(spawned, [(["ollama", "serve"], env)])
+        self.assertTrue(is_ollama_process("ollama", spawned[0][0]))
         self.assertEqual(sleeps, [0.25])
 
     def test_ensure_ollama_does_not_spawn_for_remote_host(self):
@@ -137,12 +127,15 @@ class LauncherTests(unittest.TestCase):
             self.assertIn("Icon=sui-slm", text)
 
     def test_dry_run_is_machine_readable_and_has_no_network_step(self):
+        python = ROOT / ".venv" / "bin" / "python"
+        if not python.is_file():
+            self.skipTest("repository virtualenv is not installed")
         env = os.environ.copy()
         env.pop("OLLAMA_MODEL", None)
         env.pop("RAG_INDEX", None)
         env["SUI_SLM_TEST_SECRET"] = "do-not-print"
         result = subprocess.run(
-            [str(ROOT / ".venv" / "bin" / "python"), "-m", "app.launcher", "--dry-run"],
+            [str(python), "-m", "app.launcher", "--dry-run"],
             cwd=ROOT,
             env=env,
             capture_output=True,
