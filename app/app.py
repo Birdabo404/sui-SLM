@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline Streamlit chat app for the CCIS Linux lab assistant."""
 import os
+import sqlite3
 import threading
 from html import escape
 from pathlib import Path
@@ -14,7 +15,7 @@ os.environ.setdefault("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "false")
 import requests
 import streamlit as st
 
-from app.chat_memory import build_chat_context
+from app.chat_memory import ChatStore, build_chat_context
 from app.engine import (
     BASE_MODEL,
     DEFAULT_INDEX,
@@ -34,7 +35,9 @@ from app.engine import (
     warm_model,
 )
 from app.polaris import (
+    DELETE_ASK,
     EXAMPLES,
+    HISTORY_EMPTY,
     CancellableChat,
     ChatCancelled,
     avg_latency,
@@ -51,6 +54,8 @@ from app.polaris import (
     evidence_block_html,
     flags_html,
     header_band_html,
+    history_error_text,
+    history_note_html,
     idk_card_html,
     index_chunk_count,
     injected_css,
@@ -62,7 +67,9 @@ from app.polaris import (
     network_online,
     pair_compare_config_modes,
     pair_compare_model_keys,
+    plain_label,
     polaris_on,
+    records_in,
     records_to_csv,
     records_to_json,
     retrieval_bar_html,
@@ -270,6 +277,8 @@ def _init_session():
     st.session_state.setdefault("warmed", False)
     st.session_state.setdefault("mode", "full")
     st.session_state.setdefault("compare", False)
+    # None until the first question: an empty chat is never written to the history store.
+    st.session_state.setdefault("chat_id", None)
     _session_git_commit()
     if "cmp_left" not in st.session_state or "cmp_right" not in st.session_state:
         if len(model_key_choices(DISTILLED_MODEL)) > 1:
@@ -307,6 +316,9 @@ def run_polaris():
     landing_q = st.session_state.get("pending_q") or st.session_state.get("chat-landing")
     incoming = landing_q or st.session_state.get("chat-dock")
     msgs = st.session_state.messages
+    if incoming:
+        # Saved with its question before the sidebar draws, so a new chat is listed as current in this same run.
+        _save_chat([*msgs, {"role": "user", "content": incoming}])
     compare_on = bool(st.session_state.get("compare"))
     asked = sum(1 for m in msgs if m.get("role") == "user") + (1 if incoming else 0)
 
@@ -383,8 +395,10 @@ def run_polaris():
         return
 
     mode = st.session_state.get("mode", "full")
-    context = build_chat_context(st.session_state.messages, question)
-    st.session_state.messages.append({"role": "user", "content": question})
+    context = build_chat_context(msgs, question)
+    msgs.append({"role": "user", "content": question})
+    chat_id = st.session_state.get("chat_id")
+    asked_at = len(msgs)
     try:
         with thread:
             answered = _answer_turn(
@@ -399,6 +413,11 @@ def run_polaris():
                 right_model_key=right_model_key,
                 context=context,
             )
+        # Written before the next st call: once the answer is in, a click can end this run at any st call, and
+        # reading session state counts as one.
+        error = _write_chat(chat_id, msgs) if len(msgs) > asked_at else None
+        if error:
+            st.session_state.history_error = error
     finally:
         # A turn that raises still takes the Stop button away and lets the sky move again.
         stop_slot.empty()
@@ -487,6 +506,125 @@ def _retriever_with_loader(index_dir, slot):
 def _new_chat():
     st.session_state.messages = []
     st.session_state.run_records = []
+    st.session_state.chat_id = None
+    st.session_state.pop("hist_confirm", None)
+
+
+def _save_chat(messages):
+    """Write the open chat to the history store, creating it on its first question."""
+    store = ChatStore()
+    chat_id = st.session_state.get("chat_id")
+    try:
+        if chat_id is not None:
+            try:
+                store.save_chat(chat_id, messages)
+            except KeyError:
+                chat_id = None  # deleted from another tab; the turn goes to a fresh chat
+        if chat_id is None:
+            chat_id = store.new_chat().chat_id
+            store.save_chat(chat_id, messages)
+    except (sqlite3.Error, OSError):
+        st.session_state.chat_id = None
+        st.session_state.history_error = history_error_text(store.root)
+        return
+    st.session_state.chat_id = chat_id
+    st.session_state.pop("history_error", None)
+
+
+def _write_chat(chat_id, messages):
+    """Save an answered turn without touching st, so nothing can interrupt it. Returns an error line or None."""
+    if chat_id is None:
+        return None
+    store = ChatStore()
+    try:
+        store.save_chat(chat_id, messages)
+    except KeyError:
+        return None
+    except (sqlite3.Error, OSError):
+        return history_error_text(store.root)
+    return None
+
+
+def _open_chat(chat_id):
+    store = ChatStore()
+    st.session_state.pop("hist_confirm", None)
+    try:
+        stored = store.load_chat(chat_id)
+    except KeyError:
+        return
+    except (sqlite3.Error, OSError, ValueError):
+        st.session_state.history_error = history_error_text(store.root)
+        return
+    st.session_state.messages = list(stored.messages)
+    st.session_state.run_records = records_in(st.session_state.messages)
+    st.session_state.chat_id = stored.chat_id
+    st.session_state.pop("pending_q", None)
+
+
+def _ask_delete(chat_id):
+    st.session_state.hist_confirm = chat_id
+
+
+def _cancel_delete():
+    st.session_state.pop("hist_confirm", None)
+
+
+def _delete_chat(chat_id):
+    store = ChatStore()
+    st.session_state.pop("hist_confirm", None)
+    try:
+        store.delete_chat(chat_id)
+    except (sqlite3.Error, OSError):
+        st.session_state.history_error = history_error_text(store.root)
+        return
+    if chat_id == st.session_state.get("chat_id"):
+        _new_chat()
+
+
+def _history_panel():
+    st.markdown('<p class="side-h">Chats</p>', unsafe_allow_html=True)
+    store = ChatStore()
+    try:
+        chats = store.list_chats()
+    except (sqlite3.Error, OSError):
+        st.markdown(history_note_html(history_error_text(store.root), error=True), unsafe_allow_html=True)
+        return
+    error = st.session_state.get("history_error")
+    if error:
+        st.markdown(history_note_html(error, error=True), unsafe_allow_html=True)
+    if not chats:
+        if not error:
+            st.markdown(history_note_html(HISTORY_EMPTY), unsafe_allow_html=True)
+        return
+    current = st.session_state.get("chat_id")
+    confirm = st.session_state.get("hist_confirm")
+    with st.container(key="history"):
+        for chat in chats:
+            cid = chat.chat_id
+            if cid == confirm:
+                with st.container(key=f"hist-confirm-{cid}"):
+                    st.markdown(history_note_html(DELETE_ASK), unsafe_allow_html=True)
+                    st.button("Delete", key=f"hist-yes-{cid}", on_click=_delete_chat, args=(cid,))
+                    st.button("Cancel", key=f"hist-no-{cid}", on_click=_cancel_delete)
+                continue
+            # The open chat's row is disabled: clicking it would only re-run, and that stops an answer mid-flight.
+            row = "hist-current" if cid == current else "hist-item"
+            with st.container(key=f"{row}-{cid}"):
+                st.button(
+                    plain_label(chat.title),
+                    key=f"hist-open-{cid}",
+                    use_container_width=True,
+                    disabled=cid == current,
+                    on_click=_open_chat,
+                    args=(cid,),
+                )
+                st.button(
+                    "Delete",
+                    key=f"hist-del-{cid}",
+                    icon=":material/delete:",
+                    on_click=_ask_delete,
+                    args=(cid,),
+                )
 
 
 def _render_sidebar(model, index_dir, frozen, up, online, chat=False):
@@ -501,6 +639,8 @@ def _render_sidebar(model, index_dir, frozen, up, online, chat=False):
                 use_container_width=True,
                 on_click=_new_chat,
             )
+
+        _history_panel()
 
         st.markdown('<p class="side-h">View</p>', unsafe_allow_html=True)
         st.toggle("Compare two modes", key="compare")

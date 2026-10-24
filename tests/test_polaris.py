@@ -99,7 +99,13 @@ from app.polaris import (
     stopped_html,
     thinking_html,
     thinking_label,
+    DELETE_ASK,
+    HISTORY_EMPTY,
     answer_stats_html,
+    history_error_text,
+    history_note_html,
+    plain_label,
+    records_in,
 )
 
 
@@ -903,6 +909,42 @@ class AnswerStatsTests(unittest.TestCase):
         rule = css.split(".stat b{", 1)[1].split("}", 1)[0]
         self.assertIn("font-variant-numeric:tabular-nums", rule)
         self.assertIn(".sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)", css)
+
+
+class HistoryHelperTests(unittest.TestCase):
+    def test_saved_question_shows_as_typed(self):
+        label = plain_label("what is  $HOME vs *.tar.gz?\n`ls -a` [docs](x) :smile: #1")
+        self.assertEqual(
+            label,
+            "what is \\$HOME vs \\*\\.tar\\.gz? \\`ls \\-a\\` \\[docs\\]\\(x\\) :\u200bsmile:\u200b \\#1",
+        )
+        self.assertNotIn(":smile:", label)
+
+    def test_records_come_back_in_answer_order(self):
+        a, b, c = {"mode": "base"}, {"mode": "cot"}, {"mode": "full"}
+        messages = [
+            {"role": "user", "content": "q1"},
+            {"role": "assistant", "record": a},
+            {"role": "user", "content": "q2"},
+            {"role": "assistant", "compare": [b, None]},
+            {"role": "user", "content": "q3"},
+            {"role": "assistant", "error": "Could not reach Ollama"},
+            {"role": "user", "content": "q4"},
+            {"role": "assistant", "compare": [c, a]},
+        ]
+        self.assertEqual(records_in(messages), [a, b, c, a])
+
+    def test_history_notes_and_errors(self):
+        self.assertEqual(history_note_html(HISTORY_EMPTY), '<p class="side-note">Chats you start are saved on this machine.</p>')
+        error = history_error_text(Path.home() / ".local" / "share" / "sui-slm")
+        self.assertEqual(
+            error,
+            "Couldn't open chat history in ~/.local/share/sui-slm, so chats aren't being saved. "
+            "Check that the folder is writable.",
+        )
+        self.assertIn('class="side-note err"', history_note_html(error, error=True))
+        self.assertIn("/srv/x", history_error_text("/srv/x"))
+        self.assertEqual(DELETE_ASK, "Delete this chat? This can't be undone.")
 
 
 class _Interrupted(Exception):
