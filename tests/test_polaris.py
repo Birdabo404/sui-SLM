@@ -1204,14 +1204,17 @@ class HelperTests(unittest.TestCase):
 
 
 class DigestTests(unittest.TestCase):
-    def test_show_quant(self):
-        fake = MagicMock()
-        fake.ok = True
-        fake.json.return_value = {
-            "details": {"parameter_size": "2.0B", "quantization_level": "Q4_K_M"}
-        }
-        with patch("app.engine.requests.post", return_value=fake):
-            self.assertEqual(model_digest("qwen3.5:2b"), "2.0B Q4_K_M")
+    digest = "a" * 64
+
+    def test_show_digest(self):
+        show = MagicMock()
+        show.ok = True
+        show.json.return_value = {"digest": self.digest}
+        with patch("app.engine.requests.post", return_value=show), patch(
+            "app.engine.requests.get"
+        ) as get:
+            self.assertEqual(model_digest("qwen3.5:2b"), self.digest)
+        get.assert_not_called()
 
     def test_blank_on_failure(self):
         with patch("app.engine.requests.post", side_effect=OSError("down")), patch(
@@ -1221,41 +1224,44 @@ class DigestTests(unittest.TestCase):
         with patch("app.engine.requests.get", side_effect=OSError("down")):
             self.assertFalse(ollama_reachable())
 
-    def test_tags_fallback(self):
+    def test_tags_fallback_requires_an_exact_model(self):
         show = MagicMock()
-        show.ok = False
+        show.ok = True
+        show.json.return_value = {
+            "details": {"parameter_size": "2.0B", "quantization_level": "Q4_K_M"}
+        }
         tags = MagicMock()
         tags.ok = True
         tags.json.return_value = {
-            "models": [{
-                "name": "qwen3.5:2b",
-                "details": {"quantization_level": "Q8_0"},
-            }]
+            "models": [
+                {"name": "qwen3.5:7b", "digest": "wrong"},
+                {"name": "qwen3.5:2b", "digest": self.digest},
+            ]
         }
         with patch("app.engine.requests.post", return_value=show), patch(
             "app.engine.requests.get", return_value=tags
         ):
-            self.assertEqual(model_digest("qwen3.5:2b"), "Q8_0")
+            self.assertEqual(model_digest("qwen3.5:2b"), self.digest)
 
-    def test_info_combines_version_and_show_digest(self):
+    def test_info_combines_version_and_model_digest(self):
         version = MagicMock()
         version.ok = True
         version.json.return_value = {"version": "0.12.3"}
         show = MagicMock()
         show.ok = True
-        show.json.return_value = {
-            "details": {
-                "parameter_size": "2.0B",
-                "quantization_level": "Q4_K_M",
-            }
+        show.json.return_value = {"details": {"parameter_size": "2.0B"}}
+        tags = MagicMock()
+        tags.ok = True
+        tags.json.return_value = {
+            "models": [{"name": "qwen3.5:2b", "digest": self.digest}]
         }
-        with patch("app.engine.requests.get", return_value=version), patch(
+        with patch("app.engine.requests.get", side_effect=[version, tags]), patch(
             "app.engine.requests.post",
             return_value=show,
         ) as post:
             info = ollama_info("qwen3.5:2b")
         self.assertEqual(info.version, "0.12.3")
-        self.assertEqual(info.model_digest, "2.0B Q4_K_M")
+        self.assertEqual(info.model_digest, self.digest)
         self.assertEqual(post.call_args.kwargs["json"], {"name": "qwen3.5:2b"})
 
 

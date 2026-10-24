@@ -271,25 +271,17 @@ def warm_model(model, host=None, keep_alive=None):
         return False
 
 
-def _digest_from_details(details):
-    if not isinstance(details, dict):
-        return ""
-    size = str(details.get("parameter_size") or "").strip()
-    quant = str(details.get("quantization_level") or "").strip()
-    return " ".join(part for part in (size, quant) if part)
-
-
 def model_digest(model, host=None, timeout=1.5):
-    """Short size/quant string from /api/show, else /api/tags. Blank on any failure."""
+    """Exact Ollama model digest, or blank when the model cannot be identified."""
     if not model:
         return ""
     base = (host or OLLAMA_HOST).rstrip("/")
     try:
         r = requests.post(base + "/api/show", json={"name": model}, timeout=timeout)
         if r.ok:
-            text = _digest_from_details((r.json() or {}).get("details") or {})
-            if text:
-                return text
+            digest = str((r.json() or {}).get("digest") or "").strip()
+            if digest:
+                return digest
     except Exception:
         pass
     try:
@@ -297,11 +289,14 @@ def model_digest(model, host=None, timeout=1.5):
         if not r.ok:
             return ""
         for item in (r.json() or {}).get("models") or []:
-            name = str(item.get("name") or "")
-            if name == model or name.split(":")[0] == str(model).split(":")[0]:
-                text = _digest_from_details(item.get("details") or {})
-                if text:
-                    return text
+            names = {str(item.get(field) or "") for field in ("name", "model")}
+            if model not in names and (
+                ":" in model or f"{model}:latest" not in names
+            ):
+                continue
+            digest = str(item.get("digest") or "").strip()
+            if digest:
+                return digest
     except Exception:
         return ""
     return ""

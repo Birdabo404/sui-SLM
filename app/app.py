@@ -462,7 +462,7 @@ def _render_sidebar(model, index_dir, frozen, up, online, chat=False):
             sidebar_kv_html(
                 [
                     ("Model", model),
-                    ("Weights", info.model_digest or "—"),
+                    ("Digest", info.model_digest or "—"),
                     ("Index", Path(index_dir).name),
                     ("Chunks", f"{chunks:,}" if loaded else "not loaded"),
                     ("IDK threshold", f"cos {format_threshold(frozen['threshold'])}"),
