@@ -1,19 +1,15 @@
 #!/usr/bin/env python3
 """Offline Streamlit chat app for the CCIS Linux lab assistant."""
 import os
-import sys
 import threading
 from html import escape
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 os.environ.setdefault("HF_DATASETS_OFFLINE", "1")
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 os.environ.setdefault("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "false")
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 import requests
 import streamlit as st

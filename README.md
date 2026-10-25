@@ -25,12 +25,14 @@ chromadb is pinned at 1.0.8. That version cannot read an index built with chroma
 ## Run
 
 ```
-ollama serve
-. .venv/bin/activate
-streamlit run app/app.py
+sui-slm
 ```
 
+`install.sh` installs `sui-slm` in `~/.local/bin` and a desktop launcher. The command starts local Ollama when needed, uses `rag/rag-index-v2` unless `RAG_INDEX` is set, starts Streamlit without file watching, and opens the local app in the browser. It sets offline defaults without overriding explicit environment values.
+
 The default UI is Polaris (dark, compact). Modes are BASE / COT / RAG / FULL. The sidebar is read-only (model, index, frozen threshold/k, git, Ollama, warm-up). Export CSV/JSON from the session records, not from `logs/answers.csv`. Compare runs the selected pair one after the other; when a distilled model is configured, it defaults to base FULL versus distilled FULL. `POLARIS_ENABLED=0` restores the old settings sidebar. Fonts are local OFL files under `app/static/` — no CDN.
+
+The app and bundled lab corpus are English-only. Questions in other languages are outside this thesis build's scope.
 
 Pick the model and the mode separately in the sidebar when Polaris is off.
 
