@@ -36,6 +36,14 @@ install_launcher() {
   printf '%s\n' "$desktop" > "$applications/.sui-slm.desktop.tmp"
   chmod 0644 "$applications/.sui-slm.desktop.tmp"
   mv -f "$applications/.sui-slm.desktop.tmp" "$applications/sui-slm.desktop"
+  case ":${PATH:-}:" in
+    *":$HOME/.local/bin:"*) ;;
+    *)
+      echo "Warning: $HOME/.local/bin is not on PATH." >&2
+      echo "Add this line to ~/.profile, then open a new terminal:" >&2
+      echo '  export PATH="$HOME/.local/bin:$PATH"' >&2
+      ;;
+  esac
 }
 
 if [ "${1:-}" = --check-python ]; then

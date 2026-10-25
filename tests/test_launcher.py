@@ -133,6 +133,8 @@ for found in pkgutil.iter_modules([str(root / "app")]):
                 text=True,
             )
             self.assertEqual(first.returncode, 0, first.stderr)
+            self.assertIn(f"Warning: {home / '.local' / 'bin'} is not on PATH.", first.stderr)
+            self.assertIn('export PATH="$HOME/.local/bin:$PATH"', first.stderr)
             launcher = home / ".local" / "bin" / "sui-slm"
             desktop = data / "applications" / "sui-slm.desktop"
             icon = data / "icons" / "hicolor" / "scalable" / "apps" / "sui-slm.svg"
