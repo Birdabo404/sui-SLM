@@ -3,6 +3,7 @@
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -55,10 +56,36 @@ class LauncherTests(unittest.TestCase):
     def test_streamlit_runs_on_loopback_without_file_watching(self):
         command = streamlit_command("/tmp/python", port=8765)
         self.assertEqual(command[:4], ["/tmp/python", "-m", "streamlit", "run"])
+        self.assertEqual(command[4], "streamlit_app.py")
         self.assertIn("127.0.0.1", command)
         watcher = command.index("--server.fileWatcherType")
         self.assertEqual(command[watcher + 1], "none")
         self.assertIn("8765", command)
+
+    def test_streamlit_script_entry_imports_every_app_module(self):
+        entry = streamlit_command(sys.executable)[4]
+        probe = """
+import importlib
+import pkgutil
+import runpy
+import sys
+from pathlib import Path
+
+entry = (Path(sys.argv[1]) / sys.argv[2]).resolve()
+root = Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(root))
+sys.path.insert(0, str(entry.parent))
+runpy.run_path(str(entry), run_name="streamlit_entry")
+for found in pkgutil.iter_modules([str(root / "app")]):
+    importlib.import_module(f"app.{found.name}")
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", probe, str(ROOT), entry],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_ensure_ollama_starts_once_and_waits_until_ready(self):
         checks = iter((False, False, True))

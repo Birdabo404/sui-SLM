@@ -57,7 +57,7 @@ def streamlit_command(python, port=DEFAULT_PORT):
         "-m",
         "streamlit",
         "run",
-        "app/app.py",
+        "streamlit_app.py",
         "--server.address",
         "127.0.0.1",
         "--server.port",
