@@ -29,6 +29,7 @@ from app.engine import (
     MODE_SUFFIX,
     OLLAMA_HOST,
     THESIS_CONFIGS,
+    config_id,
     mode_choices,
     ollama_chat_body,
     parse_ollama_chat_response,
@@ -127,6 +128,8 @@ MODE_HINTS = {
 TAGLINE = "Offline help for the Linux lab"
 STILL_WORKING = "The model runs on this machine, so this can take a moment."
 ENGLISH_NOTE = "English questions only"
+HISTORY_EMPTY = "Chats you start are saved on this machine."
+DELETE_ASK = "Delete this chat? This can't be undone."
 _WIFI_SVG = (
     '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 8.5a15 15 0 0 1 20 0M5 12a10.5 10.5 0 0 1 14 0'
     'M8.5 15.5a5.5 5.5 0 0 1 7 0"/><circle class="d" cx="12" cy="19" r="1.2"/></svg>'
@@ -512,6 +515,15 @@ def pair_compare_model_keys(left, right, distilled_model):
     return left, right
 
 
+def compare_configs(distilled_model):
+    """Thesis config id -> (model_key, mode), for every config the compare pickers can offer."""
+    return {
+        config_id(model_key, mode): (model_key, mode)
+        for model_key in model_key_choices(distilled_model)
+        for mode in model_mode_choices(model_key)
+    }
+
+
 def pair_compare_config_modes(left, right, left_model_key, right_model_key):
     left_modes = model_mode_choices(left_model_key)
     right_modes = model_mode_choices(right_model_key)
@@ -795,10 +807,13 @@ def empty_hero_html():
     )
 
 
-def card_head_html(mode):
+def card_head_html(mode, model=""):
+    """model is set only when two answers side by side come from different models, so the heads tell them apart."""
+    tag = f'<span class="model">{escape(model)}</span>' if model else ""
     return (
         '<div class="card-head">'
         f'<span class="mode">{escape(mode_name(mode))}</span>'
+        f"{tag}"
         f'<span class="sub">{escape(mode_hint(mode))}</span>'
         "</div>"
     )
@@ -855,12 +870,44 @@ def source_chips_html(hits, retrieval_off=False):
     return "".join(parts)
 
 
+def timing_breakdown(record):
+    parts = []
+    for label, field in (("model load", "load_s"), ("prompt", "prompt_s"), ("generation", "gen_s")):
+        value = _opt_float(record.get(field))
+        if value is not None:
+            parts.append(f"{label} {value:.2f} s")
+    return ", ".join(parts)
+
+
+def answer_stats_html(record):
+    """Response time and generation speed as two chips. tok/s is left out when Ollama reported no generation
+    (an abstained answer never calls the model, and records saved before the timing fields have none)."""
+    latency = float(record.get("latency_s") or 0.0)
+    detail = timing_breakdown(record)
+    title = "Question to answer" + (f": {detail}" if detail else "")
+    chips = [
+        f'<span class="stat" title="{escape(title)}"><span class="sr">Response time </span>'
+        f"<b>{latency:.1f}</b> s</span>"
+    ]
+    tok_s = _opt_float(record.get("tok_s"))
+    if tok_s is not None:
+        tokens = _opt_int(record.get("eval_count"))
+        gen_s = _opt_float(record.get("gen_s"))
+        speed = (
+            f"{tokens} tokens in {gen_s:.2f} s of generation"
+            if tokens is not None and gen_s is not None
+            else "Generation speed"
+        )
+        chips.append(
+            f'<span class="stat" title="{escape(speed)}"><span class="sr">Speed </span>'
+            f"<b>{tok_s:.1f}</b> tok/s</span>"
+        )
+    return '<span class="stats">' + "".join(chips) + "</span>"
+
+
 def metrics_html(record):
     n = source_count(record)
-    bits = [
-        f'<b>{float(record.get("latency_s") or 0):.1f}</b> s',
-        f'<b>{format_total_ram(record.get("total_mb"))}</b> RAM total',
-    ]
+    bits = [f'<b>{format_total_ram(record.get("total_mb"))}</b> RAM total']
     if record.get("abstained"):
         unit = "candidate checked" if n == 1 else "candidates checked"
         bits.append(f"<b>{n}</b> {unit}")
@@ -868,7 +915,12 @@ def metrics_html(record):
     else:
         count, _, unit = source_count_label(n).partition(" ")
         bits.append(f"<b>{count}</b> {unit}")
-    return '<div class="metrics">' + "".join(f"<span>{b}</span>" for b in bits) + "</div>"
+    return (
+        '<div class="metrics">'
+        + answer_stats_html(record)
+        + "".join(f"<span>{b}</span>" for b in bits)
+        + "</div>"
+    )
 
 
 def ram_split_html(record):
@@ -1097,8 +1149,12 @@ def stopped_html():
     return '<p class="stopped">Stopped before an answer came back.</p>'
 
 
-def running_card_html(mode, label):
-    return '<div class="card running-card">' + card_head_html(mode) + thinking_html(label) + "</div>"
+def cancelled_side_html():
+    return '<p class="stopped">Cancelled</p>'
+
+
+def running_card_html(mode, label, model=""):
+    return '<div class="card running-card">' + card_head_html(mode, model) + thinking_html(label) + "</div>"
 
 
 def thinking_label(mode, loading_index=False):
@@ -1110,10 +1166,10 @@ def thinking_label(mode, loading_index=False):
     return "Generating an answer"
 
 
-def waiting_html(mode, after_label):
+def waiting_html(mode, after_label, model=""):
     return (
         '<div class="card waiting-card">'
-        + card_head_html(mode)
+        + card_head_html(mode, model)
         + '<div class="slot-empty body"><div class="thinking queued">'
         + _dots_html()
         + f'<span class="thinking-text"><span class="queued-label">Starts when {escape(after_label)} finishes</span></span>'
@@ -1136,18 +1192,83 @@ def preview_text(answer):
     return first_line(prose.replace("`", ""))
 
 
+def compare_model_tags(left, right):
+    """Model names for the two heads of a compare, or blanks when both sides ran the same model."""
+    left_model = str((left or {}).get("model") or "")
+    right_model = str((right or {}).get("model") or "")
+    if left and right and left_model != right_model:
+        return left_model, right_model
+    return "", ""
+
+
 def compare_compact_html(left, right):
-    def block(rec):
+    left_tag, right_tag = compare_model_tags(left, right)
+
+    def block(rec, tag):
         mode = rec.get("mode") or ""
         preview = preview_text(rec.get("answer") or "")
         return (
             '<div class="cmp-cell">'
-            + card_head_html(mode)
+            + '<div class="cmp-top">'
+            + card_head_html(mode, tag)
+            + answer_stats_html(rec)
+            + "</div>"
             + f'<p class="preview">{escape(preview)}</p>'
             + "</div>"
         )
 
-    return '<div class="cmp-compact">' + block(left) + block(right) + "</div>"
+    return '<div class="cmp-compact">' + block(left, left_tag) + block(right, right_tag) + "</div>"
+
+
+def compare_summary_html(left_model, left_mode, right_model, right_mode):
+    """The composer's line while compare is on: which config answers on each side. The model is named once when
+    both sides share it, and per side when they don't."""
+    left = f"<b>{escape(mode_name(left_mode))}</b>"
+    right = f"<b>{escape(mode_name(right_mode))}</b>"
+    if left_model == right_model:
+        body = f'<span class="m">{escape(left_model)}</span> {left}<span class="vs">vs</span>{right}'
+    else:
+        body = (
+            f'<span class="m">{escape(left_model)}</span> {left}<span class="vs">vs</span>'
+            f'<span class="m">{escape(right_model)}</span> {right}'
+        )
+    return f'<p class="composer-cmp">{body}</p>'
+
+
+def records_in(messages):
+    """Run records in the order they were answered, compare pairs left then right."""
+    records = []
+    for message in messages:
+        if message.get("record"):
+            records.append(message["record"])
+        for rec in message.get("compare") or ():
+            if rec:
+                records.append(rec)
+    return records
+
+
+_MD_PUNCT = re.compile(r"([\\`*_{}\[\]()#+\-.!|~<>$])")
+
+
+def plain_label(text):
+    """Widget labels are Markdown; escape a saved question so it shows exactly as typed ($HOME, *.tar.gz, `ls`).
+    Streamlit swaps :name: for an emoji or icon even when the colons are escaped, so each colon gets a zero-width
+    space after it instead."""
+    flat = " ".join(str(text or "").split())
+    return _MD_PUNCT.sub(r"\\\1", flat).replace(":", ":\u200b")
+
+
+def history_note_html(text, error=False):
+    klass = "side-note err" if error else "side-note"
+    return f'<p class="{klass}">{escape(text)}</p>'
+
+
+def history_error_text(path):
+    home = str(Path.home())
+    shown = str(path)
+    if shown == home or shown.startswith(home + os.sep):
+        shown = "~" + shown[len(home):]
+    return f"Couldn't open chat history in {shown}, so chats aren't being saved. Check that the folder is writable."
 
 
 def avg_latency(records):
