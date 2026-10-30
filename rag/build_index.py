@@ -2,7 +2,7 @@
 """Build the thesis RAG index: English Linux docs -> chunks -> MiniLM embeddings -> ChromaDB.
 
 Usage (from the repo root):
-  python rag/build_index.py --snap corpus/snapshot-2026-10-11 --out rag/rag-index
+  python rag/build_index.py --snap corpus/snapshot-2026-10-11 --out rag/lab-index
   python rag/build_index.py --snap ... --out ... --sources tldr,command-manpages   # subset
   python rag/build_index.py --snap ... --out ... --chunks-only                     # just write chunks.jsonl
 
@@ -14,7 +14,8 @@ What it keeps (English only, everything else is skipped on purpose):
   ubuntu-docs      the 19 English Ubuntu pages (help/C)
   gnome-user-docs  the 301 English GNOME desktop help pages (help/C)
   arch-wiki        English pages only (html/en); not in the default --sources
-  ubuntu-server-docs Ubuntu Server documentation (MyST markdown, tutorial/how-to/explanation/reference)
+  ubuntu-server-docs Ubuntu Server documentation (MyST). Unlicensed; not in the default --sources.
+                     Opt in with --sources ...,ubuntu-server-docs
 Needs: pip install sentence-transformers chromadb beautifulsoup4 lxml ; groff (for man pages).
 """
 import argparse
@@ -28,11 +29,13 @@ from pathlib import Path
 
 os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
 
-ALL = ["tldr", "command-manpages", "man-pages", "ubuntu-docs", "gnome-user-docs", "ubuntu-server-docs"]
+DEFAULT_SOURCES = ["tldr", "command-manpages", "man-pages", "ubuntu-docs", "gnome-user-docs"]
+# ubuntu-server-docs is unlicensed (no LICENSE file; conf.py licence is TODO). Opt-in only.
+ALL = DEFAULT_SOURCES + ["ubuntu-server-docs"]
 LICENSE = {"tldr": "CC-BY-4.0", "command-manpages": "per package (licenses/command-manpages)",
            "man-pages": "mixed (licenses/man-pages-LICENSES)", "ubuntu-docs": "CC-BY-SA-3.0",
            "gnome-user-docs": "CC-BY-SA-3.0", "arch-wiki": "GFDL-1.3-or-later",
-           "ubuntu-server-docs": "CC-BY-SA-3.0"}
+           "ubuntu-server-docs": "unlicensed"}
 # Distro tag lets the app/eval notice when an Arch-only answer (pacman, AUR) is served for Ubuntu.
 DISTRO = {"tldr": "generic", "command-manpages": "ubuntu", "man-pages": "generic",
           "ubuntu-docs": "ubuntu", "gnome-user-docs": "ubuntu", "arch-wiki": "arch",
@@ -176,8 +179,8 @@ def main():
     here = Path(__file__).resolve().parent
     ap = argparse.ArgumentParser()
     ap.add_argument("--snap", required=True)
-    ap.add_argument("--out", default=str(here / "rag-index"))
-    ap.add_argument("--sources", default=",".join(ALL))
+    ap.add_argument("--out", default=str(here / "lab-index"))
+    ap.add_argument("--sources", default=",".join(DEFAULT_SOURCES))
     ap.add_argument("--chunks-only", action="store_true")
     ap.add_argument("--model", default="sentence-transformers/all-MiniLM-L6-v2")
     ap.add_argument("--batch", type=int, default=64)

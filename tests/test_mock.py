@@ -804,6 +804,12 @@ class InstallScriptTests(unittest.TestCase):
         self.assertIn("3.12, 3.13, and 3.14", combined)
         self.assertTrue(combined.startswith("Python 3.11.9") or r.stdout.startswith("Python 3.11.9"))
 
+    def test_prints_lab_index_not_v2(self):
+        text = (ROOT / "install.sh").read_text(encoding="utf-8")
+        self.assertIn("--out rag/lab-index", text)
+        self.assertNotIn("make_trimmed_index.py", text)
+        self.assertNotIn("--out rag/rag-index-v2", text)
+
 
 class ImportTests(unittest.TestCase):
     def test_engine_and_prompt_import(self):

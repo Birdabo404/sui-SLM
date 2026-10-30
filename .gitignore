@@ -16,6 +16,7 @@ corpus/snapshot-*/
 corpus/**/downloads/
 
 # RAG indexes
+rag/lab-index/
 rag/rag-index/
 rag/rag-index-trim/
 rag/rag-index-v2/
@@ -37,6 +38,9 @@ kd/teacher_*.jsonl
 kd/sft_*.jsonl
 kd/seed_chunks.jsonl
 kd/smoke-test*/
+
+# Real held-out test set (student-written; not the placeholder)
+eval/your-heldout.jsonl
 
 # Measurement logs
 logs/

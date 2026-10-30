@@ -10,7 +10,8 @@
    it doesn't know instead of guessing.
 4. Optional --holdout: a text file of your hand-written test questions (one per line). Training rows
    too similar to any of them are dropped so the evaluation stays held out.
-Output is {"messages": [system, user, assistant]} per line, which TRL's SFTTrainer reads directly.
+Output is {"messages": [system, user, assistant], "text": ChatML} per line.
+The notebook drops messages before SFT so TRL uses the rendered text field.
   python kd/build_sft.py --raw teacher_raw.jsonl --seeds seed_chunks.jsonl --holdout test_questions.txt
 """
 import argparse
@@ -24,6 +25,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from shared.chatml import render_chatml
+from shared.holdout import load_holdout, path_matches_gold_source
 from shared.prompt import ABSTAIN, SYSTEM, user_msg
 
 
@@ -70,12 +73,26 @@ def main():
     stats["kept"] = len(kept)
 
     if a.holdout:
-        from sentence_transformers import SentenceTransformer, util
-        hq = [q.strip() for q in open(a.holdout, encoding="utf-8") if q.strip()]
-        m = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device="cpu")
-        sim = util.cos_sim(m.encode([r["question"] for r in kept], normalize_embeddings=True), m.encode(hq, normalize_embeddings=True))
-        before = len(kept); kept = [r for r, row in zip(kept, sim) if float(row.max()) < a.holdout_sim]
-        stats["dropped_too_close_to_holdout"] = before - len(kept)
+        hq, gold_sources = load_holdout(a.holdout)
+        if gold_sources:
+            before = len(kept)
+            kept = [
+                r for r in kept
+                if not path_matches_gold_source(seeds[r["seed_id"]].get("path"), gold_sources)
+            ]
+            stats["dropped_source_path_holdout"] = before - len(kept)
+        if kept and hq:
+            from sentence_transformers import SentenceTransformer, util
+            m = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device="cpu")
+            sim = util.cos_sim(
+                m.encode([r["question"] for r in kept], normalize_embeddings=True),
+                m.encode(hq, normalize_embeddings=True),
+            )
+            before = len(kept)
+            kept = [r for r, row in zip(kept, sim) if float(row.max()) < a.holdout_sim]
+            stats["dropped_too_close_to_holdout"] = before - len(kept)
+        else:
+            stats["dropped_too_close_to_holdout"] = 0
 
     ids = list(seeds)
     cmd = lambda c: re.split(r"[\s(]", c["title"].strip().lower())[0]   # "readlink (tldr common)" -> "readlink"
@@ -95,13 +112,29 @@ def main():
         n = ctx.index(src) + 1
         steps = "\n".join(f"{i+1}. {s}" for i, s in enumerate(r.get("steps") or []))
         target = f"Steps:\n{steps}\n\nAnswer: {r['answer']}\n\nSource: [{n}] {src['title']}"
-        examples.append({"kind": "answerable", "seed_id": r["seed_id"], "messages": [
-            {"role": "system", "content": SYSTEM}, {"role": "user", "content": user_msg(r["question"], ctx)},
-            {"role": "assistant", "content": target}]})
+        messages = [
+            {"role": "system", "content": SYSTEM},
+            {"role": "user", "content": user_msg(r["question"], ctx)},
+            {"role": "assistant", "content": target},
+        ]
+        examples.append({
+            "kind": "answerable",
+            "seed_id": r["seed_id"],
+            "messages": messages,
+            "text": render_chatml(messages),
+        })
         if rng.random() < a.abstain_rate:
-            examples.append({"kind": "abstain", "seed_id": r["seed_id"], "messages": [
-                {"role": "system", "content": SYSTEM}, {"role": "user", "content": user_msg(r["question"], distractors(src, 3))},
-                {"role": "assistant", "content": ABSTAIN}]})
+            abstain_messages = [
+                {"role": "system", "content": SYSTEM},
+                {"role": "user", "content": user_msg(r["question"], distractors(src, 3))},
+                {"role": "assistant", "content": ABSTAIN},
+            ]
+            examples.append({
+                "kind": "abstain",
+                "seed_id": r["seed_id"],
+                "messages": abstain_messages,
+                "text": render_chatml(abstain_messages),
+            })
 
     # split by seed chunk so an answerable row and its abstain twin never land on different sides
     seed_ids = sorted({e["seed_id"] for e in examples}); rng.shuffle(seed_ids)

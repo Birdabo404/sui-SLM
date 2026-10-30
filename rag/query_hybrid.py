@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Hybrid retrieval: MiniLM (meaning) + BM25 (exact words like 'ssh', 'apt', '-xzf'), merged with
 reciprocal rank fusion. Dense-only misses obvious pages (e.g. 'ssh' query -> VirtualBox page).
-  python rag/query_hybrid.py --index rag/rag-index-v2 "connect to another lab PC over ssh"
+  python rag/query_hybrid.py --index rag/lab-index "connect to another lab PC over ssh"
 """
 import argparse
 import json
@@ -80,13 +80,15 @@ def dense_scores(col, qemb, hit_ids, query_result):
     return sim
 
 
-def retrieve(question, index="rag-index", k=5, exclude_distro=None, tldr_lane=False,
+def retrieve(question, index=None, k=5, exclude_distro=None, tldr_lane=False,
              rows=None, bm25=None, col=None, model=None):
     """Return top-k chunk dicts with rrf and dense (MiniLM cosine) scores."""
     # Heavy deps stay here so tokenize/rrf_fuse can be imported without MiniLM.
     from rank_bm25 import BM25Okapi
     from sentence_transformers import SentenceTransformer
 
+    if index is None:
+        index = os.environ.get("RAG_INDEX", str(HERE / "lab-index"))
     if rows is None:
         rows = load_rows(index, exclude_distro)
     if bm25 is None:
@@ -155,7 +157,7 @@ class HybridRetriever:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("question")
-    ap.add_argument("--index", default=str(HERE / "rag-index-v2"))
+    ap.add_argument("--index", default=os.environ.get("RAG_INDEX", str(HERE / "lab-index")))
     ap.add_argument("-k", type=int, default=5)
     ap.add_argument("--exclude-distro", default=None)
     ap.add_argument("--tldr-lane", action="store_true", help="add dense top-20 tldr-only ranking as a 3rd RRF lane")
