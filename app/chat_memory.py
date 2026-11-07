@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.answer_format import memory_text, step_note, step_query
 from app.engine import NUM_CTX
 
 ANSWER_RESERVE = 1024
@@ -28,6 +29,8 @@ class ChatContext:
     retrieval_query: str
     turns: tuple[Turn, ...]
     retrieval_turns: int = 0
+    # For a follow-up like "explain step 2": that step of the previous answer, for the app's prompt.
+    step_note: str = ""
 
     def apply(self, messages):
         applied, _count = self.apply_with_count(messages)
@@ -253,7 +256,8 @@ class ChatStore:
 
 def build_chat_context(messages, question):
     previous = _previous_completed_question(messages)
-    query = f"{previous} {question}" if previous else question
+    answer = _previous_answer(messages) if previous else ""
+    query = " ".join(part for part in (previous, step_query(question, answer), question) if part)
     turns = _completed_turns(messages)
     if not previous and not turns:
         return None
@@ -261,7 +265,21 @@ def build_chat_context(messages, question):
         retrieval_query=query,
         turns=turns,
         retrieval_turns=int(bool(previous)),
+        step_note=step_note(question, answer) if answer else "",
     )
+
+
+def _previous_answer(messages):
+    """The last turn's single answer as the reader saw it, or "" for a compare (which side would "step 2" mean?)."""
+    assistant = next((m for m in reversed(messages) if m.get("role") == "assistant"), None)
+    if assistant is None:
+        return ""
+    record = assistant.get("record")
+    if record:
+        return memory_text(str(record.get("answer") or ""), str(record.get("mode") or ""))
+    if "content" in assistant and not assistant.get("error"):
+        return memory_text(str(assistant.get("content") or ""))
+    return ""
 
 
 def _previous_completed_question(messages):
@@ -296,9 +314,10 @@ def _completed_turns(messages):
             continue
         record = message.get("record")
         if record:
-            turns.append(Turn(question=question, answer=str(record.get("answer") or "")))
+            turns.append(Turn(question=question, answer=memory_text(str(record.get("answer") or ""),
+                                                                    str(record.get("mode") or ""))))
         elif "content" in message and not message.get("error"):
-            turns.append(Turn(question=question, answer=str(message.get("content") or "")))
+            turns.append(Turn(question=question, answer=memory_text(str(message.get("content") or ""))))
         question = None
     return tuple(turns)
 
