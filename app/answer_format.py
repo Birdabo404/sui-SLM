@@ -323,7 +323,7 @@ _SHELL_WORDS = frozenset("if then else elif fi for while until do done case esac
 
 def _command_lines(code):
     """A fence of several commands, one per line, as those lines, so each gets its own copy box. Only when every
-    line is a standalone simple command with a known name: a continuation, pipe or && at a line end, a heredoc, a
+    line is a standalone command with a known name: a continuation, pipe or && at a line end, a heredoc, a
     comment, a prompt sign, a shell keyword or an indented line keeps the fence whole. None otherwise."""
     lines = [line for line in code.split("\n") if line.strip()]
     if len(lines) < 2:
