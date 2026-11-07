@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT))
 
 from shared.prompt import ABSTAIN
 from app.streaming import LiveThroughput, OllamaStreamError, retrieval_chart
+from app.models import ComparePick, ModelOption, compare_picks, default_compare_ids, model_options, modes_for, pair_compare_ids
 from app.engine import (
     OllamaInfo,
     WEAK_DENSE,
@@ -38,12 +39,22 @@ from app.engine import (
     warm_model,
 )
 from app.polaris import (
+    MONITOR_SWITCH,
+    RAM_TITLE,
     RateTrace,
+    config_summary_html,
+    finished_runs,
     hits_from_chart,
+    last_runs,
+    model_choice_label,
+    model_status_html,
+    models_table_html,
+    monitor_html,
+    rail_art_html,
+    ram_html,
+    rate_svg,
+    score_table_html,
     live_phase_label,
-    live_readout_html,
-    retrieval_chart_html,
-    trace_html,
     EXPORT_FIELDS,
     best_match_html,
     best_match_label,
@@ -51,7 +62,6 @@ from app.polaris import (
     card_head_html,
     card_html,
     debug_rows_html,
-    default_compare_modes,
     doc_label,
     evidence_block_html,
     evidence_panel_html,
@@ -71,7 +81,6 @@ from app.polaris import (
     ram_split_html,
     records_to_csv,
     records_to_json,
-    retrieval_bar_html,
     source_chips_html,
     source_key,
     split_code_blocks,
@@ -82,21 +91,14 @@ from app.polaris import (
     CancellableChat,
     ChatCancelled,
     compare_compact_html,
-    default_compare_model_keys,
-    model_key_choices,
-    model_mode_choices,
     mode_from_name,
     mode_name,
-    pair_compare_config_modes,
-    pair_compare_model_keys,
     preview_text,
-    running_card_html,
     ENGLISH_NOTE,
     MODE_HINTS,
     composer_note_html,
     connection_html,
     flags_html,
-    mode_menu_css,
     network_online,
     SKY_LEVELS,
     side_logo_html,
@@ -109,7 +111,6 @@ from app.polaris import (
     DELETE_ASK,
     HISTORY_EMPTY,
     answer_stats_html,
-    compare_configs,
     compare_model_tags,
     compare_summary_html,
     history_error_text,
@@ -161,11 +162,14 @@ class SessionStartupTests(unittest.TestCase):
             app_mod,
             "git_commit",
             return_value="abc1234",
-        ) as commit:
+        ) as commit, patch.object(app_mod, "_recent_chat_ids", return_value=["b", "a"]) as recent:
             app_mod._init_session()
             app_mod._init_session()
             self.assertEqual(app_mod._session_git_commit(), "abc1234")
         self.assertFalse(fake_st.session_state["compare"])
+        self.assertEqual(fake_st.session_state["tabs"], ["b", "a"])
+        self.assertEqual(fake_st.session_state["model_pick"], app_mod.BASE_MODEL)
+        recent.assert_called_once_with()
         commit.assert_called_once_with()
 
     def test_failed_warmup_retries_and_success_is_cached(self):
@@ -295,7 +299,7 @@ class RunRecordTests(unittest.TestCase):
         self.assertIn("Please ask the lab technician", html)
         card = card_html(rec)
         self.assertIn("idk-card", card)
-        self.assertIn("retr low", card)
+        self.assertNotIn("retr", card)
         self.assertIn("Best match:", card)
         self.assertIn("<code>tldr ls</code>", card)
         self.assertNotIn("cosine 0.10 of 0.30 needed", card)
@@ -356,46 +360,58 @@ class RunRecordTests(unittest.TestCase):
 
 class CompareTests(unittest.TestCase):
     def test_defaults_base_vs_full(self):
-        self.assertEqual(default_compare_modes(), ("base", "full"))
+        options = model_options("qwen3.5:2b", "")
+        self.assertEqual(default_compare_ids(options, False), ("qwen3.5:2b|base", "qwen3.5:2b|full"))
 
     def test_pair_must_differ(self):
         self.assertEqual(pair_compare_modes("base", "base"), ("base", "cot"))
         self.assertEqual(pair_compare_modes("full", "full"), ("full", "base"))
         self.assertEqual(pair_compare_modes("base", "full"), ("base", "full"))
 
-    def test_distilled_model_choices_are_hidden_when_unset(self):
-        self.assertEqual(model_key_choices(""), ("base",))
-        self.assertEqual(default_compare_model_keys(""), ("base", "base"))
+    def test_student_side_is_the_default_only_when_configured(self):
+        options = model_options("qwen3.5:2b", "student:latest")
+        self.assertEqual(default_compare_ids(options, True), ("qwen3.5:2b|full", "student:latest|full"))
+        self.assertEqual(default_compare_ids(model_options("qwen3.5:2b", ""), False)[1], "qwen3.5:2b|full")
+
+    def test_pair_of_the_same_config_moves_the_right_side(self):
+        options = model_options("qwen3.5:2b", "")
+        left, right = pair_compare_ids("qwen3.5:2b|full", "qwen3.5:2b|full", options, False)
+        self.assertEqual(left, "qwen3.5:2b|full")
+        self.assertNotEqual(right, left)
         self.assertEqual(
-            pair_compare_model_keys("base", "distilled", ""),
-            ("base", "base"),
+            pair_compare_ids("qwen3.5:2b|full", "thesis-student|full", options, False),
+            ("qwen3.5:2b|full", "thesis-student|full"),
         )
 
-    def test_distilled_compare_allows_the_same_mode(self):
-        self.assertEqual(
-            default_compare_model_keys("student:latest"),
-            ("base", "distilled"),
-        )
-        self.assertEqual(
-            pair_compare_model_keys("base", "distilled", "student:latest"),
-            ("base", "distilled"),
-        )
-        self.assertEqual(
-            pair_compare_config_modes("full", "full", "base", "distilled"),
-            ("full", "full"),
-        )
+    def test_student_offers_only_full_mode(self):
+        options = model_options("qwen3.5:2b", "")
+        by_key = {o.key: o for o in options}
+        self.assertEqual(modes_for(by_key["base"]), ("base", "cot", "rag", "full"))
+        self.assertEqual(modes_for(by_key["distilled"]), ("full",))
+        ids = [p.id for p in compare_picks(options)]
+        self.assertIn("thesis-student|full", ids)
+        self.assertNotIn("thesis-student|base", ids)
 
-    def test_distilled_exposes_only_full_mode(self):
-        self.assertEqual(model_mode_choices("base"), ("base", "cot", "rag", "full"))
-        self.assertEqual(model_mode_choices("distilled"), ("full",))
-        self.assertEqual(
-            pair_compare_config_modes("base", "rag", "base", "distilled"),
-            ("base", "full"),
-        )
-        self.assertEqual(
-            pair_compare_config_modes("base", "cot", "distilled", "distilled"),
-            ("full", "full"),
-        )
+    def test_model_labels_say_whether_ollama_has_it(self):
+        base, q4, student = model_options("qwen3.5:2b", "")
+        names = frozenset({"qwen3.5:2b", "thesis-student:latest"})
+        self.assertEqual(model_choice_label(base, names), "qwen3.5:2b")
+        self.assertEqual(model_choice_label(student, names), "thesis-student")
+        self.assertEqual(model_choice_label(q4, names), "thesis-base-q4km · not installed")
+        # Unknown (Ollama down) is not the same as missing.
+        self.assertEqual(model_choice_label(q4, None), "thesis-base-q4km")
+
+        self.assertIn('<span class="ok">installed</span> · KD student · runs +RAG+CoT only',
+                      model_status_html(student, names, True))
+        missing = model_status_html(q4, names, True)
+        self.assertIn('class="side-note model-st err"', missing)
+        self.assertIn("<code>ollama create thesis-base-q4km -f Modelfile-base</code>", missing)
+        self.assertIn("can't check, Ollama is not running", model_status_html(q4, None, False))
+
+        table = models_table_html((base, q4, student), names, True)
+        self.assertEqual(table.count('<li class="installed">'), 2)
+        self.assertEqual(table.count('<li class="not-installed">'), 1)
+        self.assertEqual(models_table_html((base, q4, student), None, False).count('<li class="unknown">'), 3)
 
     def test_run_compare_clears_waiting_before_right_starts(self):
         st = MagicMock()
@@ -435,8 +451,8 @@ class CompareTests(unittest.TestCase):
             def __exit__(self, *a):
                 return False
 
-        def answer(question, mode, model, *a, **k):
-            events.append(("start", mode, model, k.get("model_key")))
+        def answer(question, mode, option, *a, **k):
+            events.append(("start", mode, option.name, option.key, k.get("side")))
             return {
                 "mode": mode,
                 "answer": "x",
@@ -459,23 +475,20 @@ class CompareTests(unittest.TestCase):
             app_mod.st, "columns", return_value=(Col(), Col())
         ), patch.object(app_mod, "_answer_record", side_effect=answer), patch.object(
             app_mod, "_render_card", side_effect=render
-        ), patch.object(app_mod, "DISTILLED_MODEL", "student:latest"):
+        ):
+            base = ModelOption("base", "qwen3.5:2b", "default base", "ollama pull qwen3.5:2b")
+            student = ModelOption("distilled", "student:latest", "KD student", "ollama create student:latest -f Modelfile")
+            monitor = MagicMock()
             (left, right), unanswered = app_mod._run_compare(
-                "q",
-                "base",
-                "full",
-                "qwen3.5:2b",
-                None,
-                "idx",
-                left_model_key="base",
-                right_model_key="distilled",
+                "q", ComparePick(base, "base"), ComparePick(student, "full"), None, "idx", monitor=monitor
             )
 
         self.assertEqual(unanswered, (None, None))
         self.assertEqual(left["mode"], "base")
         self.assertEqual(right["mode"], "full")
-        left_start = ("start", "base", "qwen3.5:2b", "base")
-        right_start = ("start", "full", "student:latest", "distilled")
+        left_start = ("start", "base", "qwen3.5:2b", "base", "L")
+        right_start = ("start", "full", "student:latest", "distilled", "R")
+        monitor.plan.assert_called_once_with([("L", "qwen3.5:2b", "base"), ("R", "student:latest", "full")])
         self.assertLess(events.index(left_start), events.index("clear_wait"))
         self.assertLess(events.index("clear_wait"), events.index(right_start))
         self.assertEqual(
@@ -495,25 +508,6 @@ class HtmlTests(unittest.TestCase):
         self.assertIn("Plain model, no documents", card_head_html("base"))
         self.assertIn('<span class="mode">+RAG+CoT</span>', card_head_html("full"))
         self.assertNotIn("[", card_head_html("full"))
-        self.assertIn("No retrieval", retrieval_bar_html(None, 0.30, retrieval_off=True))
-        self.assertIn(
-            "No retrieval in BASE",
-            retrieval_bar_html(None, 0.30, retrieval_off=True, mode="base"),
-        )
-        self.assertNotIn("retrieval off", retrieval_bar_html(None, 0.30, retrieval_off=True))
-        html = retrieval_bar_html(0.74, 0.30)
-        self.assertIn("retr ok", html)
-        self.assertIn("width:74.0%", html)
-        self.assertIn("left:30.0%", html)
-        self.assertIn("<b>0.74</b> clears 0.30", html)
-        self.assertIn('role="meter"', html)
-        self.assertNotIn('class="scale"', html)
-        self.assertNotIn('class="knob"', html)
-        low = retrieval_bar_html(0.22, 0.30)
-        self.assertIn("retr low", low)
-        self.assertIn("width:22.0%", low)
-        self.assertIn("left:30.0%", low)
-        self.assertIn("<b>0.22</b> below 0.30", low)
 
     def test_chips_and_evidence(self):
         hits = [
@@ -582,12 +576,12 @@ class HtmlTests(unittest.TestCase):
         }
         html = metrics_html(rec)
         self.assertIn("1.8", html)
-        self.assertIn("2.5 GB", html)
-        self.assertIn("total", html)
+        self.assertIn("<b>2.5 GB</b> peak RSS app+Ollama", html)
+        self.assertIn("app 420 MB, Ollama 2100 MB", html)
         self.assertIn("<b>3</b> sources", html)
         self.assertNotIn(" · ", html)
         self.assertNotIn("app <b>420</b>", html)
-        self.assertNotIn("2100", html)
+        self.assertNotIn("2100", re.sub(r"<[^>]+>", "", html))
         self.assertNotIn("docs", html)
         # No timing fields: speed reads as unavailable rather than disappearing or showing a 0.
         self.assertIn("tok/s unavailable", html)
@@ -606,6 +600,17 @@ class HtmlTests(unittest.TestCase):
         self.assertIn("<b>1</b> candidate checked", idk_html)
         self.assertIn("abstained", idk_html)
         self.assertNotIn("source", idk_html)
+
+    def test_ram_says_what_was_measured(self):
+        self.assertIn("RAM not measured", ram_html({"total_mb": 0}))
+        self.assertIn("RAM not measured", ram_html({}))
+        self.assertNotIn("<b>0", ram_html({"total_mb": 0}))
+        app_only = ram_html({"total_mb": 300, "app_rss_mb": 300, "ollama_rss_mb": 0})
+        self.assertIn("peak RSS, app only", app_only)
+        self.assertIn("No Ollama process was visible", app_only)
+        both = ram_html({"total_mb": 2520, "app_rss_mb": 420, "ollama_rss_mb": 2100})
+        self.assertIn("peak RSS app+Ollama", both)
+        self.assertTrue(RAM_TITLE.startswith("Peak resident memory (RSS)"))
 
     def test_source_key_and_best_match(self):
         self.assertEqual(source_key("tldr"), "TLDR")
@@ -681,10 +686,11 @@ class HtmlTests(unittest.TestCase):
         self.assertIn("Retrieved lab docs, step-by-step prompt", right)
         self.assertIn("slot-empty ev", left)
         self.assertIn("No sources in BASE", left)
-        self.assertIn("No retrieval in BASE", left)
-        self.assertIn("retr off", left)
         self.assertIn('<span class="count">1 source</span>', right)
-        self.assertIn("retr ok", right)
+        # Scores and the rate live in the rail's monitor now, never inside an answer card.
+        for card in (left, right):
+            self.assertNotIn("retr", card)
+            self.assertNotIn('class="spark"', card)
         self.assertIn("slot-empty best", left)
         self.assertIn("slot-empty best", right)
         self.assertNotIn("idk-card", left)
@@ -701,7 +707,7 @@ class HtmlTests(unittest.TestCase):
         self.assertIn(".slot-empty{min-height:24px", compact)
         self.assertNotIn(".slot-empty.ev::after", compact)
         self.assertIn(".ev-box.best-src{", compact)
-        self.assertNotIn("var(--c-accent)", compact.split(".ev-box{", 1)[1].split(".retr{", 1)[0])
+        self.assertNotIn("var(--c-accent)", compact.split(".ev-box{", 1)[1].split(".metrics{", 1)[0])
 
 
 class LoaderAndNamingTests(unittest.TestCase):
@@ -713,7 +719,7 @@ class LoaderAndNamingTests(unittest.TestCase):
         self.assertIn(STILL_WORKING, html)
         self.assertNotIn("<script", html)
         css = style_path().read_text(encoding="utf-8")
-        block = css.split("/* ---------- loader", 1)[1].split("/* ---------- sidebar", 1)[0]
+        block = css.split("/* ---------- loader", 1)[1].split("/* ---------- while an answer generates", 1)[0]
         for prop in ("width:", "height:", "top:", "left:", "margin"):
             for frames in block.split("@keyframes")[1:]:
                 body = frames.split("}}", 1)[0]
@@ -726,9 +732,6 @@ class LoaderAndNamingTests(unittest.TestCase):
         self.assertEqual(thinking_label("base"), "Generating an answer")
         self.assertEqual(thinking_label("full", loading_index=True), "Loading the lab docs index")
         self.assertIn("Stopped", stopped_html())
-        card = running_card_html("cot", thinking_label("cot"))
-        self.assertIn("running-card", card)
-        self.assertIn('<span class="mode">+CoT</span>', card)
 
     def test_loader_text_is_neutral(self):
         banned = (
@@ -765,8 +768,6 @@ class LoaderAndNamingTests(unittest.TestCase):
             self.assertIn("Retrieved lab docs", MODE_HINTS[mode])
         for hint in MODE_HINTS.values():
             self.assertNotRegex(hint.lower(), "think|reason")
-        menu = mode_menu_css("qwen3.5:2b", ["base", "cot", "rag", "full"])
-        self.assertIn('nth-child(1)::after{content:"Plain model, no documents"}', menu)
 
     def test_ambient_motion_pauses_while_generating(self):
         self.assertIn("polaris-generating", flags_html(1, generating=True))
@@ -776,7 +777,7 @@ class LoaderAndNamingTests(unittest.TestCase):
             '<div class="polaris-flags polaris-sky-2 polaris-daylight polaris-compare polaris-generating"></div>',
         )
         css = style_path().read_text(encoding="utf-8")
-        rules = [r for r in css.split("}") if ":root:has(.polaris-generating)" in r]
+        rules = [r for r in css.split("}") if ":root:has(.polaris-generating)" in r and "play-state" in r]
         self.assertEqual(len(rules), 1)
         selector, body = rules[0].rsplit("{", 1)
         selector = selector.rsplit("*/", 1)[-1].strip()
@@ -791,20 +792,6 @@ class LoaderAndNamingTests(unittest.TestCase):
         self.assertIn('<span class="composer-note">English questions only</span>', html)
         css = style_path().read_text(encoding="utf-8")
         self.assertIn(".composer-note{", css)
-
-    def test_mode_menu_fits_a_narrow_screen(self):
-        css = style_path().read_text(encoding="utf-8")
-        wide, narrow = css.split("@media (max-width:640px){", 1)
-        narrow = narrow.split("\n}", 1)[0]
-        menu = ':root:has([class*="st-key-mode-"] [aria-expanded="true"]) [data-baseweb="popover"]'
-        self.assertIn(menu + " > div{min-width:340px}", wide)
-        self.assertIn(menu + " > div{min-width:min(340px,calc(100vw - 2 * var(--s-4)));margin:0 var(--s-4)}", narrow)
-        # The rows are a fixed height, so the hint gives way and the config name keeps its room.
-        self.assertIn(menu + ' li[role="option"] > div{flex:1 1 0;min-width:5em}', narrow)
-        self.assertIn(
-            menu + ' li[role="option"]::after{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}',
-            narrow,
-        )
 
     def test_mode_names_round_trip(self):
         for mode in ("base", "cot", "rag", "full"):
@@ -833,12 +820,6 @@ class LoaderAndNamingTests(unittest.TestCase):
                 "fe800000000000000000000000000001 00000400 00000001 00000000 00000003 wlan0\n"
             )
             self.assertTrue(network_online(td))
-
-    def test_mode_menu_css_names_model_and_hints(self):
-        css = mode_menu_css('qwen"3.5:2b', ["base", "cot", "rag", "full"])
-        self.assertIn('--polaris-model:"qwen\\"3.5:2b"', css)
-        self.assertIn('nth-child(4)::after{content:"Retrieved lab docs, step-by-step prompt"}', css)
-        self.assertTrue(css.startswith("<style>") and css.endswith("</style>"))
 
     def test_sidebar_logo_and_star_ids(self):
         idle = side_logo_html()
@@ -910,7 +891,7 @@ class AnswerStatsTests(unittest.TestCase):
             '<span class="sr">Speed </span><b>18.4</b> tok/s</span>',
             html,
         )
-        self.assertLess(html.index("tok/s"), html.index("RAM total"))
+        self.assertLess(html.index("tok/s"), html.index("peak RSS"))
 
     def test_speed_chip_says_unavailable_without_generation_timing(self):
         for missing in ({"tok_s": None}, {"tok_s": ""}):
@@ -945,27 +926,28 @@ class LiveStreamHtmlTests(unittest.TestCase):
          "bm25": None},
     ]
 
-    def test_retrieval_chart_prints_raw_scores_and_bars_only_cosine(self):
-        html = retrieval_chart_html(self.HITS, 0.30)
-        self.assertIn('best cosine <b class="v">0.741</b> clears the 0.30 threshold', html)
-        self.assertIn("rrf 0.0328", html)
-        self.assertIn("bm25 7.01", html)
-        self.assertIn("bm25 —", html)
+    DONE = {"mode": "full", "model": "qwen3.5:2b", "answer": "Use tar.", "latency_s": 6.7, "tok_s": 15.2,
+            "gen_s": 5.45, "eval_count": 83, "total_mb": 512, "docs": ["tar"], "abstained": False}
+
+    def test_score_table_prints_raw_scores_and_bars_only_cosine(self):
+        html = score_table_html(self.HITS, 0.30)
         self.assertEqual(html.count('class="bar"'), 2)
         self.assertIn('style="width:74.1%"', html)
         self.assertEqual(html.count('style="left:30.0%"'), 2)
         self.assertIn('<li class="ok">', html)
         self.assertIn('<li class="low">', html)
-        self.assertIn("not a confidence", html)
-        self.assertNotRegex(html.lower(), "confidence [0-9]|probab|%</")
-        self.assertIn("below the 0.30 threshold", retrieval_chart_html([dict(self.HITS[1], rank=1)], 0.30))
+        self.assertIn('<span class="sr">cosine </span>.741', html)
+        self.assertIn('<span class="sr">rrf </span>.0328', html)
+        self.assertIn('<span class="sr">bm25 </span>7.01', html)
+        self.assertIn('<span class="sr">bm25 </span>—', html)
+        self.assertNotRegex(html.lower(), "confidence|probab|%</")
 
     def test_live_chart_rows_map_from_the_backend_contract(self):
         chart = retrieval_chart(self.HITS, 0.30)
         hits = hits_from_chart(chart)
         self.assertEqual([(h["rank"], h["dense"], h["rrf"], h["bm25"]) for h in hits],
                          [(1, 0.7412, 0.0328, 7.013), (2, 0.21, 0.0161, None)])
-        self.assertIn("<span class=\"src\">tldr</span>", retrieval_chart_html(hits, chart.dense_threshold))
+        self.assertIn('title="tldr/common/tar.md"', score_table_html(hits, chart.dense_threshold))
 
     def test_rate_trace_counts_characters_from_the_first_text(self):
         trace = RateTrace(every=0.5)
@@ -977,29 +959,115 @@ class LiveStreamHtmlTests(unittest.TestCase):
         trace.finish()
         self.assertEqual(trace.first_s, 2.0)
         self.assertEqual([round(r, 1) for _, r in trace.samples], [120.0, 60.0])
-        frozen = trace.frozen()
-        self.assertEqual(frozen["first_s"], 2.0)
-        html = trace_html(frozen)
-        self.assertIn("first text after <b>2.0</b> s", html)
-        self.assertIn("peak <b>120</b> chars/s", html)
-        self.assertIn("not tokens", html)
-        self.assertEqual(trace_html({}), "")
+        self.assertEqual(trace.frozen(), {"samples": tuple(trace.samples), "first_s": 2.0})
 
-    def test_live_readout_never_shows_a_token_rate(self):
+    def test_rate_chart_draws_left_solid_and_right_dashed_on_shared_axes(self):
+        left = ((1.0, 10.0), (1.5, 40.0))
+        right = ((3.0, 20.0), (3.5, 20.0), (4.0, 80.0))
+        svg = rate_svg([("l", left), ("r", right)])
+        self.assertEqual(svg.count('class="line l"'), 1)
+        self.assertEqual(svg.count('class="line r"'), 1)
+        self.assertEqual(svg.count('class="area"'), 1)
+        self.assertIn("peak 80", svg)
+        self.assertEqual(rate_svg([("l", ((1.0, 5.0),))]), "")
+
+    def test_streaming_monitor_never_shows_a_token_rate(self):
         trace = RateTrace(every=0.5)
         trace.add(LiveThroughput(1.0, 1, 12, 1.0, 12.0))
-        html = live_readout_html(trace)
+        run = {"side": "", "model": "qwen3.5:2b", "mode": "base", "state": "streaming", "live": trace.last,
+               "samples": (), "first_s": 1.0}
+        html = monitor_html([run], streaming=True)
+        self.assertIn('<span class="mon-tag live">streaming</span>', html)
         self.assertIn("<b>12</b> chars", html)
         self.assertIn("<b>1</b> chunks", html)
         self.assertIn("<b>—</b> chars/s", html)
-        self.assertIn("tok/s arrives when the answer ends", html)
-        self.assertIn("Not model tokens", html)
+        self.assertIn("tok/s comes from Ollama when the answer ends", html)
         self.assertNotRegex(html, r"<b>[\d.,]+</b> tok")
-        trace.add(LiveThroughput(1.6, 5, 72, 3.1, 45.0))
-        self.assertIn("<b>100</b> chars/s", live_readout_html(trace))
-        self.assertIn("collecting samples", live_readout_html(trace))
-        trace.add(LiveThroughput(2.2, 9, 132, 4.1, 60.0))
-        self.assertIn('<svg class="spark"', live_readout_html(trace))
+        self.assertIn("not tokens", html)
+        waiting = monitor_html([{**run, "live": None}], streaming=True)
+        self.assertIn("waiting for the first text", waiting)
+
+    def test_finished_monitor_keeps_ollamas_tok_s_and_the_trace(self):
+        run = {"side": "", "model": "qwen3.5:2b", "mode": "full", "state": "done", "record": self.DONE,
+               "samples": ((1.2, 30.0), (1.7, 68.0)), "first_s": 1.2, "hits": self.HITS, "threshold": 0.30}
+        html = monitor_html([run])
+        self.assertIn('<span class="mon-tag">last answer</span>', html)
+        self.assertIn("<b>6.7</b> s", html)
+        self.assertIn("<b>15.2</b> tok/s", html)
+        self.assertIn("first text <b>1.2</b> s · peak <b>68</b>", html)
+        self.assertIn('class="spark"', html)
+        self.assertIn("best cos <b>0.741</b> clears 0.30", html)
+
+    def test_restored_answer_says_why_it_has_no_trace(self):
+        html = monitor_html([{"side": "", "model": "m", "mode": "full", "state": "done", "record": self.DONE,
+                              "samples": (), "first_s": None, "hits": [], "threshold": 0.3}])
+        self.assertIn("only recorded while an answer streams in this session", html)
+        self.assertIn("<b>15.2</b> tok/s", html)
+        self.assertNotIn('class="spark"', html)
+        self.assertIn("No answer in this chat yet", monitor_html([]))
+
+    def test_monitor_tells_compare_sides_apart(self):
+        left = {"side": "L", "model": "qwen3.5:2b", "mode": "base", "state": "done",
+                "record": {**self.DONE, "mode": "base"}, "samples": ((0.5, 10.0), (1.0, 20.0)), "first_s": 0.5}
+        right = {"side": "R", "model": "thesis-student", "mode": "full", "state": "waiting", "samples": ()}
+        html = monitor_html([left, right], streaming=True)
+        self.assertIn('<span class="side l">L</span><span class="m">qwen3.5:2b</span><span class="md">BASE</span>', html)
+        self.assertIn('<span class="side r">R</span><span class="m">thesis-student</span><span class="md">+RAG+CoT</span>', html)
+        self.assertIn("starts when the left answer finishes", html)
+        self.assertIn("No retrieval in BASE", monitor_html([left]))
+        stopped = monitor_html([{**right, "state": "stopped"}])
+        self.assertIn("stopped, no stats", stopped)
+        self.assertNotRegex(stopped, r"<b>0(\.0)?</b> tok/s")
+
+    def test_scores_view_names_below_threshold_and_shared_hits(self):
+        low = [dict(self.HITS[1], rank=1)]
+        run = {"side": "", "mode": "rag", "state": "done", "record": {"abstained": True, "latency_s": 0.3},
+               "samples": (), "hits": low, "threshold": 0.30}
+        self.assertIn("below 0.30</span><span class=\"unit\">model not called</span>", monitor_html([run]))
+        left = {"side": "L", "mode": "rag", "model": "a", "state": "done", "record": self.DONE, "samples": (),
+                "hits": self.HITS, "threshold": 0.3}
+        right = {**left, "side": "R", "mode": "full"}
+        self.assertIn("Both sides retrieved the same chunks.", monitor_html([left, right]))
+        plain = {**left, "side": "R", "mode": "base", "hits": []}
+        self.assertIn("R (BASE) retrieves nothing.", monitor_html([left, plain]))
+
+    def test_monitor_switch_is_uncontrolled_and_both_views_ship(self):
+        # React would turn a checked radio into a controlled input that ignores clicks.
+        self.assertNotIn("checked", MONITOR_SWITCH)
+        self.assertIn('role="radiogroup"', MONITOR_SWITCH)
+        self.assertIn('<label for="mon-v-scores">Scores</label>', MONITOR_SWITCH)
+        html = monitor_html([])
+        self.assertIn("mon-view mon-rate", html)
+        self.assertIn("mon-view mon-scores", html)
+
+    def test_runs_come_from_the_last_answer_with_its_session_trace(self):
+        messages = [
+            {"role": "user", "content": "q1"},
+            {"role": "assistant", "record": self.DONE},
+            {"role": "user", "content": "q2"},
+            {"role": "assistant", "compare": ({**self.DONE, "mode": "base"}, None),
+             "compare_unanswered": (None, {"mode": "full", "model": "thesis-student", "state": "cancelled"})},
+        ]
+        traces = {"answer-h3-l": {"samples": ((0.1, 5.0), (0.6, 9.0)), "first_s": 0.1}}
+        left, right = last_runs(messages, traces)
+        self.assertEqual((left["side"], left["state"], left["samples"]), ("L", "done", ((0.1, 5.0), (0.6, 9.0))))
+        self.assertEqual((right["side"], right["state"], right["model"]), ("R", "stopped", "thesis-student"))
+        (single,) = finished_runs(messages[1], 1, {})
+        self.assertEqual((single["side"], single["samples"], single["first_s"]), ("", (), None))
+        self.assertEqual(last_runs(messages[:1], {}), [])
+
+    def test_rail_art_is_static_text_hidden_from_readers(self):
+        html = rail_art_html()
+        self.assertTrue(html.startswith('<div class="rail-art" aria-hidden="true">'))
+        self.assertEqual(html.count("<span"), 9)
+        self.assertEqual(html.count('class="pole"'), 1)
+        self.assertEqual(html.count('class="dip"'), 6)
+        self.assertNotRegex(html, "<(img|svg|script|style)")
+        self.assertNotIn("style=", html)
+        rows = re.findall(r'<span class="(?:hi|mid|lo)">(.*?)</span>(?=<span class="(?:hi|mid|lo)">|</div>)', html)
+        self.assertEqual([len(re.sub(r"<[^>]+>", "", r)) for r in rows], [44] * 9)
+        self.assertIs(type(html), str)
+        self.assertEqual(rail_art_html(), html)
 
     def test_phase_labels_name_only_work_that_runs(self):
         self.assertEqual(live_phase_label("full"), "Searching the lab docs")
@@ -1018,7 +1086,6 @@ class CompareLabelTests(unittest.TestCase):
         )
         tagged = card_head_html("full", "student<1>")
         self.assertIn('<span class="mode">+RAG+CoT</span><span class="model">student&lt;1&gt;</span>', tagged)
-        self.assertIn('<span class="model">qwen3.5:2b</span>', running_card_html("full", "x", "qwen3.5:2b"))
         self.assertIn('<span class="model">student:latest</span>', waiting_html("full", "the left answer", "student:latest"))
         self.assertIn("Starts when the left answer finishes", waiting_html("full", "the left answer"))
 
@@ -1052,17 +1119,11 @@ class CompareLabelTests(unittest.TestCase):
             '<span class="m">student:latest</span> <b>+RAG+CoT</b></p>',
         )
 
-    def test_compare_pickers_offer_the_thesis_configs(self):
+    def test_composer_line_outside_compare_names_the_picked_model(self):
         self.assertEqual(
-            compare_configs(""),
-            {"base": ("base", "base"), "base+CoT": ("base", "cot"), "base+RAG": ("base", "rag"),
-             "base+RAG+CoT": ("base", "full")},
+            config_summary_html("thesis-student", "full"),
+            '<p class="composer-cmp"><span class="m">thesis-student</span> <b>+RAG+CoT</b></p>',
         )
-        with_student = compare_configs("student:latest")
-        self.assertEqual(list(with_student)[-1], "distilled+RAG+CoT")
-        self.assertEqual(with_student["distilled+RAG+CoT"], ("distilled", "full"))
-        for cid, (model_key, mode) in with_student.items():
-            self.assertEqual(config_id(model_key, mode), cid)
 
 
 class HistoryHelperTests(unittest.TestCase):
@@ -1439,6 +1500,14 @@ class StopTests(unittest.TestCase):
         app_mod = importlib.import_module("app.app")
         return st, app_mod
 
+    def _answer(self, app_mod, slot):
+        """_answer_record for one plain answer, with a real monitor on a mock slot; returns (record, monitor run)."""
+        self.monitor = app_mod._Monitor(MagicMock())
+        self.monitor.plan([("", "m", "base")])
+        option = ModelOption("base", "m", "default base", "ollama pull m")
+        rec = app_mod._answer_record("q", "base", option, None, "idx", slot, key="answer-1", monitor=self.monitor)
+        return rec, self.monitor.runs[0]
+
     def test_interrupt_before_the_first_chunk_cancels_and_closes_the_stream(self):
         st, app_mod = self._app_with_mock_st()
         answer = _BlockingAnswer()
@@ -1456,7 +1525,7 @@ class StopTests(unittest.TestCase):
         with patch.object(app_mod, "stream_answer_question", return_value=answer), \
                 patch.object(app_mod, "_model_info", return_value=None):
             with self.assertRaises(_Interrupted):
-                app_mod._answer_record("q", "base", "m", None, "idx", slot, key="answer-1")
+                self._answer(app_mod, slot)
         self.assertTrue(answer.cancelled.is_set())
         self.assertTrue(answer.closed)
         self.assertFalse(answer.worker_alive_after(1.0))
@@ -1468,8 +1537,9 @@ class StopTests(unittest.TestCase):
         answer = _BlockingAnswer(raise_now=True)
         with patch.object(app_mod, "stream_answer_question", return_value=answer), \
                 patch.object(app_mod, "_model_info", return_value=None):
-            rec = app_mod._answer_record("q", "base", "m", None, "idx", slot, key="answer-1")
+            rec, run = self._answer(app_mod, slot)
         self.assertIsNone(rec)
+        self.assertEqual(run["state"], "stopped")
         self.assertIs(st.session_state.last_cancelled, True)
         slot.empty.assert_called_once()
         self.assertTrue(answer.closed)
@@ -1480,8 +1550,9 @@ class StopTests(unittest.TestCase):
         answer = _BlockingAnswer(error=OllamaStreamError("model 'm' not found"))
         with patch.object(app_mod, "stream_answer_question", return_value=answer), \
                 patch.object(app_mod, "_model_info", return_value=None):
-            rec = app_mod._answer_record("q", "base", "m", None, "idx", slot, key="answer-1")
+            rec, run = self._answer(app_mod, slot)
         self.assertIsNone(rec)
+        self.assertEqual(run["state"], "error")
         message = slot.error.call_args.args[0]
         self.assertIn("model 'm' not found", message)
         self.assertNotIn("Could not reach", message)
@@ -1494,8 +1565,11 @@ class StopTests(unittest.TestCase):
                                                                       "weak": False, "latency_s": 0.7})
         with patch.object(app_mod, "stream_answer_question", return_value=answer), \
                 patch.object(app_mod, "_model_info", return_value=None):
-            rec = app_mod._answer_record("q", "base", "m", None, "idx", slot, key="answer-1")
+            rec, run = self._answer(app_mod, slot)
         self.assertEqual(rec["answer"], "use tar")
+        self.assertEqual((run["state"], run["record"]), ("done", rec))
+        drawn = self.monitor.slot.markdown.call_args.args[0]
+        self.assertIn('<span class="mon-tag">last answer</span>', drawn)
         status = st.empty.return_value
         self.assertEqual(status.markdown.call_count, 1)
         self.assertIn("Waiting for the model…", status.markdown.call_args.args[0])

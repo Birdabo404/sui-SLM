@@ -8,6 +8,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 import os
 import random
 import re
@@ -21,11 +22,10 @@ from app.engine import (
     MODE_LABELS,
     MODE_SUBS,
     MODE_SUFFIX,
-    THESIS_CONFIGS,
-    config_id,
     mode_choices,
     uses_rag,
 )
+from app.models import is_installed
 from app.streaming import CancellableChat, ChatCancelled
 from shared.frozen import format_threshold
 
@@ -182,6 +182,48 @@ _SKY_HTML = f'<div class="sky" aria-hidden="true"><div class="sky-field">{ascii_
 
 def sky_html():
     return _SKY_HTML
+
+
+RAIL_ART_COLS, RAIL_ART_ROWS = 44, 9
+_BAYER4 = ((0, 8, 2, 10), (12, 4, 14, 6), (3, 11, 1, 9), (15, 7, 13, 5))
+_DITHER_RAMP = " ˙·:░▒▓"
+# The Little Dipper in (col, row) cells: Polaris, the handle (delta, epsilon, zeta), then the bowl (Kochab, gamma, eta).
+_RAIL_DIPPER = ((37, 1), (31, 1), (26, 2), (22, 3), (15, 3), (14, 5), (21, 5))
+
+
+def _rail_ridge(c, cols, rows):
+    return rows - 2.2 - 1.1 * math.sin(c / cols * math.pi * 1.25 + 0.2) - 0.45 * math.sin(c / 3.1 + 1)
+
+
+def _rail_field(c, r, cols, rows):
+    """Brightness 0-1: a glow around the pole star, haze along the horizon, and the ridge below it."""
+    px, py = _RAIL_DIPPER[0]
+    dx, dy = (c - px) / 6.5, (r - py) / 2.0
+    ridge = _rail_ridge(c, cols, rows)
+    if r >= ridge:
+        return min(1.0, 0.62 + 0.12 * (r - ridge))
+    return max(0.62 * math.exp(-(dx * dx + dy * dy)), 0.34 * math.exp(-(ridge - r) / 1.3))
+
+
+def rail_art_html(cols=RAIL_ART_COLS, rows=RAIL_ART_ROWS):
+    """The rail's header art: an ordered (Bayer) dither in text, toned in three bands by row the way a terminal
+    banner is. Static and decorative, so it's hidden from screen readers."""
+    levels = len(_DITHER_RAMP) - 1
+    stars = {cell: i for i, cell in enumerate(_RAIL_DIPPER)}
+    lines = []
+    for r in range(rows):
+        cells = []
+        for c in range(cols):
+            if (c, r) in stars:
+                star = stars[(c, r)]
+                glyph = "*" if star == 0 else ("•" if star == 4 else "∙")
+                cells.append(f'<b class="{"pole" if star == 0 else "dip"}">{glyph}</b>')
+                continue
+            v = _rail_field(c, r, cols, rows) * levels + (_BAYER4[r % 4][c % 4] / 16.0 - 0.5)
+            cells.append(escape(_DITHER_RAMP[max(0, min(levels, int(round(v))))], quote=False))
+        band = "hi" if r < rows // 3 else ("mid" if r < 2 * rows // 3 else "lo")
+        lines.append(f'<span class="{band}">{"".join(cells)}</span>')
+    return '<div class="rail-art" aria-hidden="true">' + "".join(lines) + "</div>"
 
 
 def sky_level(turns):
@@ -356,15 +398,6 @@ def records_to_json(records):
     return json.dumps(list(records), indent=2, ensure_ascii=False)
 
 
-def default_compare_modes():
-    modes = mode_choices()
-    if "base" in modes and "full" in modes:
-        return "base", "full"
-    if len(modes) < 2:
-        raise ValueError("need two modes to compare")
-    return modes[0], modes[-1]
-
-
 def pair_compare_modes(left, right):
     modes = mode_choices()
     if not modes:
@@ -373,61 +406,6 @@ def pair_compare_modes(left, right):
         left = modes[0]
     if right not in modes or right == left:
         right = next(m for m in modes if m != left)
-    return left, right
-
-
-def model_key_choices(distilled_model):
-    if (distilled_model or "").strip():
-        return ("base", "distilled")
-    return ("base",)
-
-
-def model_mode_choices(model_key):
-    modes = tuple(
-        mode
-        for config_model_key, mode in THESIS_CONFIGS
-        if config_model_key == model_key and mode in MODE_LABELS
-    )
-    if not modes:
-        raise ValueError(f"unknown model key: {model_key}")
-    return modes
-
-
-def default_compare_model_keys(distilled_model):
-    choices = model_key_choices(distilled_model)
-    if "distilled" in choices:
-        return "base", "distilled"
-    return "base", "base"
-
-
-def pair_compare_model_keys(left, right, distilled_model):
-    choices = model_key_choices(distilled_model)
-    default_left, default_right = default_compare_model_keys(distilled_model)
-    if left not in choices:
-        left = default_left
-    if right not in choices:
-        right = default_right
-    return left, right
-
-
-def compare_configs(distilled_model):
-    """Thesis config id -> (model_key, mode), for every config the compare pickers can offer."""
-    return {
-        config_id(model_key, mode): (model_key, mode)
-        for model_key in model_key_choices(distilled_model)
-        for mode in model_mode_choices(model_key)
-    }
-
-
-def pair_compare_config_modes(left, right, left_model_key, right_model_key):
-    left_modes = model_mode_choices(left_model_key)
-    right_modes = model_mode_choices(right_model_key)
-    if left not in left_modes:
-        left = left_modes[0]
-    if right not in right_modes:
-        right = right_modes[0]
-    if left_model_key == right_model_key and right == left and len(right_modes) > 1:
-        right = next(mode for mode in right_modes if mode != left)
     return left, right
 
 
@@ -714,36 +692,12 @@ def card_head_html(mode, model=""):
     )
 
 
-def retrieval_bar_html(score, threshold, retrieval_off=False, mode=""):
-    if retrieval_off:
-        text = f"No retrieval in {mode_name(mode)}" if mode else "No retrieval"
-        return f'<div class="retr off">{escape(text)}</div>'
-    n = 0.0 if score is None else max(0.0, min(1.0, float(score)))
-    t = 0.30 if threshold is None else float(threshold)
-    t = max(0.0, min(1.0, t))
-    ok = score is not None and float(score) >= t
-    klass = "retr ok" if ok else "retr low"
-    width = f"{n * 100:.1f}%"
-    tick = f"{t * 100:.1f}%"
-    verdict = "clears" if ok else "below"
-    return (
-        f'<div class="{klass}">'
-        '<span class="lbl">Retrieval</span>'
-        f'<span class="bar" role="meter" aria-valuemin="0" aria-valuemax="1" aria-valuenow="{n:.2f}"'
-        f' aria-label="Best match {_fmt_score(score)}, threshold {format_threshold(t)}">'
-        f'<span class="fill" style="width:{width}"></span>'
-        f'<span class="tick" style="left:{tick}"></span>'
-        "</span>"
-        f'<span class="val"><b>{_fmt_score(score)}</b> {verdict} {format_threshold(t)}</span>'
-        "</div>"
-    )
-
-
-RETRIEVAL_NOTE = "cosine is the MiniLM score the threshold gates. rrf ranks the fused lanes and is not a confidence. bm25 is unbounded and query-relative."
+SCORES_NOTE = "cos is the MiniLM score the threshold (tick) gates. rrf is a rank score and bm25 is raw; neither is a confidence."
+RATE_NOTE = "chars/s is counted in the app per 0.5 s, not tokens. tok/s is Ollama's eval_count / eval_duration."
 
 
 def hits_from_chart(chart):
-    """The streaming backend's RetrievalChart rows as hit dicts, so the live chart and the saved record draw alike."""
+    """The streaming backend's RetrievalChart rows as hit dicts, so the live view and a saved record draw alike."""
     return [
         {
             "rank": row.rank,
@@ -756,46 +710,6 @@ def hits_from_chart(chart):
         }
         for row in chart.rows
     ]
-
-
-def retrieval_chart_html(hits, threshold):
-    """Raw per-hit scores. Only cosine gets a bar, on its own 0-1 scale with the threshold tick; rrf and bm25 are
-    printed raw, because neither is bounded or comparable to cosine."""
-    t = 0.30 if threshold is None else float(threshold)
-    best = max_dense(hits or [])
-    if not hits:
-        return '<div class="rchart"><p class="rc-head"><b>Retrieval</b><span>no hits</span></p></div>'
-    verdict = "below" if best is None or best < t else "clears"
-    head = (
-        '<p class="rc-head"><b>Retrieval</b>'
-        f'<span>best cosine <b class="v">{_fmt_score(best, 3)}</b> {verdict} the {format_threshold(t)} threshold</span></p>'
-    )
-    tick = f"{max(0.0, min(1.0, t)) * 100:.1f}%"
-    rows = []
-    for hit in hits:
-        dense = _opt_float(hit.get("dense"))
-        width = 0.0 if dense is None else max(0.0, min(1.0, dense)) * 100
-        ok = dense is not None and dense >= t
-        rows.append(
-            f'<li class="{"ok" if ok else "low"}">'
-            f'<span class="rk">{int(hit.get("rank") or 0)}</span>'
-            f'<span class="src">{escape(source_key(hit.get("source") or hit.get("path")).lower())}</span>'
-            f'<span class="ttl" title="{escape(str(hit.get("path") or ""))}">{escape(chip_name(hit))}</span>'
-            f'<span class="bar" aria-hidden="true"><span class="fill" style="width:{width:.1f}%"></span>'
-            f'<span class="tick" style="left:{tick}"></span></span>'
-            f'<span class="cos"><span class="sr">cosine </span>{_fmt_score(dense, 3)}</span>'
-            f'<span class="raw">rrf {_fmt_score(hit.get("rrf"), 4)}</span>'
-            f'<span class="raw">bm25 {_fmt_score(hit.get("bm25"), 2)}</span>'
-            "</li>"
-        )
-    return (
-        '<div class="rchart">'
-        + head
-        + '<p class="rc-cols" aria-hidden="true"><span>hit</span><span>cosine, threshold tick</span><span>raw</span></p>'
-        + '<ol class="rc-rows">' + "".join(rows) + "</ol>"
-        + f'<p class="rc-note">{escape(RETRIEVAL_NOTE)}</p>'
-        + "</div>"
-    )
 
 
 class RateTrace:
@@ -832,74 +746,247 @@ class RateTrace:
             self._mark = (self.last.elapsed_s, self.last.character_count)
 
     def frozen(self):
-        """What a finished card keeps: the samples and the first-text time."""
+        """What the session keeps once the answer is done: the samples and the first-text time."""
         return {"samples": tuple(self.samples), "first_s": self.first_s}
-
-
-def rate_svg(samples, width=240, height=36):
-    if len(samples) < 2:
-        return '<span class="spark-empty">collecting samples</span>'
-    t0, t1 = samples[0][0], samples[-1][0]
-    span = max(t1 - t0, 1e-9)
-    top = max(rate for _, rate in samples) * 1.15 or 1.0
-    pts = [
-        (round((t - t0) / span * width, 1), round(height - rate / top * (height - 2), 1))
-        for t, rate in samples
-    ]
-    line = " ".join(f"{x},{y}" for x, y in pts)
-    area = f"M0,{height} L" + " L".join(f"{x},{y}" for x, y in pts) + f" L{width},{height} Z"
-    peak = max(rate for _, rate in samples)
-    return (
-        f'<svg class="spark" viewBox="0 0 {width} {height}" preserveAspectRatio="none" role="img" '
-        f'aria-label="Characters per second while streaming, peak {peak:.0f}">'
-        f'<path class="area" d="{area}"/>'
-        f'<polyline class="line" points="{line}" vector-effect="non-scaling-stroke"/>'
-        "</svg>"
-    )
 
 
 def _trace_peak(samples):
     return max((rate for _, rate in samples), default=None)
 
 
-def live_readout_html(trace):
-    """The meter under a streaming answer. tok/s only exists once Ollama sends its terminal counts, so it says that."""
-    live = trace.last
-    current = trace.samples[-1][1] if trace.samples else None
-    cells = [
-        f'<span class="cell"><b>{live.elapsed_s:.1f}</b> s</span>',
-        f'<span class="cell"><b>{live.character_count:,}</b> chars</span>',
-        f'<span class="cell"><b>{live.chunk_count:,}</b> chunks</span>',
-        f'<span class="cell"><b>{"—" if current is None else f"{current:.0f}"}</b> chars/s</span>',
-        '<span class="cell pending">tok/s arrives when the answer ends</span>',
-    ]
+def rate_svg(traces, width=240, height=48):
+    """One or two traces (left solid with its area, right dashed) on shared axes: seconds since each answer's first
+    text across, chars/s up."""
+    drawn = [(cls, samples) for cls, samples in traces if len(samples) >= 2]
+    if not drawn:
+        return ""
+    span = max(max(t for t, _ in samples) - samples[0][0] for _, samples in drawn) or 1e-9
+    top = max(max(rate for _, rate in samples) for _, samples in drawn) * 1.15 or 1.0
+    parts = []
+    for cls, samples in drawn:
+        t0 = samples[0][0]
+        pts = [
+            (round((t - t0) / span * width, 1), round(height - rate / top * (height - 2), 1)) for t, rate in samples
+        ]
+        line = " ".join(f"{x},{y}" for x, y in pts)
+        if cls == "l":
+            area = f"M0,{height} L" + " L".join(f"{x},{y}" for x, y in pts) + f" L{pts[-1][0]},{height} Z"
+            parts.append(f'<path class="area" d="{area}"/>')
+        parts.append(f'<polyline class="line {cls}" points="{line}" vector-effect="non-scaling-stroke"/>')
+    peak = max(_trace_peak(samples) for _, samples in drawn)
     return (
-        '<div class="live">'
-        '<p class="live-row"><span class="live-tag">streaming</span>' + "".join(cells) + "</p>"
-        + '<div class="live-chart">' + rate_svg(trace.samples) + "</div>"
-        + '<p class="live-note">Characters per 0.5 s window, counted in the app. Not model tokens.</p>'
+        f'<svg class="spark" viewBox="0 0 {width} {height}" preserveAspectRatio="none" role="img" '
+        f'aria-label="Characters per second while streaming, peak {peak:.0f}">' + "".join(parts) + "</svg>"
+    )
+
+
+def _run_label(run):
+    side = run.get("side") or ""
+    tag = f'<span class="side {side.lower()}">{escape(side)}</span>' if side else ""
+    return (
+        f'<p class="mon-cfg">{tag}<span class="m">{escape(run.get("model") or "")}</span>'
+        f'<span class="md">{escape(mode_name(run.get("mode") or ""))}</span></p>'
+    )
+
+
+def _run_cells(run):
+    """A run's numbers. Streaming: what the app can count (seconds, characters, chunks, chars/s), never tok/s.
+    Finished: the response time and Ollama's own tok/s, or why there is none."""
+    state = run.get("state")
+    if state == "streaming":
+        live = run.get("live")
+        if live is None:
+            return '<p class="mon-cells pending">waiting for the first text</p>'
+        samples = run.get("samples") or ()
+        current = samples[-1][1] if samples else None
+        return (
+            '<p class="mon-cells">'
+            f'<span><b>{live.elapsed_s:.1f}</b> s</span>'
+            f'<span><b>{live.character_count:,}</b> chars</span>'
+            f'<span><b>{live.chunk_count:,}</b> chunks</span>'
+            f'<span><b>{"—" if current is None else f"{current:.0f}"}</b> chars/s</span>'
+            "</p>"
+            '<p class="mon-cells pending tok-later">tok/s comes from Ollama when the answer ends</p>'
+        )
+    if state == "waiting":
+        return '<p class="mon-cells pending">starts when the left answer finishes</p>'
+    if state in ("stopped", "error"):
+        return f'<p class="mon-cells pending">{"stopped" if state == "stopped" else "failed"}, no stats</p>'
+    record = run.get("record") or {}
+    extra = []
+    first_s = run.get("first_s")
+    peak = _trace_peak(run.get("samples") or ())
+    if first_s is not None:
+        extra.append(f"first text <b>{first_s:.1f}</b> s")
+    if peak is not None:
+        extra.append(f"peak <b>{peak:.0f}</b>")
+    return (
+        '<p class="mon-cells">' + answer_stats_html(record) + "</p>"
+        + (f'<p class="mon-cells dim">{" · ".join(extra)}</p>' if extra else "")
+    )
+
+
+def _rate_view(runs, streaming):
+    tag = '<span class="mon-tag live">streaming</span>' if streaming else '<span class="mon-tag">last answer</span>'
+    if not runs:
+        return (
+            '<div class="mon-view mon-rate">'
+            '<p class="mon-head"><span class="mon-tag">idle</span></p>'
+            '<div class="mon-chart empty"><span>No answer in this chat yet</span></div>'
+            f'<p class="mon-note">{escape(RATE_NOTE)}</p>'
+            "</div>"
+        )
+    traces = [((run.get("side") or "l").lower(), tuple(run.get("samples") or ())) for run in runs]
+    chart = rate_svg(traces)
+    if not chart:
+        restored = not streaming and all(not (run.get("samples") or ()) for run in runs)
+        empty = "No trace: the rate is only recorded while an answer streams in this session" if restored else "collecting samples"
+        chart_html = f'<div class="mon-chart empty"><span>{escape(empty)}</span></div>'
+    else:
+        chart_html = f'<div class="mon-chart">{chart}</div>'
+    body = "".join(_run_label(run) + _run_cells(run) for run in runs)
+    return (
+        '<div class="mon-view mon-rate">'
+        f'<p class="mon-head">{tag}<span class="unit">chars/s</span></p>'
+        + chart_html
+        + body
+        + f'<p class="mon-note">{escape(RATE_NOTE)}</p>'
         "</div>"
     )
 
 
-def trace_html(trace):
-    """A finished card's copy of its stream trace, kept for this session only."""
-    samples = trace.get("samples") or ()
-    first_s = trace.get("first_s")
-    bits = []
-    if first_s is not None:
-        bits.append(f"first text after <b>{first_s:.1f}</b> s")
-    peak = _trace_peak(samples)
-    if peak is not None:
-        bits.append(f"peak <b>{peak:.0f}</b> chars/s")
-    if not bits and len(samples) < 2:
-        return ""
+def _score(value, digits):
+    """Leading-dot fixed point (.742), the compact form a narrow score column needs."""
+    text = _fmt_score(value, digits)
+    return text[1:] if text.startswith("0.") else text
+
+
+def score_table_html(hits, threshold):
+    t = 0.30 if threshold is None else float(threshold)
+    tick = f"{max(0.0, min(1.0, t)) * 100:.1f}%"
+    rows = []
+    for hit in hits:
+        dense = _opt_float(hit.get("dense"))
+        width = 0.0 if dense is None else max(0.0, min(1.0, dense)) * 100
+        ok = dense is not None and dense >= t
+        rows.append(
+            f'<li class="{"ok" if ok else "low"}">'
+            f'<span class="rk">{int(hit.get("rank") or 0)}</span>'
+            f'<span class="ttl" title="{escape(str(hit.get("path") or ""))}">{escape(chip_name(hit))}</span>'
+            f'<span class="bar" aria-hidden="true"><span class="fill" style="width:{width:.1f}%"></span>'
+            f'<span class="tick" style="left:{tick}"></span></span>'
+            f'<span class="cos"><span class="sr">cosine </span>{_score(dense, 3)}</span>'
+            f'<span class="raw"><span class="sr">rrf </span>{_score(hit.get("rrf"), 4)}</span>'
+            f'<span class="raw"><span class="sr">bm25 </span>{_fmt_score(hit.get("bm25"), 2)}</span>'
+            "</li>"
+        )
     return (
-        '<div class="live done">'
-        + '<div class="live-chart">' + rate_svg(samples) + "</div>"
-        + '<p class="live-note">Stream: ' + ", ".join(bits) + ". Characters counted in the app, not tokens; tok/s above is Ollama's.</p>"
-        + "</div>"
+        '<p class="sc-cols" aria-hidden="true"><span>#</span><span>doc</span><span>cos</span><span>rrf</span>'
+        '<span>bm25</span></p><ol class="sc-rows">' + "".join(rows) + "</ol>"
     )
+
+
+def _scores_view(runs):
+    rag = [run for run in runs if uses_rag(run.get("mode") or "")]
+    plain = [run for run in runs if not uses_rag(run.get("mode") or "")]
+    if not runs:
+        body = '<div class="mon-chart empty"><span>No retrieval yet in this chat</span></div>'
+    elif not rag:
+        body = (
+            f'<div class="mon-chart empty"><span>No retrieval in {escape(mode_name(plain[0].get("mode") or ""))}, '
+            "so there are no scores</span></div>"
+        )
+    else:
+        run = next((r for r in reversed(rag) if r.get("hits") is not None), None)
+        if run is None:
+            body = '<div class="mon-chart empty"><span>Searching the lab docs</span></div>'
+        else:
+            hits = run.get("hits") or []
+            t = 0.30 if run.get("threshold") is None else float(run["threshold"])
+            best = max_dense(hits)
+            verdict = "clears" if best is not None and best >= t else "below"
+            side = run.get("side") or ""
+            who = f'<span class="side {side.lower()}">{escape(side)}</span>' if side else ""
+            shared = [r for r in rag if r is not run and [h.get("path") for h in (r.get("hits") or [])] == [h.get("path") for h in hits]]
+            note = []
+            if shared:
+                note.append("Both sides retrieved the same chunks.")
+            for p in plain:
+                if p.get("side"):
+                    note.append(f'{p["side"]} ({mode_name(p.get("mode") or "")}) retrieves nothing.')
+            body = (
+                f'<p class="mon-head mon-best"><span>{who}best cos <b>{_fmt_score(best, 3)}</b> {verdict} '
+                f"{format_threshold(t)}</span>"
+                + ("" if verdict == "clears" else '<span class="unit">model not called</span>')
+                + "</p>"
+                + (score_table_html(hits, t) if hits else '<p class="mon-cells pending">no hits</p>')
+                + (f'<p class="mon-note">{escape(" ".join(note))}</p>' if note else "")
+            )
+    return (
+        '<div class="mon-view mon-scores">'
+        + body
+        + f'<p class="mon-note">{escape(SCORES_NOTE)}</p>'
+        "</div>"
+    )
+
+
+def monitor_html(runs, streaming=False):
+    """The rail monitor: both views, one shown by the Rate/Scores switch, so flipping views never reruns the app."""
+    return '<div class="mon">' + _rate_view(runs, streaming) + _scores_view(runs) + "</div>"
+
+
+# No `checked` attribute: Streamlit renders this HTML through React, which would turn a checked radio into a
+# controlled input and undo every click. Rate is the view whenever Scores isn't picked.
+MONITOR_SWITCH = (
+    '<div class="mon-switch" role="radiogroup" aria-label="Monitor view">'
+    '<input type="radio" name="mon-view" id="mon-v-rate"><label for="mon-v-rate">Rate</label>'
+    '<input type="radio" name="mon-view" id="mon-v-scores"><label for="mon-v-scores">Scores</label>'
+    "</div>"
+)
+
+
+def finished_runs(message, index, traces):
+    """The monitor's runs for the finished assistant message at `index`, with any stream trace this session kept."""
+
+    def run(rec, side, key, missing=None):
+        trace = (traces or {}).get(key) or {}
+        if rec is None:
+            return {
+                "side": side,
+                "model": (missing or {}).get("model") or "",
+                "mode": (missing or {}).get("mode") or "",
+                "state": "stopped" if (missing or {}).get("state") == "cancelled" else "error",
+            }
+        return {
+            "side": side,
+            "model": rec.get("model") or "",
+            "mode": rec.get("mode") or "",
+            "state": "done",
+            "record": rec,
+            "samples": tuple(trace.get("samples") or ()),
+            "first_s": trace.get("first_s"),
+            "hits": list(rec.get("hits") or []),
+            "threshold": rec.get("threshold"),
+        }
+
+    if message.get("compare"):
+        left, right = message["compare"]
+        miss_l, miss_r = message.get("compare_unanswered") or (None, None)
+        return [
+            run(left, "L", f"answer-h{index}-l", miss_l),
+            run(right, "R", f"answer-h{index}-r", miss_r),
+        ]
+    if message.get("record"):
+        return [run(message["record"], "", f"answer-{index}")]
+    return []
+
+
+def last_runs(messages, traces):
+    for i in range(len(messages) - 1, -1, -1):
+        msg = messages[i]
+        if msg.get("role") == "assistant" and (msg.get("record") or msg.get("compare")):
+            return finished_runs(msg, i, traces)
+    return []
 
 
 def live_phase_label(mode, retrieved=False, weak=False):
@@ -985,9 +1072,26 @@ def answer_stats_html(record):
     return '<span class="stats">' + "".join(chips) + "</span>"
 
 
+RAM_TITLE = "Peak resident memory (RSS) of this app plus Ollama's processes, sampled every 0.25 s while answering"
+
+
+def ram_html(record):
+    """Peak RSS while the answer ran. Ollama's share is only counted when its processes are visible to this app."""
+    total = _opt_float(record.get("total_mb")) or 0.0
+    if total <= 0:
+        return '<span class="na" title="No memory sample was recorded for this answer.">RAM not measured</span>'
+    app_mb = _opt_float(record.get("app_rss_mb")) or 0.0
+    ollama_mb = _opt_float(record.get("ollama_rss_mb")) or 0.0
+    if ollama_mb <= 0:
+        title = f"{RAM_TITLE}. No Ollama process was visible, so this is the app alone."
+        return f'<span title="{escape(title)}"><b>{format_total_ram(total)}</b> peak RSS, app only</span>'
+    title = f"{RAM_TITLE}: app {app_mb:.0f} MB, Ollama {ollama_mb:.0f} MB."
+    return f'<span title="{escape(title)}"><b>{format_total_ram(total)}</b> peak RSS app+Ollama</span>'
+
+
 def metrics_html(record):
     n = source_count(record)
-    bits = [f'<b>{format_total_ram(record.get("total_mb"))}</b> RAM total']
+    bits = []
     if record.get("abstained"):
         unit = "candidate checked" if n == 1 else "candidates checked"
         bits.append(f"<b>{n}</b> {unit}")
@@ -998,6 +1102,7 @@ def metrics_html(record):
     return (
         '<div class="metrics">'
         + answer_stats_html(record)
+        + ram_html(record)
         + "".join(f"<span>{b}</span>" for b in bits)
         + "</div>"
     )
@@ -1162,14 +1267,6 @@ def card_html(record, align_slots=False):
         parts.append(evidence_block_html(record, collapsed=True))
     elif align_slots:
         parts.append(empty_slot_html("ev", f"No sources in {mode_name(mode)}"))
-    parts.append(
-        retrieval_bar_html(
-            record.get("retrieval_max_dense"),
-            record.get("threshold"),
-            retrieval_off=not rag,
-            mode=mode,
-        )
-    )
     if abstained:
         parts.append(best_match_html(record))
     elif align_slots:
@@ -1212,29 +1309,12 @@ def composer_note_html(conn):
     return f'<div class="composer-conn">{conn}<span class="composer-note">{escape(ENGLISH_NOTE)}</span></div>'
 
 
-def _css_string(text):
-    return '"' + str(text).replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ") + '"'
-
-
-def mode_menu_css(model, modes):
-    """Per-run CSS: the model name on the mode dropdown, and each mode's hint inside its open menu."""
-    open_menu = ':root:has([class*="st-key-mode-"] [aria-expanded="true"]) [data-baseweb="popover"] li[role="option"]'
-    rules = [f":root{{--polaris-model:{_css_string(model)}}}"]
-    for i, mode in enumerate(modes, 1):
-        rules.append(f"{open_menu}:nth-child({i})::after{{content:{_css_string(mode_hint(mode))}}}")
-    return "<style>" + "".join(rules) + "</style>"
-
-
 def stopped_html():
     return '<p class="stopped">Stopped. The partial answer was not kept.</p>'
 
 
 def cancelled_side_html():
     return '<p class="stopped">Cancelled</p>'
-
-
-def running_card_html(mode, label, model=""):
-    return '<div class="card running-card">' + card_head_html(mode, model) + thinking_html(label) + "</div>"
 
 
 def thinking_label(mode, loading_index=False):
@@ -1313,6 +1393,45 @@ def compare_summary_html(left_model, left_mode, right_model, right_mode):
             f'<span class="m">{escape(right_model)}</span> {right}'
         )
     return f'<p class="composer-cmp">{body}</p>'
+
+
+def config_summary_html(model, mode):
+    """The composer's line outside compare: the model and config the next question goes to."""
+    return f'<p class="composer-cmp"><span class="m">{escape(model)}</span> <b>{escape(mode_name(mode))}</b></p>'
+
+
+def model_choice_label(option, names):
+    return option.name + (" · not installed" if is_installed(option.name, names) is False else "")
+
+
+def model_status_html(option, names, ollama_up):
+    """One line under the model picker: what this model is, and whether Ollama has it."""
+    only = " · runs +RAG+CoT only" if option.key == "distilled" else ""
+    if not ollama_up or names is None:
+        return f'<p class="side-note model-st">{escape(option.role)}{only} · can\'t check, Ollama is not running</p>'
+    if is_installed(option.name, names):
+        return f'<p class="side-note model-st"><span class="ok">installed</span> · {escape(option.role)}{only}</p>'
+    return (
+        '<p class="side-note model-st err">not installed · '
+        f"<code>{escape(option.create)}</code></p>"
+    )
+
+
+def models_table_html(options, names, ollama_up):
+    rows = []
+    for option in options:
+        state = is_installed(option.name, names) if ollama_up else None
+        label = {True: "installed", False: "not installed", None: "unknown"}[state]
+        fix = "" if state else f"<code>{escape(option.create)}</code>"
+        rows.append(
+            f'<li class="{label.replace(" ", "-")}"><span class="n">{escape(option.name)}</span>'
+            f'<span class="r">{escape(option.role)}</span><span class="s">{label}</span>{fix}</li>'
+        )
+    return (
+        '<ul class="models">' + "".join(rows) + "</ul>"
+        '<p class="dlg-note">OLLAMA_MODEL sets the default base and OLLAMA_DISTILLED_MODEL names the student. '
+        "A missing model is never swapped for another one.</p>"
+    )
 
 
 def records_in(messages):

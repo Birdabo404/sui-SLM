@@ -198,6 +198,7 @@ class PolarisRunLoopTests(unittest.TestCase):
             patch("app.engine.ollama_reachable", return_value=True),
             patch("app.engine.ollama_info", return_value=OllamaInfo(version="0.12.0", model_digest="sha256:abc")),
             patch("app.engine.warm_model", return_value=True),
+            patch("app.models.installed_names", return_value=frozenset({"qwen3.5:2b"})),
             patch("app.polaris.flags_html", self.flags),
             patch.object(self.streamlit, "rerun", side_effect=AssertionError("st.rerun() called")),
             # AppTest 1.45 reads a single-select st.pills with nothing picked as a multiselect and fails.
@@ -207,11 +208,19 @@ class PolarisRunLoopTests(unittest.TestCase):
             p.start()
             self.addCleanup(p.stop)
         self.rerun = self.streamlit.rerun
+        # AppTest runs every test in one process, so a cached /api/tags answer would leak from one test to the next.
+        self.streamlit.cache_data.clear()
         self.at = self.AppTest.from_file(APP, default_timeout=20)
         self.at.session_state["mode"] = "base"
 
     def _html(self):
         return "\n".join(m.value for m in self.at.markdown if not m.value.startswith("<style>"))
+
+    def _settings_html(self):
+        """Open the Settings dialog and return what it shows."""
+        self.at.button(key="settings").click().run()
+        self.assertFalse(self.at.exception)
+        return self._html()
 
     def _flags(self):
         (flags,) = [m.value for m in self.at.markdown if m.value.startswith('<div class="polaris-flags')]
@@ -242,9 +251,11 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertEqual(self._generating_args(), [True, False])
         self.assertEqual(self._flags(), '<div class="polaris-flags polaris-sky-1"></div>')
         self.assertIn('<span class="mode">BASE</span><span class="sub">Plain model, no documents</span>', html)
-        self.assertIn('<span class="k">Answers</span><span class="v">1</span>', html)
-        self.assertIn('<span class="k">Warm-up</span><span class="v">ready</span>', html)
         self.assertIn("English questions only", html)
+        self.assertNotIn('<span class="k">Answers</span>', html)
+        settings = self._settings_html()
+        self.assertIn('<span class="k">Answers</span><span class="v">1</span>', settings)
+        self.assertIn('<span class="k">Warm-up</span><span class="v">ready</span>', settings)
 
     def test_second_question_refreshes_the_sidebar_without_duplicate_keys(self):
         self.at.run()
@@ -254,9 +265,9 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.rerun.assert_not_called()
         self.assertEqual(len(self.calls), 2)
         html = self._html()
-        self.assertIn('<span class="k">Answers</span><span class="v">2</span>', html)
         self.assertEqual(html.count('class="q"'), 2)
         self.assertEqual(self._flags(), '<div class="polaris-flags polaris-sky-2"></div>')
+        self.assertIn('<span class="k">Answers</span><span class="v">2</span>', self._settings_html())
 
         self.at.run()
         self.assertFalse(self.at.exception)
@@ -269,10 +280,9 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.at.button(key="new-chat").click().run()
         self.assertFalse(self.at.exception)
         self.rerun.assert_not_called()
-        html = self._html()
-        self.assertIn('class="hero"', html)
-        self.assertIn('<span class="k">Answers</span><span class="v">0</span>', html)
+        self.assertIn('class="hero"', self._html())
         self.assertEqual(self.at.session_state["messages"], [])
+        self.assertIn('<span class="k">Answers</span><span class="v">0</span>', self._settings_html())
 
     def test_a_turn_that_raises_still_clears_stop_and_releases_the_sky(self):
         self.at.run()
@@ -307,11 +317,13 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertEqual(stream.pieces, ["Use `tar ", "-xzf file", ".tar.gz`."])
         self.assertTrue(stream.closed)
         html = self._html()
-        # The live meter is gone and the finished card carries Ollama's numbers, not the live character rate.
-        self.assertNotIn("tok/s arrives when the answer ends", html)
-        self.assertNotIn("live-tag", html)
+        # The rail's monitor now shows the finished answer: Ollama's numbers, and the trace this session recorded.
+        self.assertNotIn("tok/s comes from Ollama when the answer ends", html)
+        self.assertNotIn("mon-tag live", html)
+        self.assertIn('<span class="mon-tag">last answer</span>', html)
         self._speed_shown(html, "18.3", 22, "1.20")
-        self.assertIn("first text after <b>0.5</b> s", html)
+        self.assertIn("first text <b>0.5</b> s", html)
+        self.assertNotIn('class="spark"', html.split('<div class="mon">', 1)[0])
         self.assertIn("Use `tar -xzf file.tar.gz`.", [m.value for m in self.at.markdown])
 
         self.at.run()
@@ -325,7 +337,8 @@ class PolarisRunLoopTests(unittest.TestCase):
         html = self._html()
         self._speed_shown(html, "18.3", 22, "1.20")
         # The stream trace was this session's measurement, so a restored chat doesn't pretend to have one.
-        self.assertNotIn("first text after", html)
+        self.assertNotIn("first text", html)
+        self.assertIn("only recorded while an answer streams in this session", html)
 
     def test_both_compare_sides_keep_their_own_tok_s(self):
         answer = _fake_answer(self.calls)
@@ -381,8 +394,8 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertIn('<span class="sr">Response time </span><b>0.4</b> s', html)
         self.assertIn("tok/s not generated", html)
         self.assertNotRegex(html, r"<b>[\d.]+</b> tok/s")
-        self.assertIn("best cosine <b class=\"v\">0.120</b> below the 0.30 threshold", html)
-        self.assertIn("rrf 0.0300", html)
+        self.assertIn("best cos <b>0.120</b> below 0.30</span><span class=\"unit\">model not called</span>", html)
+        self.assertIn('<span class="sr">rrf </span>.0300', html)
 
     def test_base_shows_no_retrieval_scores(self):
         self.at.run()
@@ -481,9 +494,9 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertEqual(self._html().count('class="q"'), 1)
         self.assertIn(">extract a .tar.gz file<", self._html())
         self.assertEqual(len(self.at.session_state["run_records"]), 1)
-        self.assertIn('<span class="k">Answers</span><span class="v">1</span>', self._html())
         self.assertTrue(self.at.button(key=f"hist-open-{first}").disabled)
         self.assertFalse(self.at.button(key=f"hist-open-{second}").disabled)
+        self.assertIn('<span class="k">Answers</span><span class="v">1</span>', self._settings_html())
 
         # The restored chat carries on: the next turn sees the earlier one and is saved back to the same chat.
         self._ask("what about .zip?")
@@ -641,29 +654,37 @@ class PolarisRunLoopTests(unittest.TestCase):
 
         self.at.toggle(key="compare").set_value(True).run()
         left, right = self.at.selectbox(key="cmp-left-config"), self.at.selectbox(key="cmp-right-config")
-        self.assertEqual(left.options, ["BASE", "+CoT", "+RAG", "+RAG+CoT"])
-        self.assertEqual((left.value, right.value), ("base", "base+RAG+CoT"))
-        self.assertNotIn("BASE", right.options)
+        self.assertEqual(
+            left.options[:4],
+            ["qwen3.5:2b · BASE", "qwen3.5:2b · +CoT", "qwen3.5:2b · +RAG", "qwen3.5:2b · +RAG+CoT"],
+        )
+        # The other models are offered as they are on this machine: listed, and marked when Ollama lacks them.
+        self.assertIn("thesis-base-q4km · +RAG · not installed", left.options)
+        self.assertEqual(left.options[-1], "thesis-student · +RAG+CoT · not installed")
+        self.assertNotIn("thesis-student · BASE · not installed", left.options)
+        self.assertEqual((left.value, right.value), ("qwen3.5:2b|base", "qwen3.5:2b|full"))
+        self.assertNotIn("qwen3.5:2b · BASE", right.options)
         self.assertIn('<span class="m">qwen3.5:2b</span> <b>BASE</b><span class="vs">vs</span><b>+RAG+CoT</b>', self._html())
 
-        right.set_value("base+CoT").run()
-        self.assertEqual(self.at.session_state["cmp_right"], "cot")
+        right.set_value("qwen3.5:2b|cot").run()
+        self.assertEqual(self.at.session_state["cmp_right_pick"], "qwen3.5:2b|cot")
         self._ask("extract a .tar.gz file", "landing")
         self.assertEqual([c["mode"] for c in self.calls], ["base", "cot"])
         self.assertNotIn('class="model"', self._html())
         # Still the same picks on the next run, so the browser never falls back to a default.
         self.at.run()
-        self.assertEqual(self.at.selectbox(key="cmp-right-config").value, "base+CoT")
+        self.assertEqual(self.at.selectbox(key="cmp-right-config").value, "qwen3.5:2b|cot")
 
     def test_compare_across_models_names_each_side(self):
         rag = MagicMock(HybridRetriever=_Retriever)
         with patch("app.engine.DISTILLED_MODEL", "student:latest"), patch("app.engine.index_ok", return_value=True), \
-                patch.dict(sys.modules, {"rag.query_hybrid": rag}):
+                patch.dict(sys.modules, {"rag.query_hybrid": rag}), \
+                patch("app.models.installed_names", return_value=frozenset({"qwen3.5:2b", "student:latest"})):
             self.at.run()
             self.at.toggle(key="compare").set_value(True).run()
             left, right = self.at.selectbox(key="cmp-left-config"), self.at.selectbox(key="cmp-right-config")
-            self.assertEqual(left.options[-1], "distilled+RAG+CoT")
-            self.assertEqual((left.value, right.value), ("base+RAG+CoT", "distilled+RAG+CoT"))
+            self.assertEqual(left.options[-1], "student:latest · +RAG+CoT")
+            self.assertEqual((left.value, right.value), ("qwen3.5:2b|full", "student:latest|full"))
             self._ask("extract a .tar.gz file", "landing")
         self.assertFalse(self.at.exception)
         self.assertEqual(
@@ -692,7 +713,7 @@ class PolarisRunLoopTests(unittest.TestCase):
 
         self.at.run()
         self.at.toggle(key="compare").set_value(True).run()
-        self.at.selectbox(key="cmp-right-config").set_value("base+CoT").run()
+        self.at.selectbox(key="cmp-right-config").set_value("qwen3.5:2b|cot").run()
         with patch("app.engine.answer_question", side_effect=left_fails):
             self._ask("extract a .tar.gz file", "landing")
         self.assertEqual([c["mode"] for c in self.calls], ["cot"])
@@ -728,7 +749,7 @@ class PolarisRunLoopTests(unittest.TestCase):
     def _compare_base_vs_cot(self):
         self.at.run()
         self.at.toggle(key="compare").set_value(True).run()
-        self.at.selectbox(key="cmp-right-config").set_value("base+CoT").run()
+        self.at.selectbox(key="cmp-right-config").set_value("qwen3.5:2b|cot").run()
 
     def _answers_left_then_raises(self, error):
         answer = _fake_answer(self.calls)
@@ -816,6 +837,242 @@ class PolarisRunLoopTests(unittest.TestCase):
         )
         self.at.run()
         self.assertIn("Stopped. The partial answer was not kept.", self._html())
+
+
+    # ---------- model picker ----------
+
+    def test_the_picker_lists_each_model_and_keeps_the_default(self):
+        self.at.run()
+        picker = self.at.selectbox(key="model-select")
+        self.assertEqual(picker.value, "qwen3.5:2b")
+        self.assertEqual(
+            picker.options,
+            ["qwen3.5:2b", "thesis-base-q4km · not installed", "thesis-student · not installed"],
+        )
+        self.assertEqual(self.at.radio(key="mode-pick").options, ["BASE", "+CoT", "+RAG", "+RAG+CoT"])
+        self.assertIn('<span class="ok">installed</span> · default base', self._html())
+
+    def test_a_missing_model_says_how_to_create_it_and_nothing_is_called(self):
+        warm = self.enterContext(patch("app.engine.warm_model", return_value=True))
+        self.at.run()
+        self.at.selectbox(key="model-select").set_value("thesis-base-q4km").run()
+        self.assertEqual(self.at.session_state["model_pick"], "thesis-base-q4km")
+        html = self._html()
+        self.assertIn("not installed", html)
+        self.assertIn("ollama create thesis-base-q4km -f Modelfile-base", html)
+        self._ask("extract a .tar.gz file", "landing")
+        (error,) = self.at.error
+        self.assertIn("thesis-base-q4km isn't installed in Ollama on this machine", error.value)
+        self.assertIn("`ollama create thesis-base-q4km -f Modelfile-base`", error.value)
+        # Never answered by another model in its place, never warmed, never pulled.
+        self.assertEqual((self.calls, _FakeStream.made), ([], []))
+        self.assertNotIn("thesis-base-q4km", [c.args[0] for c in warm.call_args_list])
+        (_, reply) = self.store.load_chat(self._chat_id()).messages
+        self.assertIn("isn't installed", reply["error"])
+
+    def test_a_model_created_after_the_page_loaded_is_found_on_ask(self):
+        self.at.run()
+        self.at.selectbox(key="model-select").set_value("thesis-base-q4km").run()
+        with patch("app.models.installed_names", return_value=frozenset({"qwen3.5:2b", "thesis-base-q4km:latest"})):
+            self._ask("extract a .tar.gz file", "landing")
+        self.assertEqual(self.at.error, [])
+        self.assertEqual([(s["model"], s["model_key"]) for s in self.seen], [("thesis-base-q4km", "base")])
+
+    def test_the_student_runs_full_only_under_its_real_name(self):
+        rag = MagicMock(HybridRetriever=_Retriever)
+        with patch("app.models.installed_names", return_value=frozenset({"qwen3.5:2b", "thesis-student:latest"})), \
+                patch("app.engine.index_ok", return_value=True), patch.dict(sys.modules, {"rag.query_hybrid": rag}):
+            self.at.run()
+            self.at.selectbox(key="model-select").set_value("thesis-student").run()
+            self.assertEqual(self.at.radio(key="mode-pick").options, ["+RAG+CoT"])
+            self.assertIn("runs +RAG+CoT only", self._html())
+            self._ask("extract a .tar.gz file", "landing")
+        self.assertFalse(self.at.exception)
+        self.assertEqual([c["mode"] for c in self.calls], ["full"])
+        self.assertEqual([(s["model"], s["model_key"]) for s in self.seen], [("thesis-student", "distilled")])
+        # The base model is still what a new session starts on.
+        self.assertEqual(engine.BASE_MODEL, "qwen3.5:2b")
+
+    def test_the_env_override_names_the_student(self):
+        with patch("app.engine.DISTILLED_MODEL", "my-student:q4"):
+            self.at.run()
+        self.assertEqual(
+            self.at.selectbox(key="model-select").options,
+            ["qwen3.5:2b", "thesis-base-q4km · not installed", "my-student:q4 · not installed"],
+        )
+
+    def test_without_ollama_the_picker_says_it_cannot_check(self):
+        with patch("app.engine.ollama_reachable", return_value=False):
+            self.at.run()
+        self.assertIn("can't check, Ollama is not running", self._html())
+        self.assertEqual(self.at.selectbox(key="model-select").options[1], "thesis-base-q4km")
+
+    # ---------- tabs ----------
+
+    def _tab_keys(self):
+        return [b.key for b in self.at.button if b.key and b.key.startswith("tab-open-")]
+
+    def test_each_chat_gets_a_tab_and_switching_restores_it(self):
+        self.at.run()
+        self.assertEqual(self._tab_keys(), ["tab-open-draft"])
+        self.assertNotIn("tab-close-draft", [b.key for b in self.at.button])
+        self._ask("extract a .tar.gz file", "landing")
+        first = self._chat_id()
+        self.assertEqual(self._tab_keys(), [f"tab-open-{first}"])
+        self.assertTrue(self.at.button(key=f"tab-open-{first}").disabled)
+
+        self.at.button(key="new-chat").click().run()
+        self.assertEqual(self._tab_keys(), [f"tab-open-{first}", "tab-open-draft"])
+        self.assertIn('class="hero"', self._html())
+        self._ask("make a file readable only by me", "landing")
+        second = self._chat_id()
+        self.assertEqual(self._tab_keys(), [f"tab-open-{first}", f"tab-open-{second}"])
+
+        self.at.button(key=f"tab-open-{first}").click().run()
+        self.assertFalse(self.at.exception)
+        self.assertEqual(self._chat_id(), first)
+        self.assertIn(">extract a .tar.gz file<", self._html())
+        self.assertNotIn(">make a file readable only by me<", self._html())
+        self.assertEqual(len(self.calls), 2)
+
+    def test_closing_the_open_tab_moves_to_its_neighbour_and_keeps_the_chat(self):
+        self.at.run()
+        self._ask("extract a .tar.gz file", "landing")
+        first = self._chat_id()
+        self.at.button(key="new-chat").click().run()
+        self._ask("make a file readable only by me", "landing")
+        second = self._chat_id()
+
+        self.at.button(key=f"tab-close-{second}").click().run()
+        self.assertFalse(self.at.exception)
+        self.assertEqual(self._chat_id(), first)
+        self.assertEqual(self._tab_keys(), [f"tab-open-{first}"])
+        self.assertEqual(len(self.store.list_chats()), 2)
+        # Still in History, and opening it from there brings its tab back.
+        self.at.button(key=f"hist-open-{second}").click().run()
+        self.assertEqual(self._tab_keys(), [f"tab-open-{first}", f"tab-open-{second}"])
+
+        self.at.button(key=f"tab-close-{first}").click().run()
+        self.at.button(key=f"tab-close-{second}").click().run()
+        self.assertIsNone(self._chat_id())
+        self.assertIn('class="hero"', self._html())
+        self.assertEqual(self._tab_keys(), ["tab-open-draft"])
+        self.assertEqual(len(self.store.list_chats()), 2)
+
+    def test_closing_a_background_tab_leaves_the_open_chat_alone(self):
+        self.at.run()
+        self._ask("extract a .tar.gz file", "landing")
+        first = self._chat_id()
+        self.at.button(key="new-chat").click().run()
+        self._ask("make a file readable only by me", "landing")
+        second = self._chat_id()
+        self.at.button(key=f"tab-close-{first}").click().run()
+        self.assertEqual(self._chat_id(), second)
+        self.assertIn(">make a file readable only by me<", self._html())
+        self.assertEqual(self._tab_keys(), [f"tab-open-{second}"])
+
+    def _seed(self, n):
+        ids = []
+        for i in range(n):
+            cid = self.store.new_chat().chat_id
+            self.store.save_chat(cid, [{"role": "user", "content": f"question {i}"}])
+            ids.append(cid)
+        return ids
+
+    def test_a_new_session_opens_recent_chats_and_tabs_stay_capped(self):
+        ids = self._seed(9)
+        self.at.run()
+        # The five most recent, oldest first, plus the new-chat tab.
+        self.assertEqual(self._tab_keys(), [f"tab-open-{cid}" for cid in ids[4:]] + ["tab-open-draft"])
+        self.assertEqual(len(self._rows()), 9)
+        self.at.button(key=f"hist-open-{ids[0]}").click().run()
+        self.assertFalse(self.at.exception)
+        keys = self._tab_keys()
+        self.assertEqual(len(keys), 6)
+        self.assertEqual(keys[-1], f"tab-open-{ids[0]}")
+        self.assertTrue(self.at.button(key=f"tab-open-{ids[0]}").disabled)
+        self.assertNotIn("tab-open-draft", keys)
+
+        for cid in ids[1:4]:
+            self.at.button(key=f"hist-open-{cid}").click().run()
+        self.assertEqual(len(self._tab_keys()), 6)
+        self.assertEqual(self._chat_id(), ids[3])
+
+    def test_deleting_the_open_chat_closes_its_tab(self):
+        self.at.run()
+        self._ask("extract a .tar.gz file", "landing")
+        cid = self._chat_id()
+        self.at.button(key=f"hist-del-{cid}").click().run()
+        self.at.button(key=f"hist-yes-{cid}").click().run()
+        self.assertFalse(self.at.exception)
+        self.assertIsNone(self._chat_id())
+        self.assertEqual(self._tab_keys(), ["tab-open-draft"])
+        self.assertEqual(self.store.list_chats(), [])
+        self.assertIn('class="hero"', self._html())
+
+    def test_a_tab_for_a_chat_deleted_elsewhere_disappears(self):
+        ids = self._seed(2)
+        self.at.run()
+        self.store.delete_chat(ids[0])
+        self.at.run()
+        self.assertEqual(self._tab_keys(), [f"tab-open-{ids[1]}", "tab-open-draft"])
+
+    # ---------- settings ----------
+
+    def test_settings_shows_the_run_settings_and_every_model(self):
+        self.at.run()
+        self.assertNotIn('class="dlg-h"', self._html())
+        html = self._settings_html()
+        for k, v in (
+            ("Model", "qwen3.5:2b"),
+            ("Ollama", "running 0.12.0"),
+            ("Keep alive", "30m"),
+            ("Context", "4,096 tokens"),
+            ("IDK threshold", "cos 0.30"),
+            ("Top-k", "5"),
+            ("Answers", "0"),
+        ):
+            self.assertIn(f'<span class="k">{k}</span><span class="v">{v}</span>', html)
+        self.assertIn("ollama create thesis-student -f Modelfile", html)
+        self.assertIn("ollama create thesis-base-q4km -f Modelfile-base", html)
+        self.assertIn(polaris.RATE_NOTE.split(".")[0], html)
+        # A run without the click closes it again.
+        self.at.run()
+        self.assertNotIn('class="dlg-h"', self._html())
+
+    # ---------- monitor ----------
+
+    def _monitor(self):
+        (mon,) = [m.value for m in self.at.markdown if m.value.startswith('<div class="mon">')]
+        return mon
+
+    def test_the_monitor_waits_then_shows_the_last_answer(self):
+        self.at.run()
+        mon = self._monitor()
+        self.assertIn("No answer in this chat yet", mon)
+        self.assertNotRegex(mon, r"<b>[\d.]+</b>")
+        self._ask("extract a .tar.gz file", "landing")
+        mon = self._monitor()
+        self.assertIn("18.3", mon)
+        self.assertIn('class="spark"', mon)
+        self.assertIn("No retrieval in BASE", mon)
+
+    def test_the_monitor_keeps_each_compare_side(self):
+        answer = _fake_answer(self.calls)
+
+        def per_side(question, mode, model, **kw):
+            result = answer(question, mode, model, **kw)
+            if mode == "cot":
+                result.update(tok_s=9.75, eval_count=39, eval_duration=4_000_000_000, gen_s=4.0, latency_s=4.6)
+            return result
+
+        self._compare_base_vs_cot()
+        with patch("app.engine.answer_question", side_effect=per_side):
+            self._ask("extract a .tar.gz file", "landing")
+        mon = self._monitor()
+        self.assertIn("18.3", mon)
+        self.assertIn("9.8", mon)
+        self.assertIn('class="line r"', mon)
 
 
 if __name__ == "__main__":
