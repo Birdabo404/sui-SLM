@@ -519,19 +519,20 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(-
  * first, invisible frame. */
 :root:has(.polaris-generating) :is(.band *,.sky){animation-play-state:paused!important}
 
-/* ---------- rail: the sidebar is one viewport tall and never scrolls ----------
+/* ---------- rail: one viewport tall when it fits, scrolling when it doesn't ----------
  * Top to bottom: wordmark + dither art, run controls, the monitor (takes what height is left), settings.
- * The monitor is the only flexible part, and its notes are the first thing to go on a short screen. */
+ * The monitor is the only part that grows; nothing shrinks below its content, so on a short laptop screen the
+ * rail scrolls instead of clipping the monitor or the footer. Its notes are the first thing to go. */
 [data-testid="stSidebar"]{--rail-w:264px;background:var(--c-surface);border-right:1px solid var(--c-line)}
 [data-testid="stSidebar"][aria-expanded="true"]{width:var(--rail-w)!important;min-width:var(--rail-w)!important;max-width:var(--rail-w)!important}
-[data-testid="stSidebarContent"]{display:flex;flex-direction:column;overflow:hidden auto;scrollbar-gutter:auto}
-[data-testid="stSidebar"] [data-testid="stSidebarUserContent"]{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;padding:0 14px var(--s-3)}
+[data-testid="stSidebarContent"]{display:flex;flex-direction:column;overflow:hidden auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-gutter:auto}
+[data-testid="stSidebar"] [data-testid="stSidebarUserContent"]{flex:1 0 auto;display:flex;flex-direction:column;padding:0 14px var(--s-3)}
 [data-testid="stSidebarUserContent"] > div,
 [data-testid="stSidebarUserContent"] > div > [data-testid="stVerticalBlockBorderWrapper"],
-[data-testid="stSidebarUserContent"] > div > [data-testid="stVerticalBlockBorderWrapper"] > [data-testid="stVerticalBlock"]{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+[data-testid="stSidebarUserContent"] > div > [data-testid="stVerticalBlockBorderWrapper"] > [data-testid="stVerticalBlock"]{flex:1 0 auto;display:flex;flex-direction:column}
 [data-testid="stSidebarUserContent"] > div > [data-testid="stVerticalBlockBorderWrapper"] > [data-testid="stVerticalBlock"]{gap:var(--s-4)}
-[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(> .st-key-rail-mon){flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
-.st-key-rail-mon{flex:1 1 auto;min-height:0;gap:var(--s-2);overflow:hidden}
+[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(> .st-key-rail-mon){flex:1 0 auto;display:flex;flex-direction:column}
+.st-key-rail-mon{flex:1 0 auto;gap:var(--s-2)}
 [data-testid="stSidebar"] .side-h{margin:0;font:600 var(--fs-cap)/22px var(--f-ui);color:var(--c-text-3);letter-spacing:.02em}
 [data-testid="stSidebar"] .side-note{margin:0;font:400 var(--fs-cap)/var(--lh-ui) var(--f-ui);color:var(--c-text-3);text-wrap:pretty}
 [data-testid="stSidebar"] .side-note.err{color:var(--c-danger)}
