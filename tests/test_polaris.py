@@ -1627,7 +1627,7 @@ class HelperTests(unittest.TestCase):
         self.assertNotIn("Inter", css)
         self.assertNotIn("fonts.googleapis.com", css)
         self.assertNotIn("cdn", css.lower())
-        self.assertIn("--fs-body:16px", css)
+        self.assertIn("--fs-body:14.5px", css)
         self.assertIn("1px dashed var(--c-idk)", css)
         self.assertNotIn('content:"▸', css)
         self.assertNotIn("transition:all", css.replace(" ", ""))
