@@ -63,7 +63,7 @@ _ANSWER_MARK = re.compile(r"^[ \t]*(?:\*\*|__)?(?:final[ \t]+)?answer(?:\*\*|__)
 _REASON_LABEL = re.compile(r"^\s*(?:\*\*|__)?(?:reasoning|steps|thinking)(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*",
                            re.IGNORECASE)
 _FENCE_OPEN = re.compile(r"^([ \t]*)(`{3,}|~{3,})[ \t]*([\w+.-]*)[^`]*$")
-_ITEM = re.compile(r"^ ?(\*\*|__)?(\d{1,2})[.)](\*\*|__)?[ \t]+(.*)$")
+_ITEM = re.compile(r"^ ?(?:[-*+][ \t]+)?(\*\*|__)?(\d{1,2})[.)](\*\*|__)?[ \t]+(.*)$")
 _STEP_HEAD = re.compile(r"^[ \t]*(?:#{1,4}[ \t]*)?(\*\*|__)?step[ \t]+(\d{1,2})[ \t]*[:.)\u2013-](\*\*|__)?[ \t]*(.*)$",
                         re.IGNORECASE)
 _SOURCE = re.compile(r"^[ \t]*(?:\*\*|__)?sources?(?:\*\*|__)?[ \t]*:(?:\*\*|__)?[ \t]*(.*)$", re.IGNORECASE)
@@ -100,13 +100,20 @@ class Answer:
 
 
 def split_reasoning(text, streaming=False):
-    """(reasoning, answer). Only an explicit `Answer:` line splits them. Without one, nothing is hidden, so a
-    procedure is never mistaken for reasoning; the same holds when the commands sit above `Answer:` and none
-    below it. While streaming, text that opens with a `Reasoning:` label is reasoning until `Answer:` arrives."""
+    """(reasoning, answer). An explicit `Answer:` line splits them. Without one, only text that opens with a
+    `Reasoning:` label is reasoning, and only up to the first numbered step or command; with neither, nothing
+    is hidden, so a procedure is never mistaken for reasoning. The same holds when the commands sit above
+    `Answer:` and none below it. While streaming, a labelled lead is reasoning until a step or `Answer:` comes."""
     body = text or ""
     mark = _ANSWER_MARK.search(body)
     if mark is None:
-        if streaming and _REASON_LABEL.match(body):
+        if not _REASON_LABEL.match(body):
+            return "", body.strip()
+        lines = body.split("\n")
+        start = next((i for i, line in enumerate(lines) if i and (_item(line) or _FENCE_OPEN.match(line))), None)
+        if start is not None:
+            return _REASON_LABEL.sub("", "\n".join(lines[:start]), count=1).strip(), "\n".join(lines[start:]).strip()
+        if streaming:
             return _REASON_LABEL.sub("", body, count=1).strip(), ""
         return "", body.strip()
     head, tail = body[: mark.start()], body[mark.end():]
@@ -238,8 +245,8 @@ def parse_answer(text, mode="", n_hits=0, streaming=False):
         reasoning=reasoning,
         blocks=tuple(blocks),
         steps=_steps(blocks),
-        cited=tuple(dict.fromkeys(cited)),
-        dropped=tuple(dict.fromkeys(dropped)),
+        cited=tuple(sorted(set(cited))),
+        dropped=tuple(sorted(set(dropped))),
         source_line=source_line,
         reasoning_open=reasoning_open,
     )
@@ -314,7 +321,8 @@ def step_note(question, previous_raw, previous_mode=""):
     return (
         f"In this question, step {n} means step {n} of your previous answer, shown to the student as:\n"
         f"{step.shown}\n"
-        f"Answer about that step. It is not excerpt [{n}] and not a reasoning line."
+        f"Explain that step in two to four sentences without listing the other steps again. If you show its "
+        f"command, copy it exactly as shown. It is not excerpt [{n}] and not a reasoning line."
     )
 
 
