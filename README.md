@@ -32,6 +32,8 @@ sui-slm
 
 The default UI is Polaris (dark, compact). Modes are the thesis configs BASE / +CoT / +RAG / +RAG+CoT; BASE is the plain model with no documents, and +CoT is a step-by-step prompt (every request sends `think: false`). The sidebar is read-only (model, index, frozen threshold/k, git, Ollama, warm-up). Export CSV/JSON from the session records, not from `logs/answers.csv`. Compare runs the selected pair one after the other; when a distilled model is configured, it defaults to base+RAG+CoT versus distilled+RAG+CoT. `POLARIS_ENABLED=0` restores the old settings sidebar. Fonts are local OFL files under `app/static/` — no CDN.
 
+Answers stream into the page as Ollama sends them. Ollama's stream carries no per-chunk token counts, so the live meter under a streaming answer counts characters and chunks in the app and says so; it never shows tok/s. Every finished answer shows its response time and Ollama's own tok/s (`eval_count / eval_duration`) with the raw counts beside it, or says tok/s is unavailable or not generated (an abstention never calls the model). The character trace stays on the card for the current session only; history and exports keep the same fields as before. RAG answers chart each retrieved chunk's raw scores: dense cosine (the number the 0.30 threshold gates), the RRF rank score and the raw BM25 score. RRF and BM25 are not confidences. BASE retrieves nothing and shows no scores. Stop discards a partial answer. The eval scripts do not use streaming.
+
 The app and bundled lab corpus are English-only. Questions in other languages are outside this thesis build's scope.
 
 Pick the model and the mode separately in the sidebar when Polaris is off.
