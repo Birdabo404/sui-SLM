@@ -1226,7 +1226,7 @@ def mode_menu_css(model, modes):
 
 
 def stopped_html():
-    return '<p class="stopped">Stopped before an answer came back.</p>'
+    return '<p class="stopped">Stopped. The partial answer was not kept.</p>'
 
 
 def cancelled_side_html():

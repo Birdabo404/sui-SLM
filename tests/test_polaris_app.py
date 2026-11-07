@@ -617,7 +617,7 @@ class PolarisRunLoopTests(unittest.TestCase):
             [{"role": "user", "content": "extract a .tar.gz file"}],
         )
         self.at.run()
-        self.assertIn("Stopped before an answer came back.", self._html())
+        self.assertIn("Stopped. The partial answer was not kept.", self._html())
 
     def test_answers_still_work_when_history_cannot_be_written(self):
         with patch.object(ChatStore, "_connect", side_effect=sqlite3.OperationalError("disk I/O error")):
@@ -745,7 +745,7 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertIn("Use `tar -xzf file.tar.gz`.", [m.value for m in self.at.markdown])
         self.assertIn('<span class="mode">+CoT</span>', html)
         self.assertEqual(html.count(polaris.cancelled_side_html()), 1)
-        self.assertNotIn("Stopped before an answer came back.", html)
+        self.assertNotIn("Stopped. The partial answer was not kept.", html)
         self.assertEqual(self.at.error, [])
 
     def _left_answer_and_right_cancelled_stored(self):
@@ -815,7 +815,7 @@ class PolarisRunLoopTests(unittest.TestCase):
             [{"role": "user", "content": "extract a .tar.gz file"}],
         )
         self.at.run()
-        self.assertIn("Stopped before an answer came back.", self._html())
+        self.assertIn("Stopped. The partial answer was not kept.", self._html())
 
 
 if __name__ == "__main__":
