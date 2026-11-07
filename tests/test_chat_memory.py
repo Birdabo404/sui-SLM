@@ -86,6 +86,31 @@ class ChatContextTests(unittest.TestCase):
         )
         self.assertEqual(count, 1)
 
+    def test_memory_sends_back_the_answer_as_shown(self):
+        answer = ("Reasoning:\n- a private line\n\nAnswer:\n1. Create it:\n```bash\nsudo adduser {{username}}\n```\n"
+                  "1. Add sudo [2]:\n```bash\nsudo usermod -aG sudo {{username}}\n```\n\nSource: [1], [2]")
+        messages = [
+            {"role": "user", "content": "add a sudo user"},
+            {"role": "assistant", "record": {"answer": answer, "mode": "full"}},
+        ]
+        context = build_chat_context(messages, "explain step 2")
+        self.assertEqual(context.turns[0].answer, "1. Create it:\n```bash\nsudo adduser <username>\n```\n"
+                                                  "2. Add sudo:\n```bash\nsudo usermod -aG sudo <username>\n```")
+        self.assertIn("```bash\nsudo usermod -aG sudo <username>\n```", context.step_note)
+        self.assertNotIn("adduser", context.step_note)
+        self.assertEqual(context.retrieval_query, "add a sudo user Add sudo: sudo usermod -aG sudo username explain step 2")
+        self.assertEqual(build_chat_context(messages, "why sudo?").step_note, "")
+
+    def test_a_compare_turn_gives_no_step_note(self):
+        side = {"answer": "1. Create it:\n```bash\nsudo adduser x\n```", "mode": "base"}
+        messages = [
+            {"role": "user", "content": "add a user"},
+            {"role": "assistant", "compare": (side, dict(side, mode="cot"))},
+        ]
+        context = build_chat_context(messages, "explain step 1")
+        self.assertEqual(context.step_note, "")
+        self.assertEqual(context.retrieval_query, "add a user explain step 1")
+
     def test_weak_retrieval_uses_combined_query_and_frozen_policy(self):
         retriever = FakeRetriever([{
             "id": "weak",

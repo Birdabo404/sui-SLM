@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT))
 import app.engine as engine
 import app.polaris as polaris
 import app.streaming as streaming
+from app.answer_format import app_messages
 from app.chat_memory import ChatStore
 from app.engine import OllamaInfo
 from shared.prompt import ABSTAIN
@@ -1073,6 +1074,141 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertIn("18.3", mon)
         self.assertIn("9.8", mon)
         self.assertIn('class="line r"', mon)
+
+    # Mocked model below: these check the app's plumbing (parse, render, memory), not what a real model writes.
+
+    def _answers(self, texts, hits=None):
+        answer = _fake_answer(self.calls, self.seen)
+
+        def scripted(question, mode, model, **kw):
+            result = answer(question, mode, model, **kw)
+            result["text"] = texts(question, mode)
+            if kw.get("retriever") is not None and hits is not None:
+                result["hits"] = [dict(h) for h in hits]
+            return result
+
+        return patch("app.engine.answer_question", side_effect=scripted)
+
+    def _full_mode(self):
+        rag = MagicMock(HybridRetriever=_Retriever)
+        self.at.session_state["mode"] = "full"
+        return [patch("app.engine.index_ok", return_value=True), patch.dict(sys.modules, {"rag.query_hybrid": rag})]
+
+    def _how_to_shown(self):
+        self.assertEqual([c.value for c in self.at.code], list(SUDO_COMMANDS))
+        self.assertTrue(all(c.proto.language == "bash" for c in self.at.code))
+        shown = [m.value for m in self.at.markdown]
+        for line in ("1. Create the user and set a password:", "2. Add the user to the `sudo` group:",
+                     "3. Log in as the user and check:"):
+            self.assertIn(line, shown)
+        (reasoning,) = self.at.expander
+        self.assertEqual(reasoning.label, "Show reasoning")
+        self.assertFalse(reasoning.proto.expanded)
+        self.assertEqual([m.value for m in reasoning.markdown],
+                         ["- adduser creates the account.\n- usermod -aG appends the sudo group."])
+        html = self._html()
+        self.assertIn('<p class="src-line">Source <b>[1]</b> adduser · <b>[2]</b> usermod</p>', html)
+        self.assertNotIn("{{", html + "".join(c.value for c in self.at.code))
+        self.assertNotIn("Reasoning:", html)
+
+    def test_a_how_to_answer_shows_numbered_steps_and_one_code_box_per_command(self):
+        texts = lambda question, mode: SUDO_FULL  # noqa: E731
+        patches = self._full_mode()
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        with self._answers(texts, SUDO_HITS):
+            self.at.run()
+            self._ask(SUDO_QUESTION, "landing")
+        self._how_to_shown()
+
+        self.at.run()
+        self._how_to_shown()
+
+        cid = self._chat_id()
+        self.at.button(key="new-chat").click().run()
+        self.at.button(key=f"hist-open-{cid}").click().run()
+        self.assertFalse(self.at.exception)
+        self._how_to_shown()
+
+    def test_explain_step_2_asks_about_the_usermod_step(self):
+        texts = lambda question, mode: SUDO_FULL if question == SUDO_QUESTION else "It appends sudo [2]."  # noqa: E731
+        patches = self._full_mode()
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        with self._answers(texts, SUDO_HITS):
+            self.at.run()
+            self._ask(SUDO_QUESTION, "landing")
+            self._ask("explain step 2")
+        first, follow = _FakeStream.made
+        self.assertEqual(first.kw["messages_fn"](SUDO_QUESTION, SUDO_HITS, "full"),
+                         app_messages(SUDO_QUESTION, SUDO_HITS, "full"))
+
+        context = follow.kw["context"]
+        self.assertIn("step 2 means step 2 of your previous answer", context.step_note)
+        self.assertIn("sudo usermod -aG sudo <username>", context.step_note)
+        self.assertNotIn("adduser", context.step_note)
+        self.assertNotIn("appends the sudo group", context.step_note)
+        self.assertIn("usermod -aG sudo username", context.retrieval_query)
+        system, *history, user = context.apply(follow.kw["messages_fn"]("explain step 2", SUDO_HITS, "full"))
+        self.assertTrue(user["content"].endswith(context.step_note))
+        self.assertIn("Documentation excerpts:", user["content"])
+        self.assertEqual([m["role"] for m in history], ["user", "assistant"])
+        self.assertNotIn("Reasoning", history[1]["content"])
+        self.assertNotIn("[1]", history[1]["content"])
+        self.assertIn("```bash\nsudo usermod -aG sudo <username>\n```", history[1]["content"])
+
+    def test_base_says_it_had_no_documents_and_drops_a_citation_it_invented(self):
+        with self._answers(lambda question, mode: "Replace <username> and run `id <username>` [1].\n\nSource: [1]"):
+            self.at.run()
+            self._ask("check a user's groups", "landing")
+        html = self._html()
+        self.assertIn('<p class="src-line none">No documents in BASE, so nothing to cite · removed [1] the model '
+                      "wrote</p>", html)
+        self.assertIn("Replace &lt;username> and run `id <username>`.", [m.value for m in self.at.markdown])
+        self.assertEqual(self.at.expander, [])
+
+    def test_compare_folds_reasoning_on_the_side_that_wrote_it(self):
+        texts = lambda question, mode: SUDO_FULL if mode == "cot" else "Use `sudo adduser <username>`."  # noqa: E731
+        self._compare_base_vs_cot()
+        with self._answers(texts):
+            self._ask(SUDO_QUESTION, "landing")
+
+        (reasoning,) = self.at.expander
+        self.assertEqual(reasoning.label, "Show reasoning")
+        self.assertFalse(reasoning.proto.expanded)
+        self.assertEqual([c.value for c in self.at.code], list(SUDO_COMMANDS))
+        self.assertIn("No documents in +CoT", self._html())
+
+        def compact():
+            # A replayed compare is one preview line per side, taken from the answer, never the reasoning.
+            html = self._html()
+            self.assertIn('<p class="preview">Create the account, then add it to the sudo group.', html)
+            self.assertNotIn("adduser creates the account", html)
+            self.assertEqual(self.at.expander, [])
+
+        self.at.run()
+        compact()
+        cid = self._chat_id()
+        self.at.button(key="new-chat").click().run()
+        self.at.button(key=f"hist-open-{cid}").click().run()
+        compact()
+        with self._answers(texts):
+            self._ask("explain step 2")
+        self.assertEqual(_FakeStream.made[-1].kw["context"].step_note, "")
+
+
+SUDO_QUESTION = "How do I add a new user on Ubuntu and give them sudo access?"
+SUDO_COMMANDS = ("sudo adduser <username>", "sudo usermod -aG sudo <username>", "groups <username>")
+SUDO_HITS = [dict(HIT, title="adduser", path="tldr/adduser.md"), dict(HIT, title="usermod", path="tldr/usermod.md")]
+SUDO_FULL = (
+    "Reasoning:\n- adduser creates the account.\n- usermod -aG appends the sudo group.\n\nAnswer:\n"
+    "Create the account, then add it to the sudo group.\n\n"
+    "1. Create the user and set a password:\n   ```bash\n   sudo adduser {{username}}\n   ```\n"
+    "1. Add the user to the `sudo` group:\n   ```bash\n   sudo usermod -aG sudo {{username}}\n   ```\n"
+    "1. Log in as the user and check:\n   ```bash\n   groups {{username}}\n   ```\n\nSource: [1], [2]"
+)
 
 
 if __name__ == "__main__":
