@@ -245,11 +245,12 @@ class CancellableChat:
                     content = message.get("content", "")
                     if content:
                         pieces.append(content)
+                        self.raise_if_cancelled()
                         yield content
                 done = payload.get("done")
                 if done is True:
                     return _terminal_result("".join(pieces), payload)
-                if done not in (False, None):
+                if done is not False and done is not None:
                     raise OllamaStreamError("Ollama stream field 'done' must be boolean")
         raise OllamaStreamError("Ollama stream ended without a terminal event")
 
@@ -330,7 +331,7 @@ class StreamingAnswer:
         self.on_progress = on_progress
         self.retrieval = None
         self._result = None
-        self._started = False
+        self._iterator = None
 
     @property
     def result(self):
@@ -342,10 +343,17 @@ class StreamingAnswer:
         self.chat.cancel()
 
     def __iter__(self):
-        if self._started:
-            raise RuntimeError("streaming answer can only be consumed once")
-        self._started = True
-        return self._iterate()
+        return self
+
+    def __next__(self):
+        if self._iterator is None:
+            self._iterator = self._iterate()
+        return next(self._iterator)
+
+    def close(self):
+        self.chat.cancel()
+        if self._iterator is not None:
+            self._iterator.close()
 
     def _iterate(self):
         self.chat.configure(
@@ -363,18 +371,22 @@ class StreamingAnswer:
         weak = False
         context_turns = 0
         try:
+            self.chat.raise_if_cancelled()
             if uses_rag(self.mode):
                 if self.retriever is None:
                     raise RuntimeError("RAG index is not loaded")
                 query = self.question if self.context is None else self.context.retrieval_query
                 hits = self.retriever.retrieve(query, k=self.k, tldr_lane=True)
                 weak = is_weak(hits, threshold=self.threshold)
+                self.chat.raise_if_cancelled()
             messages = build_messages(self.question, hits, self.mode)
             if self.context is not None:
                 messages, context_turns = self.context.apply_with_count(messages)
             self.retrieval = retrieval_chart(hits, self.threshold, weak)
+            self.chat.raise_if_cancelled()
             if self.on_retrieval is not None:
                 self.on_retrieval(self.retrieval)
+                self.chat.raise_if_cancelled()
 
             if weak:
                 self.chat.raise_if_cancelled()
@@ -393,6 +405,7 @@ class StreamingAnswer:
                         ollama_result = stopped.value
                         transport = None
                         break
+                    self.chat.raise_if_cancelled()
                     chunk_count += 1
                     character_count += len(delta)
                     elapsed = max(time.perf_counter() - generation_started, 1e-9)
@@ -406,6 +419,8 @@ class StreamingAnswer:
                                 characters_per_s=character_count / elapsed,
                             )
                         )
+                        self.chat.raise_if_cancelled()
+                    self.chat.raise_if_cancelled()
                     yield delta
 
             ram = sampler.stop()

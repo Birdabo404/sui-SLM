@@ -126,6 +126,7 @@ class StreamingTests(unittest.TestCase):
             )
             with self.assertRaises(RuntimeError):
                 _ = stream.result
+            self.assertIs(iter(stream), stream)
             chunks = list(stream)
             with open(log, newline="", encoding="utf-8") as f:
                 row = next(csv.DictReader(f))
@@ -134,6 +135,9 @@ class StreamingTests(unittest.TestCase):
         self.assertEqual(stream.result["text"], "Use `tar`.")
         self.assertEqual(stream.result["eval_count"], 20)
         self.assertEqual(stream.result["eval_duration"], 2_000_000_000)
+        self.assertEqual(stream.result["prompt_eval_count"], 40)
+        self.assertEqual(stream.result["prompt_eval_duration"], 500_000_000)
+        self.assertEqual(stream.result["load_duration"], 100_000_000)
         self.assertEqual(stream.result["tok_s"], 10.0)
         self.assertEqual(row["tok_s"], "10.0000")
         self.assertEqual((progress[-1].chunk_count, progress[-1].character_count), (2, 10))
@@ -146,8 +150,7 @@ class StreamingTests(unittest.TestCase):
         self.assertEqual(body["options"]["temperature"], 0)
         self.assertEqual(body["options"]["seed"], 42)
         self.assertEqual(body["keep_alive"], "30m")
-        with self.assertRaises(RuntimeError):
-            list(stream)
+        self.assertEqual(list(stream), [])
 
     def test_retrieval_chart_keeps_raw_score_semantics_and_context(self):
         _StreamingOllama.fragments = [
@@ -197,6 +200,22 @@ class StreamingTests(unittest.TestCase):
         sent = _StreamingOllama.bodies[0]["messages"]
         self.assertEqual([message["content"] for message in sent[1:3]], ["previous question", "previous answer"])
 
+    def test_fragmented_utf8_and_terminal_without_newline(self):
+        event = json.dumps(
+            {"message": {"role": "assistant", "content": "café"}, "done": False},
+            ensure_ascii=False,
+        ).encode("utf-8") + b"\n"
+        split = event.index("é".encode("utf-8")) + 1
+        _StreamingOllama.fragments = [
+            event[:split],
+            event[split:],
+            _line(_terminal()).rstrip(b"\n"),
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            stream = self._stream(Path(td) / "answers.csv")
+            self.assertEqual(list(stream), ["café"])
+        self.assertEqual(stream.result["text"], "café")
+
     def test_cancel_closes_stream_and_writes_no_log(self):
         _StreamingOllama.fragments = [
             _line({"message": {"role": "assistant", "content": "partial"}, "done": False}),
@@ -227,11 +246,83 @@ class StreamingTests(unittest.TestCase):
             self.assertFalse(log.exists())
             self.assertIsNone(stream.chat._conn)
 
+    def test_early_close_cleans_up_and_writes_no_log(self):
+        _StreamingOllama.fragments = [
+            _line({"message": {"role": "assistant", "content": "partial"}, "done": False}),
+            _line(_terminal()),
+        ]
+        _StreamingOllama.wait_after_first = True
+        with tempfile.TemporaryDirectory() as td:
+            log = Path(td) / "answers.csv"
+            stream = self._stream(log)
+            self.assertEqual(next(stream), "partial")
+            stream.close()
+            _StreamingOllama.release.set()
+            self.assertFalse(log.exists())
+            self.assertIsNone(stream.chat._conn)
+
+    def test_cancel_during_retrieval_suppresses_callbacks_and_http(self):
+        hits = [{
+            "title": "doc",
+            "path": "doc.md",
+            "text": "text",
+            "dense": 0.8,
+            "rrf": 1 / 60,
+        }]
+        chat = CancellableChat(self.host)
+        charts = []
+
+        class CancellingRetriever:
+            def retrieve(self, query, k=5, tldr_lane=True):
+                chat.cancel()
+                return hits
+
+        with tempfile.TemporaryDirectory() as td:
+            log = Path(td) / "answers.csv"
+            stream = stream_answer_question(
+                "q",
+                "rag",
+                "m",
+                retriever=CancellingRetriever(),
+                chat=chat,
+                log_path=log,
+                on_retrieval=charts.append,
+            )
+            with self.assertRaises(ChatCancelled):
+                list(stream)
+            self.assertFalse(log.exists())
+        self.assertEqual(charts, [])
+        self.assertEqual(_StreamingOllama.bodies, [])
+
+    def test_cancel_from_progress_callback_emits_no_text_and_writes_no_log(self):
+        _StreamingOllama.fragments = [
+            _line({"message": {"role": "assistant", "content": "partial"}, "done": False}),
+            _line(_terminal()),
+        ]
+        holder = []
+        progress = []
+
+        def stop(update):
+            progress.append(update)
+            holder[0].cancel()
+
+        with tempfile.TemporaryDirectory() as td:
+            log = Path(td) / "answers.csv"
+            stream = self._stream(log, on_progress=stop)
+            holder.append(stream)
+            with self.assertRaises(ChatCancelled):
+                next(stream)
+            self.assertFalse(log.exists())
+        self.assertEqual(len(progress), 1)
+
     def test_protocol_and_http_errors_write_no_log_and_close(self):
         cases = (
             ([b"not json\n"], 200, OllamaStreamError, "invalid NDJSON"),
             ([_line({"message": {"content": "partial"}, "done": False})], 200, OllamaStreamError, "terminal"),
             ([_line({"error": "model missing"})], 200, OllamaStreamError, "model missing"),
+            ([_line([])], 200, OllamaStreamError, "JSON object"),
+            ([_line({"message": {"content": 3}, "done": False})], 200, OllamaStreamError, "must be text"),
+            ([_line({"message": {"content": ""}, "done": 0})], 200, OllamaStreamError, "must be boolean"),
             ([b"server exploded"], 500, requests.HTTPError, "HTTP 500"),
         )
         for index, (fragments, status, error_type, message) in enumerate(cases):
