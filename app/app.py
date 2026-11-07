@@ -5,6 +5,7 @@ import queue
 import sqlite3
 import threading
 import time
+from functools import partial
 from html import escape
 from pathlib import Path
 
@@ -17,6 +18,7 @@ os.environ.setdefault("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "false")
 import requests
 import streamlit as st
 
+from app.answer_format import app_messages, parse_answer, safe_markdown
 from app.chat_memory import ChatStore, build_chat_context
 from app.engine import (
     BASE_MODEL,
@@ -98,8 +100,7 @@ from app.polaris import (
     sky_html,
     sky_level,
     sidebar_kv_html,
-    split_code_blocks,
-    split_reasoning,
+    source_line_html,
     stopped_html,
     thinking_html,
     thinking_label,
@@ -1063,6 +1064,7 @@ def _answer_record(
         git_sha=_session_git_commit(),
         model_info=_model_info(option.name),
         context=context,
+        messages_fn=partial(app_messages, step_note=context.step_note if context is not None else ""),
         on_retrieval=lambda chart: events.put(("retrieval", chart)),
         on_progress=lambda live: events.put(("progress", live)),
     )
@@ -1086,8 +1088,20 @@ def _answer_record(
                 monitor.progress(run, value)
 
             worker.start()
-            with body:
-                st.write_stream(_stream_text(events, on_event))
+            view = body.empty()
+            text, reasoning_note = "", False
+            for piece in _stream_text(events, on_event):
+                text += piece
+                parsed = parse_answer(text, mode, n_hits=len(run.get("hits") or ()), streaming=True)
+                if parsed.reasoning_open != reasoning_note:
+                    reasoning_note = parsed.reasoning_open
+                    if reasoning_note:
+                        status.markdown(thinking_html("Writing its reasoning, hidden until you open it"),
+                                        unsafe_allow_html=True)
+                    else:
+                        status.empty()
+                with view.container():
+                    _render_answer(parsed)
         result = answer.result
         done = True
     except ChatCancelled:
@@ -1282,16 +1296,11 @@ def _render_card(record, key, align_slots=False, slot=None, model=""):
         st.markdown(card_head_html(mode, model), unsafe_allow_html=True)
         if abstained:
             st.markdown(idk_card_html(record), unsafe_allow_html=True)
-        elif mode in ("cot", "full"):
-            reason, answer = split_reasoning(record.get("answer") or "")
-            if reason:
-                with st.expander("Steps", expanded=False):
-                    st.markdown(reason)
-                _render_answer_body(answer)
-            else:
-                _render_answer_body(record.get("answer") or "")
         else:
-            _render_answer_body(record.get("answer") or "")
+            hits = record.get("hits") or []
+            parsed = parse_answer(record.get("answer") or "", mode, n_hits=len(hits))
+            _render_answer(parsed)
+            st.markdown(source_line_html(parsed, mode, hits), unsafe_allow_html=True)
         if uses_rag(mode):
             st.markdown(evidence_block_html(record, collapsed=True), unsafe_allow_html=True)
         elif align_slots:
@@ -1303,16 +1312,18 @@ def _render_card(record, key, align_slots=False, slot=None, model=""):
         st.markdown(metrics_html(record), unsafe_allow_html=True)
 
 
-def _render_answer_body(text):
-    chunks = list(split_code_blocks(text))
-    if not chunks:
-        st.markdown(text or "")
-        return
-    for kind, chunk in chunks:
-        if kind == "code":
-            st.code(chunk, language="bash")
-        elif chunk.strip():
-            st.markdown(chunk)
+def _render_answer(parsed):
+    """One answer, live or finished, from the same parse: reasoning folded away, then the blocks in order, each
+    command its own st.code box with Streamlit's copy button. Step numbers are the parser's, so a code box
+    between two steps can't restart the list at 1."""
+    if parsed.reasoning:
+        with st.expander("Show reasoning", expanded=False):
+            st.markdown(safe_markdown(parsed.reasoning))
+    for block in parsed.blocks:
+        if block.kind == "code":
+            st.code(block.text, language=block.lang or "bash")
+        else:
+            st.markdown(safe_markdown(block.text))
 
 
 if __name__ == "__main__":

@@ -25,6 +25,7 @@ from app.engine import (
     mode_choices,
     uses_rag,
 )
+from app.answer_format import parse_answer
 from app.models import is_installed
 from app.streaming import CancellableChat, ChatCancelled
 from shared.frozen import format_threshold
@@ -1346,10 +1347,29 @@ def user_turn_html(question):
     return f'<div class="q" role="heading" aria-level="2">{escape(question)}</div>'
 
 
-def preview_text(answer):
-    _, body = split_reasoning(answer or "")
-    prose = " ".join(chunk for kind, chunk in split_code_blocks(body) if kind == "md")
+def preview_text(answer, mode=""):
+    parsed = parse_answer(answer or "", mode=mode)
+    prose = " ".join(b.text for b in parsed.blocks if b.kind == "md")
     return first_line(prose.replace("`", ""))
+
+
+def source_line_html(answer, mode, hits):
+    """Under an answer: the excerpts it cites, by name, or that there were none to cite. A [n] that points at no
+    retrieved excerpt was taken out of the text and is named here, so nothing is quietly dropped."""
+    dropped = ", ".join(f"[{n}]" for n in answer.dropped)
+    if not uses_rag(mode):
+        line = f"No documents in {escape(mode_name(mode))}, so nothing to cite"
+        if dropped:
+            line += f" · removed {dropped} the model wrote"
+        return f'<p class="src-line none">{line}</p>'
+    names = []
+    for n in answer.cited:
+        hit = hits[n - 1] if n - 1 < len(hits) else {}
+        names.append(f"<b>[{n}]</b> {escape(doc_label(hit) or f'excerpt {n}')}")
+    line = ("Source " + " · ".join(names)) if names else "Source not cited by the model"
+    if dropped:
+        line += f" · removed {dropped}, not among the {len(hits)} retrieved"
+    return f'<p class="src-line">{line}</p>'
 
 
 def compare_model_tags(left, right):
@@ -1366,7 +1386,7 @@ def compare_compact_html(left, right):
 
     def block(rec, tag):
         mode = rec.get("mode") or ""
-        preview = preview_text(rec.get("answer") or "")
+        preview = preview_text(rec.get("answer") or "", mode)
         return (
             '<div class="cmp-cell">'
             + '<div class="cmp-top">'

@@ -857,7 +857,7 @@ class LoaderAndNamingTests(unittest.TestCase):
 
     def test_compare_preview_skips_reasoning_and_fences(self):
         text = "Think first.\n\nAnswer: Run this:\n```bash\ntar -xzf a.tar.gz\n```\nThen `ls` it."
-        self.assertEqual(preview_text(text), "Run this: Then ls it.")
+        self.assertEqual(preview_text(text, "cot"), "Run this: Then ls it.")
         html = compare_compact_html({"mode": "base", "answer": "Use `tar`."}, {"mode": "cot", "answer": text})
         self.assertNotIn("```", html)
         self.assertNotIn("Think first", html)
