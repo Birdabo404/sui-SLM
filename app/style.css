@@ -433,14 +433,14 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(-
 .rc-rows .raw{white-space:nowrap;color:var(--c-text-3)}
 p.rc-note{color:var(--c-text-3);opacity:.85;text-wrap:pretty}
 /* a compare column or a phone: the raw scores drop under the bar instead of squeezing the title */
-@container (max-width:520px){
+@container (max-width:600px){
   .rc-cols{display:none}
-  .rc-rows li{grid-template-columns:2ch 8ch minmax(0,1fr) 5ch;row-gap:3px}
+  .rc-rows li{grid-template-columns:2ch 8ch minmax(0,1fr) 5ch;row-gap:2px}
   .rc-rows .bar{grid-column:2 / 4;grid-row:2}
   .rc-rows .cos{grid-column:4;grid-row:1 / 3}
   .rc-rows .raw{grid-row:3}
-  .rc-rows .raw:nth-of-type(1){grid-column:2 / 4}
-  .rc-rows .raw:last-child{grid-column:3 / 5;text-align:right}
+  .rc-rows .raw:nth-child(6){grid-column:2 / 4}
+  .rc-rows .raw:nth-child(7){grid-column:3 / 5;text-align:right}
 }
 
 /* ---------- live meter under a streaming answer, and the trace a finished card keeps ---------- */
