@@ -739,6 +739,178 @@ def retrieval_bar_html(score, threshold, retrieval_off=False, mode=""):
     )
 
 
+RETRIEVAL_NOTE = "cosine is the MiniLM score the threshold gates. rrf ranks the fused lanes and is not a confidence. bm25 is unbounded and query-relative."
+
+
+def hits_from_chart(chart):
+    """The streaming backend's RetrievalChart rows as hit dicts, so the live chart and the saved record draw alike."""
+    return [
+        {
+            "rank": row.rank,
+            "source": row.path,
+            "title": row.label,
+            "path": row.path,
+            "dense": row.dense_cosine,
+            "rrf": row.rrf_rank_score,
+            "bm25": row.bm25_raw,
+        }
+        for row in chart.rows
+    ]
+
+
+def retrieval_chart_html(hits, threshold):
+    """Raw per-hit scores. Only cosine gets a bar, on its own 0-1 scale with the threshold tick; rrf and bm25 are
+    printed raw, because neither is bounded or comparable to cosine."""
+    t = 0.30 if threshold is None else float(threshold)
+    best = max_dense(hits or [])
+    if not hits:
+        return '<div class="rchart"><p class="rc-head"><b>Retrieval</b><span>no hits</span></p></div>'
+    verdict = "below" if best is None or best < t else "clears"
+    head = (
+        '<p class="rc-head"><b>Retrieval</b>'
+        f'<span>best cosine <b class="v">{_fmt_score(best, 3)}</b> {verdict} the {format_threshold(t)} threshold</span></p>'
+    )
+    tick = f"{max(0.0, min(1.0, t)) * 100:.1f}%"
+    rows = []
+    for hit in hits:
+        dense = _opt_float(hit.get("dense"))
+        width = 0.0 if dense is None else max(0.0, min(1.0, dense)) * 100
+        ok = dense is not None and dense >= t
+        rows.append(
+            f'<li class="{"ok" if ok else "low"}">'
+            f'<span class="rk">{int(hit.get("rank") or 0)}</span>'
+            f'<span class="src">{escape(source_key(hit.get("source") or hit.get("path")).lower())}</span>'
+            f'<span class="ttl" title="{escape(str(hit.get("path") or ""))}">{escape(chip_name(hit))}</span>'
+            f'<span class="bar" aria-hidden="true"><span class="fill" style="width:{width:.1f}%"></span>'
+            f'<span class="tick" style="left:{tick}"></span></span>'
+            f'<span class="cos"><span class="sr">cosine </span>{_fmt_score(dense, 3)}</span>'
+            f'<span class="raw">rrf {_fmt_score(hit.get("rrf"), 4)}</span>'
+            f'<span class="raw">bm25 {_fmt_score(hit.get("bm25"), 2)}</span>'
+            "</li>"
+        )
+    return (
+        '<div class="rchart">'
+        + head
+        + '<p class="rc-cols" aria-hidden="true"><span>hit</span><span>cosine, threshold tick</span><span>raw</span></p>'
+        + '<ol class="rc-rows">' + "".join(rows) + "</ol>"
+        + f'<p class="rc-note">{escape(RETRIEVAL_NOTE)}</p>'
+        + "</div>"
+    )
+
+
+class RateTrace:
+    """Characters per second while an answer streams, from the backend's live transport counts.
+
+    Ollama picks its NDJSON chunk sizes, so these are characters, never tokens. Windows start at the first text, so
+    the wait before it (model load, prompt evaluation) is reported once as the first-text time, not as a slow start.
+    """
+
+    def __init__(self, every=0.5):
+        self.every = every
+        self.samples = []
+        self.first_s = None
+        self.last = None
+        self._mark = None
+
+    def add(self, live):
+        self.last = live
+        if self._mark is None:
+            self.first_s = live.elapsed_s
+            self._mark = (live.elapsed_s, live.character_count)
+            return
+        t0, c0 = self._mark
+        if live.elapsed_s - t0 >= self.every:
+            self.samples.append((live.elapsed_s, (live.character_count - c0) / (live.elapsed_s - t0)))
+            self._mark = (live.elapsed_s, live.character_count)
+
+    def finish(self):
+        if self.last is None or self._mark is None:
+            return
+        t0, c0 = self._mark
+        if self.last.elapsed_s - t0 > 0.05 and self.last.character_count > c0:
+            self.samples.append((self.last.elapsed_s, (self.last.character_count - c0) / (self.last.elapsed_s - t0)))
+            self._mark = (self.last.elapsed_s, self.last.character_count)
+
+    def frozen(self):
+        """What a finished card keeps: the samples and the first-text time."""
+        return {"samples": tuple(self.samples), "first_s": self.first_s}
+
+
+def rate_svg(samples, width=240, height=36):
+    if len(samples) < 2:
+        return '<span class="spark-empty">collecting samples</span>'
+    t0, t1 = samples[0][0], samples[-1][0]
+    span = max(t1 - t0, 1e-9)
+    top = max(rate for _, rate in samples) * 1.15 or 1.0
+    pts = [
+        (round((t - t0) / span * width, 1), round(height - rate / top * (height - 2), 1))
+        for t, rate in samples
+    ]
+    line = " ".join(f"{x},{y}" for x, y in pts)
+    area = f"M0,{height} L" + " L".join(f"{x},{y}" for x, y in pts) + f" L{width},{height} Z"
+    peak = max(rate for _, rate in samples)
+    return (
+        f'<svg class="spark" viewBox="0 0 {width} {height}" preserveAspectRatio="none" role="img" '
+        f'aria-label="Characters per second while streaming, peak {peak:.0f}">'
+        f'<path class="area" d="{area}"/>'
+        f'<polyline class="line" points="{line}" vector-effect="non-scaling-stroke"/>'
+        "</svg>"
+    )
+
+
+def _trace_peak(samples):
+    return max((rate for _, rate in samples), default=None)
+
+
+def live_readout_html(trace):
+    """The meter under a streaming answer. tok/s only exists once Ollama sends its terminal counts, so it says that."""
+    live = trace.last
+    current = trace.samples[-1][1] if trace.samples else None
+    cells = [
+        f'<span class="cell"><b>{live.elapsed_s:.1f}</b> s</span>',
+        f'<span class="cell"><b>{live.character_count:,}</b> chars</span>',
+        f'<span class="cell"><b>{live.chunk_count:,}</b> chunks</span>',
+        f'<span class="cell"><b>{"—" if current is None else f"{current:.0f}"}</b> chars/s</span>',
+        '<span class="cell pending">tok/s arrives when the answer ends</span>',
+    ]
+    return (
+        '<div class="live">'
+        '<p class="live-row"><span class="live-tag">streaming</span>' + "".join(cells) + "</p>"
+        + '<div class="live-chart">' + rate_svg(trace.samples) + "</div>"
+        + '<p class="live-note">Characters per 0.5 s window, counted in the app. Not model tokens.</p>'
+        "</div>"
+    )
+
+
+def trace_html(trace):
+    """A finished card's copy of its stream trace, kept for this session only."""
+    samples = trace.get("samples") or ()
+    first_s = trace.get("first_s")
+    bits = []
+    if first_s is not None:
+        bits.append(f"first text after <b>{first_s:.1f}</b> s")
+    peak = _trace_peak(samples)
+    if peak is not None:
+        bits.append(f"peak <b>{peak:.0f}</b> chars/s")
+    if not bits and len(samples) < 2:
+        return ""
+    return (
+        '<div class="live done">'
+        + '<div class="live-chart">' + rate_svg(samples) + "</div>"
+        + '<p class="live-note">Stream: ' + ", ".join(bits) + ". Characters counted in the app, not tokens; tok/s above is Ollama's.</p>"
+        + "</div>"
+    )
+
+
+def live_phase_label(mode, retrieved=False, weak=False):
+    """What runs before the first text: the hybrid search in a RAG config, then the wait on Ollama."""
+    if uses_rag(mode) and not retrieved:
+        return "Searching the lab docs"
+    if weak:
+        return "No doc cleared the threshold, so the model is not called"
+    return "Waiting for the model"
+
+
 def source_chips_html(hits, retrieval_off=False):
     if retrieval_off:
         return '<div class="no-sources">no sources · retrieval off in this mode</div>'
@@ -774,9 +946,13 @@ def timing_breakdown(record):
     return ", ".join(parts)
 
 
+TOK_S_NOT_GENERATED = "Retrieval was below the threshold, so the model was not called and no tokens were generated."
+TOK_S_UNAVAILABLE = "Ollama reported no eval_count and eval_duration for this answer."
+
+
 def answer_stats_html(record):
-    """Response time and generation speed as two chips. tok/s is left out when Ollama reported no generation
-    (an abstained answer never calls the model, and records saved before the timing fields have none)."""
+    """Response time and generation speed, always both. tok/s is Ollama's terminal eval_count / eval_duration;
+    an abstained answer never calls the model, and an answer without those fields says so, never a made-up 0."""
     latency = float(record.get("latency_s") or 0.0)
     detail = timing_breakdown(record)
     title = "Question to answer" + (f": {detail}" if detail else "")
@@ -788,14 +964,23 @@ def answer_stats_html(record):
     if tok_s is not None:
         tokens = _opt_int(record.get("eval_count"))
         gen_s = _opt_float(record.get("gen_s"))
-        speed = (
-            f"{tokens} tokens in {gen_s:.2f} s of generation"
-            if tokens is not None and gen_s is not None
-            else "Generation speed"
-        )
+        counted = tokens is not None and gen_s is not None
+        speed = f"{tokens} tokens in {gen_s:.2f} s of generation" if counted else "Generation speed"
         chips.append(
             f'<span class="stat" title="{escape(speed)}"><span class="sr">Speed </span>'
             f"<b>{tok_s:.1f}</b> tok/s</span>"
+        )
+        if counted:
+            chips.append(f'<span class="stat calc">{tokens} tok / {gen_s:.2f} s</span>')
+    elif record.get("abstained"):
+        chips.append(
+            f'<span class="stat na" title="{escape(TOK_S_NOT_GENERATED)}"><span class="sr">Speed </span>'
+            "tok/s not generated</span>"
+        )
+    else:
+        chips.append(
+            f'<span class="stat na" title="{escape(TOK_S_UNAVAILABLE)}"><span class="sr">Speed </span>'
+            "tok/s unavailable</span>"
         )
     return '<span class="stats">' + "".join(chips) + "</span>"
 

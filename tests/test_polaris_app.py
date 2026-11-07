@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """The Polaris run loop under Streamlit's AppTest. No live Ollama: answer_question is replaced."""
+import csv
+import json
 import os
 import sqlite3
 import sys
 import tempfile
+import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -13,9 +17,14 @@ import requests
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+import app.engine as engine
 import app.polaris as polaris
+import app.streaming as streaming
 from app.chat_memory import ChatStore
 from app.engine import OllamaInfo
+from shared.prompt import ABSTAIN
+
+REAL_STREAM = streaming.stream_answer_question
 
 # Imported while discovery loads modules, before other tests swap a MagicMock into sys.modules["streamlit"].
 try:
@@ -73,6 +82,88 @@ class _Retriever:
         return [dict(HIT)]
 
 
+class _NdjsonOllama(BaseHTTPRequestHandler):
+    """/api/chat streaming two text deltas and Ollama's terminal record."""
+
+    bodies = []
+
+    def do_POST(self):
+        size = int(self.headers.get("Content-Length") or 0)
+        type(self).bodies.append(json.loads(self.rfile.read(size)))
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.end_headers()
+        for event in (
+            {"message": {"role": "assistant", "content": "Use "}, "done": False},
+            {"message": {"role": "assistant", "content": "`tar -xzf`."}, "done": False},
+            {"message": {"role": "assistant", "content": ""}, "done": True, "eval_count": 20,
+             "eval_duration": 2_000_000_000, "prompt_eval_count": 40, "prompt_eval_duration": 500_000_000,
+             "load_duration": 100_000_000},
+        ):
+            self.wfile.write(json.dumps(event).encode("utf-8") + b"\n")
+            self.wfile.flush()
+
+    def log_message(self, *args):
+        pass
+
+
+class _FakeStream:
+    """Stands in for app.streaming.StreamingAnswer. Iterating calls whatever app.engine.answer_question each test
+    patched in, then hands its text out in pieces with the same retrieval and progress callbacks the real one makes,
+    so a fake answer that raises raises mid-stream."""
+
+    made = []
+
+    def __init__(self, question, mode, model, *, retriever=None, on_retrieval=None, on_progress=None, **kw):
+        self.question, self.mode, self.model, self.retriever = question, mode, model, retriever
+        self.on_retrieval, self.on_progress, self.kw = on_retrieval, on_progress, kw
+        self.closed = self.cancelled = False
+        self.pieces = []
+        self._result = None
+        self._gen = None
+        type(self).made.append(self)
+
+    @property
+    def result(self):
+        if self._result is None:
+            raise RuntimeError("streaming answer has not completed")
+        return self._result
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._gen is None:
+            self._gen = self._run()
+        return next(self._gen)
+
+    def _run(self):
+        result = engine.answer_question(
+            self.question,
+            self.mode,
+            self.model,
+            retriever=self.retriever,
+            model_key=self.kw.get("model_key", "base"),
+            context=self.kw.get("context"),
+        )
+        if engine.uses_rag(self.mode) and self.on_retrieval is not None:
+            self.on_retrieval(streaming.retrieval_chart(result["hits"], result.get("threshold", 0.3), result["weak"]))
+        text = result["text"]
+        cut = [0, len(text) // 3, 2 * len(text) // 3, len(text)]
+        for i, (a, b) in enumerate(zip(cut, cut[1:]), 1):
+            if self.on_progress is not None:
+                self.on_progress(streaming.LiveThroughput(0.5 * i, i, b, 2.0, b / (0.5 * i)))
+            self.pieces.append(text[a:b])
+            yield text[a:b]
+        self._result = result
+
+    def cancel(self):
+        self.cancelled = True
+
+    def close(self):
+        self.closed = True
+
+
 class PolarisRunLoopTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -99,9 +190,11 @@ class PolarisRunLoopTests(unittest.TestCase):
         data = tempfile.TemporaryDirectory()
         self.addCleanup(data.cleanup)
         self.store = ChatStore(Path(data.name) / "sui-slm")
+        _FakeStream.made = []
         patches = [
             patch.dict(os.environ, {"XDG_DATA_HOME": data.name}),
             patch("app.engine.answer_question", side_effect=_fake_answer(self.calls, self.seen)),
+            patch("app.streaming.stream_answer_question", _FakeStream),
             patch("app.engine.ollama_reachable", return_value=True),
             patch("app.engine.ollama_info", return_value=OllamaInfo(version="0.12.0", model_digest="sha256:abc")),
             patch("app.engine.warm_model", return_value=True),
@@ -199,6 +292,144 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertIn('<span class="sr">Response time </span><b>1.5</b> s', html)
         self.assertIn('<span class="sr">Speed </span><b>18.3</b> tok/s', html)
         self.assertIn('title="22 tokens in 1.20 s of generation"', html)
+
+    # ---------- streaming ----------
+
+    def _speed_shown(self, html, tok_s, tokens, gen_s, latency="1.5"):
+        self.assertIn(f'<span class="sr">Response time </span><b>{latency}</b> s', html)
+        self.assertIn(f'<span class="sr">Speed </span><b>{tok_s}</b> tok/s', html)
+        self.assertIn(f'<span class="stat calc">{tokens} tok / {gen_s} s</span>', html)
+
+    def test_a_streamed_answer_keeps_ollamas_tok_s_after_it_ends_on_rerun_and_from_history(self):
+        self.at.run()
+        self._ask("extract a .tar.gz file", "landing")
+        (stream,) = _FakeStream.made
+        self.assertEqual(stream.pieces, ["Use `tar ", "-xzf file", ".tar.gz`."])
+        self.assertTrue(stream.closed)
+        html = self._html()
+        # The live meter is gone and the finished card carries Ollama's numbers, not the live character rate.
+        self.assertNotIn("tok/s arrives when the answer ends", html)
+        self.assertNotIn("live-tag", html)
+        self._speed_shown(html, "18.3", 22, "1.20")
+        self.assertIn("first text after <b>0.5</b> s", html)
+        self.assertIn("Use `tar -xzf file.tar.gz`.", [m.value for m in self.at.markdown])
+
+        self.at.run()
+        self._speed_shown(self._html(), "18.3", 22, "1.20")
+        self.assertEqual(len(self.calls), 1)
+
+        cid = self._chat_id()
+        self.at.button(key="new-chat").click().run()
+        self.at.button(key=f"hist-open-{cid}").click().run()
+        self.assertFalse(self.at.exception)
+        html = self._html()
+        self._speed_shown(html, "18.3", 22, "1.20")
+        # The stream trace was this session's measurement, so a restored chat doesn't pretend to have one.
+        self.assertNotIn("first text after", html)
+
+    def test_both_compare_sides_keep_their_own_tok_s(self):
+        answer = _fake_answer(self.calls)
+
+        def per_side(question, mode, model, **kw):
+            result = answer(question, mode, model, **kw)
+            if mode == "cot":
+                result.update(tok_s=9.75, eval_count=39, eval_duration=4_000_000_000, gen_s=4.0, latency_s=4.6)
+            return result
+
+        self._compare_base_vs_cot()
+        with patch("app.engine.answer_question", side_effect=per_side):
+            self._ask("extract a .tar.gz file", "landing")
+        self.assertEqual(len(_FakeStream.made), 2)
+        self.assertTrue(all(s.closed for s in _FakeStream.made))
+
+        def both(html):
+            self._speed_shown(html, "18.3", 22, "1.20")
+            self._speed_shown(html, "9.8", 39, "4.00", latency="4.6")
+
+        both(self._html())
+        self.at.run()
+        both(self._html())
+        # An older compare turn collapses to one row per side; each still shows its own speed.
+        self._ask("and a .zip?")
+        both(self._html().split('class="q"', 2)[1])
+        cid = self._chat_id()
+        self.at.button(key="new-chat").click().run()
+        self.at.button(key=f"hist-open-{cid}").click().run()
+        both(self._html())
+
+    def test_an_abstained_answer_says_nothing_was_generated(self):
+        answer = _fake_answer(self.calls)
+
+        def weak(question, mode, model, **kw):
+            result = answer(question, mode, model, **kw)
+            result.update(
+                text=ABSTAIN,
+                weak=True,
+                hits=[dict(HIT, dense=0.12)],
+                tok_s=None, eval_count=None, eval_duration=None, gen_s=None, prompt_s=None, load_s=None,
+                latency_s=0.4,
+            )
+            return result
+
+        rag = MagicMock(HybridRetriever=_Retriever)
+        self.at.session_state["mode"] = "full"
+        with patch("app.engine.index_ok", return_value=True), patch.dict(sys.modules, {"rag.query_hybrid": rag}), \
+                patch("app.engine.answer_question", side_effect=weak):
+            self.at.run()
+            self._ask("what's the lab wi-fi password?", "landing")
+        html = self._html()
+        self.assertIn('<span class="sr">Response time </span><b>0.4</b> s', html)
+        self.assertIn("tok/s not generated", html)
+        self.assertNotRegex(html, r"<b>[\d.]+</b> tok/s")
+        self.assertIn("best cosine <b class=\"v\">0.120</b> below the 0.30 threshold", html)
+        self.assertIn("rrf 0.0300", html)
+
+    def test_base_shows_no_retrieval_scores(self):
+        self.at.run()
+        self._ask("extract a .tar.gz file", "landing")
+        html = self._html()
+        self.assertIn("No retrieval in BASE", html)
+        self.assertNotIn("rchart", html)
+        self.assertNotIn("cosine", html)
+
+    def test_a_restored_answer_without_timing_says_tok_s_unavailable(self):
+        self.at.run()
+        self._ask("extract a .tar.gz file", "landing")
+        cid = self._chat_id()
+        stored = list(self.store.load_chat(cid).messages)
+        for field in ("tok_s", "eval_count", "eval_duration", "gen_s"):
+            stored[1]["record"].pop(field)
+        self.store.save_chat(cid, stored)
+        self.at.button(key="new-chat").click().run()
+        self.at.button(key=f"hist-open-{cid}").click().run()
+        html = self._html()
+        self.assertIn('<span class="sr">Response time </span><b>1.5</b> s', html)
+        self.assertIn("tok/s unavailable", html)
+        self.assertNotRegex(html, r"<b>[\d.]+</b> tok/s")
+
+    def test_the_real_stream_renders_and_logs_through_the_app(self):
+        _NdjsonOllama.bodies = []
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _NdjsonOllama)
+        server.daemon_threads = True
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        host = f"http://127.0.0.1:{server.server_address[1]}"
+        log = Path(tempfile.mkdtemp()) / "answers.csv"
+        with patch("app.streaming.stream_answer_question", REAL_STREAM), patch("app.streaming.OLLAMA_HOST", host), \
+                patch("app.engine.LOG_CSV", log):
+            self.at.run()
+            self._ask("extract a .tar.gz file", "landing")
+        self.assertFalse(self.at.exception)
+        (body,) = _NdjsonOllama.bodies
+        self.assertEqual((body["stream"], body["think"], body["options"]["num_ctx"]), (True, False, 4096))
+        self.assertIn("Use `tar -xzf`.", [m.value for m in self.at.markdown])
+        html = self._html()
+        # 20 tokens over 2 s of eval_duration, exactly as Ollama's terminal record says.
+        self._speed_shown(html, "10.0", 20, "2.00", latency=html.split('Response time </span><b>', 1)[1].split("<", 1)[0])
+        (row,) = list(csv.DictReader(log.open(encoding="utf-8")))
+        self.assertEqual(row["tok_s"], "10.0000")
+        self.assertEqual(self.store.load_chat(self._chat_id()).messages[1]["record"]["tok_s"], 10.0)
 
     # ---------- chat history ----------
 

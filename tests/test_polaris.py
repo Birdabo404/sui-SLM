@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from shared.prompt import ABSTAIN
+from app.streaming import LiveThroughput, OllamaStreamError, retrieval_chart
 from app.engine import (
     OllamaInfo,
     WEAK_DENSE,
@@ -37,6 +38,12 @@ from app.engine import (
     warm_model,
 )
 from app.polaris import (
+    RateTrace,
+    hits_from_chart,
+    live_phase_label,
+    live_readout_html,
+    retrieval_chart_html,
+    trace_html,
     EXPORT_FIELDS,
     best_match_html,
     best_match_label,
@@ -444,7 +451,7 @@ class CompareTests(unittest.TestCase):
                 "threshold": 0.3,
             }
 
-        def render(rec, key, align_slots=False, model=""):
+        def render(rec, key, align_slots=False, model="", slot=None):
             events.append(("render", rec["mode"], key))
             events.append(("tag", key, model))
 
@@ -582,7 +589,9 @@ class HtmlTests(unittest.TestCase):
         self.assertNotIn("app <b>420</b>", html)
         self.assertNotIn("2100", html)
         self.assertNotIn("docs", html)
-        self.assertNotIn("tok", html)
+        # No timing fields: speed reads as unavailable rather than disappearing or showing a 0.
+        self.assertIn("tok/s unavailable", html)
+        self.assertNotIn("<b>0.0</b> tok/s", html)
         self.assertNotIn("copy", html)
         self.assertEqual(format_total_ram(2520), "2.5 GB")
         split = ram_split_html(rec)
@@ -903,20 +912,101 @@ class AnswerStatsTests(unittest.TestCase):
         )
         self.assertLess(html.index("tok/s"), html.index("RAM total"))
 
-    def test_speed_chip_needs_generation_timing(self):
+    def test_speed_chip_says_unavailable_without_generation_timing(self):
         for missing in ({"tok_s": None}, {"tok_s": ""}):
             html = metrics_html({**self.TIMED, **missing, "gen_s": None, "prompt_s": None, "load_s": None})
             self.assertIn("<b>3.2</b> s", html)
-            self.assertNotIn("tok/s", html)
+            self.assertIn('<span class="sr">Speed </span>tok/s unavailable</span>', html)
+            self.assertNotRegex(html, r"<b>[\d.]+</b> tok/s")
             self.assertIn('title="Question to answer"', html)
-        # An abstained answer never reaches the model, so only its time shows.
-        self.assertEqual(answer_stats_html({"latency_s": 0.4}).count('class="stat"'), 1)
+        # An abstained answer never reaches the model: its time shows, and its speed says nothing was generated.
+        idk = answer_stats_html({"latency_s": 0.4, "abstained": True})
+        self.assertEqual(idk.count('class="stat"'), 1)
+        self.assertIn("tok/s not generated", idk)
+        self.assertNotIn("unavailable", idk)
+
+    def test_speed_shows_ollamas_own_counts_beside_tok_s(self):
+        html = answer_stats_html(self.TIMED)
+        self.assertIn('<span class="stat calc">45 tok / 2.46 s</span>', html)
+        self.assertNotIn("calc", answer_stats_html({**self.TIMED, "eval_count": None}))
 
     def test_stat_numbers_keep_their_width(self):
         css = style_path().read_text(encoding="utf-8")
         rule = css.split(".stat b{", 1)[1].split("}", 1)[0]
         self.assertIn("font-variant-numeric:tabular-nums", rule)
         self.assertIn(".sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)", css)
+
+
+class LiveStreamHtmlTests(unittest.TestCase):
+    HITS = [
+        {"rank": 1, "source": "tldr", "title": "tar", "path": "tldr/common/tar.md", "dense": 0.7412, "rrf": 0.0328,
+         "bm25": 7.013},
+        {"rank": 2, "source": "man-pages", "title": "tar(1)", "path": "man/tar.1", "dense": 0.21, "rrf": 0.0161,
+         "bm25": None},
+    ]
+
+    def test_retrieval_chart_prints_raw_scores_and_bars_only_cosine(self):
+        html = retrieval_chart_html(self.HITS, 0.30)
+        self.assertIn('best cosine <b class="v">0.741</b> clears the 0.30 threshold', html)
+        self.assertIn("rrf 0.0328", html)
+        self.assertIn("bm25 7.01", html)
+        self.assertIn("bm25 —", html)
+        self.assertEqual(html.count('class="bar"'), 2)
+        self.assertIn('style="width:74.1%"', html)
+        self.assertEqual(html.count('style="left:30.0%"'), 2)
+        self.assertIn('<li class="ok">', html)
+        self.assertIn('<li class="low">', html)
+        self.assertIn("not a confidence", html)
+        self.assertNotRegex(html.lower(), "confidence [0-9]|probab|%</")
+        self.assertIn("below the 0.30 threshold", retrieval_chart_html([dict(self.HITS[1], rank=1)], 0.30))
+
+    def test_live_chart_rows_map_from_the_backend_contract(self):
+        chart = retrieval_chart(self.HITS, 0.30)
+        hits = hits_from_chart(chart)
+        self.assertEqual([(h["rank"], h["dense"], h["rrf"], h["bm25"]) for h in hits],
+                         [(1, 0.7412, 0.0328, 7.013), (2, 0.21, 0.0161, None)])
+        self.assertIn("<span class=\"src\">tldr</span>", retrieval_chart_html(hits, chart.dense_threshold))
+
+    def test_rate_trace_counts_characters_from_the_first_text(self):
+        trace = RateTrace(every=0.5)
+        trace.add(LiveThroughput(2.0, 1, 10, 0.5, 5.0))
+        trace.add(LiveThroughput(2.3, 4, 40, 1.7, 17.4))
+        self.assertEqual(trace.samples, [])
+        trace.add(LiveThroughput(2.5, 6, 70, 2.4, 28.0))
+        trace.add(LiveThroughput(3.0, 9, 100, 3.0, 33.3))
+        trace.finish()
+        self.assertEqual(trace.first_s, 2.0)
+        self.assertEqual([round(r, 1) for _, r in trace.samples], [120.0, 60.0])
+        frozen = trace.frozen()
+        self.assertEqual(frozen["first_s"], 2.0)
+        html = trace_html(frozen)
+        self.assertIn("first text after <b>2.0</b> s", html)
+        self.assertIn("peak <b>120</b> chars/s", html)
+        self.assertIn("not tokens", html)
+        self.assertEqual(trace_html({}), "")
+
+    def test_live_readout_never_shows_a_token_rate(self):
+        trace = RateTrace(every=0.5)
+        trace.add(LiveThroughput(1.0, 1, 12, 1.0, 12.0))
+        html = live_readout_html(trace)
+        self.assertIn("<b>12</b> chars", html)
+        self.assertIn("<b>1</b> chunks", html)
+        self.assertIn("<b>—</b> chars/s", html)
+        self.assertIn("tok/s arrives when the answer ends", html)
+        self.assertIn("Not model tokens", html)
+        self.assertNotRegex(html, r"<b>[\d.,]+</b> tok")
+        trace.add(LiveThroughput(1.6, 5, 72, 3.1, 45.0))
+        self.assertIn("<b>100</b> chars/s", live_readout_html(trace))
+        self.assertIn("collecting samples", live_readout_html(trace))
+        trace.add(LiveThroughput(2.2, 9, 132, 4.1, 60.0))
+        self.assertIn('<svg class="spark"', live_readout_html(trace))
+
+    def test_phase_labels_name_only_work_that_runs(self):
+        self.assertEqual(live_phase_label("full"), "Searching the lab docs")
+        self.assertEqual(live_phase_label("full", retrieved=True), "Waiting for the model")
+        self.assertIn("not called", live_phase_label("rag", retrieved=True, weak=True))
+        for mode in ("base", "cot"):
+            self.assertEqual(live_phase_label(mode), "Waiting for the model")
 
 
 class CompareLabelTests(unittest.TestCase):
@@ -1336,81 +1426,162 @@ class StopTests(unittest.TestCase):
         with self.assertRaises(requests.RequestException):
             CancellableChat(dead, timeout=2)([{"role": "user", "content": "hi"}], "m")
 
-    def test_interrupt_while_waiting_cancels_the_request(self):
-        st = MagicMock()
-        st.cache_resource = _cache_stub
-        st.cache_data = _cache_stub
-        sys.modules["streamlit"] = st
-
-        if "app.app" in sys.modules:
-            del sys.modules["app.app"]
-        app_mod = importlib.import_module("app.app")
-        seen = {}
-
-        def work(chat):
-            seen["chat"] = chat
-            while not chat.cancelled:
-                time.sleep(0.05)
-            raise ChatCancelled()
-
-        beats = {"n": 0}
-
-        def heartbeat():
-            beats["n"] += 1
-            if beats["n"] == 2:
-                raise _Interrupted("rerun requested")
-
-        with self.assertRaises(_Interrupted):
-            app_mod._run_stoppable(work, heartbeat, tick=0.05)
-        self.assertTrue(seen["chat"].cancelled)
-        self.assertEqual(app_mod._run_stoppable(lambda chat: 42, heartbeat), 42)
-
-    def test_answer_record_catches_chat_cancelled(self):
-        st = MagicMock()
-        st.cache_resource = _cache_stub
-        st.cache_data = _cache_stub
-        sys.modules["streamlit"] = st
-
-        if "app.app" in sys.modules:
-            del sys.modules["app.app"]
-        app_mod = importlib.import_module("app.app")
-        slot = MagicMock()
-        with patch.object(app_mod, "_run_stoppable", side_effect=ChatCancelled):
-            rec = app_mod._answer_record(
-                "q",
-                "base",
-                "m",
-                None,
-                "idx",
-                slot=slot,
-            )
-        self.assertIsNone(rec)
-        self.assertIs(st.session_state.last_cancelled, True)
-        slot.empty.assert_called_once()
-
-    def test_loader_is_sent_once_while_the_answer_runs(self):
+    def _app_with_mock_st(self):
         st = MagicMock()
         st.cache_resource = _cache_stub
         st.cache_data = _cache_stub
         st.session_state = MagicMock()
         st.session_state.run_records = []
+        st.write_stream.side_effect = lambda gen: "".join(gen)
         sys.modules["streamlit"] = st
         if "app.app" in sys.modules:
             del sys.modules["app.app"]
         app_mod = importlib.import_module("app.app")
+        return st, app_mod
+
+    def test_interrupt_before_the_first_chunk_cancels_and_closes_the_stream(self):
+        st, app_mod = self._app_with_mock_st()
+        answer = _BlockingAnswer()
+        beats = {"n": 0}
+
+        def get(key, *default):
+            if key == "stop-gen":
+                beats["n"] += 1
+                if beats["n"] == 2:
+                    raise _Interrupted("rerun requested")
+            return None
+
+        st.session_state.get.side_effect = get
         slot = MagicMock()
+        with patch.object(app_mod, "stream_answer_question", return_value=answer), \
+                patch.object(app_mod, "_model_info", return_value=None):
+            with self.assertRaises(_Interrupted):
+                app_mod._answer_record("q", "base", "m", None, "idx", slot, key="answer-1")
+        self.assertTrue(answer.cancelled.is_set())
+        self.assertTrue(answer.closed)
+        self.assertFalse(answer.worker_alive_after(1.0))
+        slot.error.assert_not_called()
 
-        def slow_answer(question, mode, model, **kw):
-            time.sleep(0.7)
-            return {"mode": mode, "text": "use tar", "hits": [], "weak": False, "latency_s": 0.7}
+    def test_answer_record_catches_chat_cancelled(self):
+        st, app_mod = self._app_with_mock_st()
+        slot = MagicMock()
+        answer = _BlockingAnswer(raise_now=True)
+        with patch.object(app_mod, "stream_answer_question", return_value=answer), \
+                patch.object(app_mod, "_model_info", return_value=None):
+            rec = app_mod._answer_record("q", "base", "m", None, "idx", slot, key="answer-1")
+        self.assertIsNone(rec)
+        self.assertIs(st.session_state.last_cancelled, True)
+        slot.empty.assert_called_once()
+        self.assertTrue(answer.closed)
 
-        with patch.object(app_mod, "answer_question", side_effect=slow_answer):
-            rec = app_mod._answer_record("q", "base", "m", None, "idx", slot=slot)
+    def test_a_stream_error_is_shown_as_ollama_error_not_a_connection_failure(self):
+        st, app_mod = self._app_with_mock_st()
+        slot = MagicMock()
+        answer = _BlockingAnswer(error=OllamaStreamError("model 'm' not found"))
+        with patch.object(app_mod, "stream_answer_question", return_value=answer), \
+                patch.object(app_mod, "_model_info", return_value=None):
+            rec = app_mod._answer_record("q", "base", "m", None, "idx", slot, key="answer-1")
+        self.assertIsNone(rec)
+        message = slot.error.call_args.args[0]
+        self.assertIn("model 'm' not found", message)
+        self.assertNotIn("Could not reach", message)
+        self.assertTrue(answer.closed)
+
+    def test_loader_is_sent_once_while_waiting_for_the_first_chunk(self):
+        st, app_mod = self._app_with_mock_st()
+        slot = MagicMock()
+        answer = _BlockingAnswer(text="use tar", delay=0.7, result={"mode": "base", "text": "use tar", "hits": [],
+                                                                      "weak": False, "latency_s": 0.7})
+        with patch.object(app_mod, "stream_answer_question", return_value=answer), \
+                patch.object(app_mod, "_model_info", return_value=None):
+            rec = app_mod._answer_record("q", "base", "m", None, "idx", slot, key="answer-1")
         self.assertEqual(rec["answer"], "use tar")
-        self.assertEqual(slot.markdown.call_count, 1)
-        self.assertIn("Generating an answer…", slot.markdown.call_args.args[0])
+        status = st.empty.return_value
+        self.assertEqual(status.markdown.call_count, 1)
+        self.assertIn("Waiting for the model…", status.markdown.call_args.args[0])
         stop_checks = [c for c in st.session_state.get.call_args_list if c.args == ("stop-gen",)]
         self.assertGreaterEqual(len(stop_checks), 2)
+        self.assertTrue(answer.closed)
+
+    def test_text_reaches_write_stream_before_the_answer_finishes(self):
+        st, app_mod = self._app_with_mock_st()
+        release = threading.Event()
+        events = __import__("queue").Queue()
+
+        def produce():
+            events.put(("text", "Use "))
+            release.wait(3)
+            events.put(("text", "`tar`."))
+            events.put(("done", None))
+
+        worker = threading.Thread(target=produce, daemon=True)
+        worker.start()
+        gen = app_mod._stream_text(events, lambda *a: None, heartbeat=lambda: None, tick=0.05, every=0.05)
+        self.assertEqual(next(gen), "Use ")
+        self.assertFalse(release.is_set())
+        self.assertTrue(worker.is_alive())
+        release.set()
+        self.assertEqual("".join(gen), "`tar`.")
+
+    def test_chunks_that_arrive_together_are_drawn_once(self):
+        st, app_mod = self._app_with_mock_st()
+        events = __import__("queue").Queue()
+        seen = []
+        for piece in ("a", "b", "c"):
+            events.put(("progress", piece))
+            events.put(("text", piece))
+        events.put(("done", None))
+        out = list(app_mod._stream_text(events, lambda kind, value: seen.append(kind), heartbeat=lambda: None, every=10))
+        self.assertEqual(out, ["abc"])
+        self.assertEqual(seen, ["progress"] * 3)
+
+
+class _BlockingAnswer:
+    """A StreamingAnswer stand-in: blocks until cancelled, raises, or yields `text` after `delay`."""
+
+    def __init__(self, text=None, delay=0.0, result=None, raise_now=False, error=None):
+        self.text, self.delay, self._result = text, delay, result
+        self.raise_now, self.error = raise_now, error
+        self.cancelled = threading.Event()
+        self.closed = False
+        self._done = threading.Event()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        try:
+            if self.error is not None:
+                raise self.error
+            if self.raise_now:
+                raise ChatCancelled()
+            if self.text is not None:
+                time.sleep(self.delay)
+                text, self.text = self.text, None
+                return text
+            if self._result is not None:
+                raise StopIteration
+            self.cancelled.wait(5)
+            raise ChatCancelled()
+        except BaseException:
+            self._done.set()
+            raise
+
+    @property
+    def result(self):
+        if self._result is None:
+            raise RuntimeError("streaming answer has not completed")
+        return self._result
+
+    def worker_alive_after(self, seconds):
+        return not self._done.wait(seconds)
+
+    def cancel(self):
+        self.cancelled.set()
+
+    def close(self):
+        self.closed = True
+        self.cancelled.set()
 
 
 class HelperTests(unittest.TestCase):

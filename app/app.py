@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Offline Streamlit chat app for the CCIS Linux lab assistant."""
 import os
+import queue
 import sqlite3
 import threading
+import time
 from pathlib import Path
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
@@ -37,6 +39,7 @@ from app.polaris import (
     DELETE_ASK,
     EXAMPLES,
     HISTORY_EMPTY,
+    RateTrace,
     avg_latency,
     best_match_html,
     build_run_record,
@@ -57,9 +60,12 @@ from app.polaris import (
     header_band_html,
     history_error_text,
     history_note_html,
+    hits_from_chart,
     idk_card_html,
     index_chunk_count,
     injected_css,
+    live_phase_label,
+    live_readout_html,
     metrics_html,
     mode_menu_css,
     mode_name,
@@ -73,7 +79,7 @@ from app.polaris import (
     records_to_csv,
     records_to_json,
     retrieval_bar_html,
-    running_card_html,
+    retrieval_chart_html,
     side_logo_html,
     sky_html,
     sky_level,
@@ -83,11 +89,12 @@ from app.polaris import (
     stopped_html,
     thinking_html,
     thinking_label,
+    trace_html,
     user_turn_html,
     waiting_html,
     warm_label,
 )
-from app.streaming import CancellableChat, ChatCancelled
+from app.streaming import ChatCancelled, stream_answer_question
 from shared.frozen import format_threshold, load_frozen
 
 
@@ -450,13 +457,15 @@ def _answer_turn(
         )
         return any(recs)
 
+    key = f"answer-{len(st.session_state.messages)}"
     rec = _answer_record(
         question,
         mode,
         model,
         retriever,
         index_dir,
-        slot=slot,
+        slot,
+        key=key,
         context=context,
     )
     if rec is None:
@@ -464,7 +473,7 @@ def _answer_turn(
             return False
         st.session_state.messages.append({"role": "assistant", "error": st.session_state.pop("last_error", "")})
         return False
-    _render_card(rec, key=f"answer-{len(st.session_state.messages)}", slot=slot)
+    _render_card(rec, key=key, slot=slot)
     st.session_state.messages.append({"role": "assistant", "record": rec})
     return True
 
@@ -491,6 +500,7 @@ def _new_chat():
     st.session_state.run_records = []
     st.session_state.chat = _chat_state()
     st.session_state.pop("hist_confirm", None)
+    st.session_state.pop("live_traces", None)
 
 
 def _sync_chat(chat, messages):
@@ -533,6 +543,7 @@ def _open_chat(chat_id):
     st.session_state.run_records = records_in(st.session_state.messages)
     st.session_state.chat = _chat_state(stored.chat_id, len(stored.messages))
     st.session_state.pop("pending_q", None)
+    st.session_state.pop("live_traces", None)
 
 
 def _ask_delete(chat_id):
@@ -813,34 +824,81 @@ def _check_for_stop():
     st.session_state.get("stop-gen")
 
 
-def _run_stoppable(work, heartbeat=_check_for_stop, tick=0.2):
-    """Run work(chat) on a worker thread and wait for it.
-
-    The heartbeat is where a Stop click or a new question interrupts this script; the finally then
-    cancels the request so Ollama stops generating.
-    """
-    chat = CancellableChat()
-    box = {}
-
-    def run():
-        try:
-            box["value"] = work(chat)
-        except BaseException as e:
-            box["error"] = e
-
-    worker = threading.Thread(target=run, daemon=True)
-    worker.start()
+def _pump(answer, events):
+    """Drive the streaming answer on a worker thread, so the script thread is free to see a Stop click even while
+    Ollama is still evaluating the prompt and has sent nothing."""
     try:
-        while worker.is_alive():
-            worker.join(tick)
-            if worker.is_alive():
-                heartbeat()
+        for delta in answer:
+            events.put(("text", delta))
+        events.put(("done", None))
+    except BaseException as e:
+        events.put(("error", e))
     finally:
-        if worker.is_alive():
-            chat.cancel()
-    if "error" in box:
-        raise box["error"]
-    return box["value"]
+        answer.close()
+
+
+def _stream_text(events, on_event, heartbeat=_check_for_stop, tick=0.2, every=0.1):
+    """Text for st.write_stream, batched to at most one redraw per `every` seconds so the browser doesn't re-render
+    the growing answer for every chunk while Ollama holds the CPU. Retrieval and progress go to on_event; waiting
+    runs the heartbeat, where a Stop click or a new question interrupts this script."""
+    pending = []
+    flushed = time.monotonic()
+    while True:
+        wait = max(0.0, every - (time.monotonic() - flushed)) if pending else tick
+        try:
+            kind, value = events.get(timeout=wait)
+        except queue.Empty:
+            kind, value = None, None
+        if kind == "error":
+            raise value
+        if kind == "text":
+            pending.append(value)
+        elif kind in ("retrieval", "progress"):
+            on_event(kind, value)
+        if pending and (kind in (None, "done") or time.monotonic() - flushed >= every):
+            yield "".join(pending)
+            pending.clear()
+            flushed = time.monotonic()
+        if kind == "done":
+            return
+        if kind is None:
+            heartbeat()
+
+
+class _LiveView:
+    """The parts of a streaming answer that aren't its text: the retrieval chart and the meter under the text."""
+
+    def __init__(self, mode, chart_slot, status, every=0.5):
+        self.mode = mode
+        self.chart_slot = chart_slot
+        self.status = status
+        self.every = every
+        self.trace = RateTrace(every=every)
+        self._drawn = None
+
+    def show_phase(self, retrieved=False, weak=False):
+        label = live_phase_label(self.mode, retrieved=retrieved, weak=weak)
+        self.status.markdown(thinking_html(label), unsafe_allow_html=True)
+
+    def on_event(self, kind, value):
+        if kind == "retrieval":
+            if self.chart_slot is not None:
+                self.chart_slot.markdown(
+                    retrieval_chart_html(hits_from_chart(value), value.dense_threshold), unsafe_allow_html=True
+                )
+            self.show_phase(retrieved=True, weak=value.weak)
+            return
+        self.trace.add(value)
+        now = time.monotonic()
+        if self._drawn is None or now - self._drawn >= self.every:
+            self.status.markdown(live_readout_html(self.trace), unsafe_allow_html=True)
+            self._drawn = now
+
+
+def _ollama_error_text(error):
+    if isinstance(error, requests.ConnectionError):
+        return f"Could not reach Ollama at {OLLAMA_HOST}. Start it with `ollama serve`.\n\n{error}"
+    return f"Ollama stopped this answer with an error.\n\n{error}"
 
 
 def _answer_record(
@@ -849,51 +907,65 @@ def _answer_record(
     model,
     retriever,
     index_dir,
-    panel=False,
-    slot=None,
+    slot,
     *,
+    key,
     model_key="base",
     context=None,
     tag="",
+    show_error=True,
 ):
-    keep = slot is not None
-    slot = slot if keep else st.empty()
-    label = thinking_label(mode)
-    loader = running_card_html(mode, label, tag) if panel else thinking_html(label)
-    keep_alive = keep_alive_setting()
-    git_sha = _session_git_commit()
-    model_info = _model_info(model)
-    slot.markdown(loader, unsafe_allow_html=True)
+    """Stream one answer into slot and return its run record, or None if it was stopped or failed. On success the
+    caller draws the finished card into the same slot; `key` is that card's key."""
+    events = queue.Queue()
+    answer = stream_answer_question(
+        question,
+        mode,
+        model,
+        retriever=retriever,
+        model_key=model_key,
+        keep_alive=keep_alive_setting(),
+        git_sha=_session_git_commit(),
+        model_info=_model_info(model),
+        context=context,
+        on_retrieval=lambda chart: events.put(("retrieval", chart)),
+        on_progress=lambda live: events.put(("progress", live)),
+    )
+    worker = threading.Thread(target=_pump, args=(answer, events), daemon=True)
+    done = False
     try:
-        result = _run_stoppable(
-            lambda chat: answer_question(
-                question,
-                mode,
-                model,
-                retriever=retriever,
-                chat_fn=chat,
-                model_key=model_key,
-                log_commit=chat.commit,
-                keep_alive=keep_alive,
-                git_sha=git_sha,
-                model_info=model_info,
-                context=context,
-            ),
-        )
+        with slot.container(key=f"live-{key}"):
+            st.markdown(card_head_html(mode, tag), unsafe_allow_html=True)
+            chart_slot = st.empty() if uses_rag(mode) else None
+            body = st.container()
+            view = _LiveView(mode, chart_slot, st.empty())
+            view.show_phase()
+            worker.start()
+            with body:
+                st.write_stream(_stream_text(events, view.on_event))
+        result = answer.result
+        done = True
     except ChatCancelled:
         st.session_state.last_cancelled = True
         slot.empty()
         return None
     except requests.RequestException as e:
-        message = f"Could not reach Ollama at {OLLAMA_HOST}. Start it with `ollama serve`.\n\n{e}"
+        message = _ollama_error_text(e)
         st.session_state.last_error = message
-        if keep:
+        if show_error:
             slot.error(message)
         else:
             slot.empty()
         return None
-    if not keep:
-        slot.empty()
+    finally:
+        if not done:
+            answer.cancel()
+        if worker.is_alive():
+            worker.join(timeout=1.0)
+        if not worker.is_alive():
+            answer.close()
+    view.trace.finish()
+    st.session_state.setdefault("live_traces", {})[key] = view.trace.frozen()
     rec = build_run_record(result, index_path=index_dir)
     st.session_state.run_records.append(rec)
     st.session_state.warmed = True
@@ -948,21 +1020,26 @@ def _run_compare(
                 unsafe_allow_html=True,
             )
             with col_l:
+                left_slot = st.empty()
                 recs[0] = _answer_record(
                     question,
                     left_mode,
                     left_model,
                     retriever,
                     index_dir,
-                    panel=True,
+                    left_slot,
+                    key=f"answer-h{message_index}-l",
                     model_key=left_model_key,
                     context=context,
                     tag=left_tag,
+                    show_error=False,
                 )
                 if recs[0] is not None:
                     unanswered[0] = None
                     _keep_compare(messages, message, recs, unanswered)
-                    _render_card(recs[0], key=f"answer-h{message_index}-l", align_slots=True, model=left_tag)
+                    _render_card(
+                        recs[0], key=f"answer-h{message_index}-l", align_slots=True, model=left_tag, slot=left_slot
+                    )
                 else:
                     unanswered[0] = _side_outcome(left_mode, left_model)
                     _render_unanswered_side(unanswered[0], key=f"answer-h{message_index}-l", model=left_tag)
@@ -972,21 +1049,26 @@ def _run_compare(
                     _render_unanswered_side(unanswered[1], key=f"answer-h{message_index}-r", model=right_tag)
                 return tuple(recs), tuple(unanswered)
             with col_r:
+                right_slot = st.empty()
                 recs[1] = _answer_record(
                     question,
                     right_mode,
                     right_model,
                     retriever,
                     index_dir,
-                    panel=True,
+                    right_slot,
+                    key=f"answer-h{message_index}-r",
                     model_key=right_model_key,
                     context=context,
                     tag=right_tag,
+                    show_error=False,
                 )
                 if recs[1] is not None:
                     unanswered[1] = None
                     _keep_compare(messages, message, recs, unanswered)
-                    _render_card(recs[1], key=f"answer-h{message_index}-r", align_slots=True, model=right_tag)
+                    _render_card(
+                        recs[1], key=f"answer-h{message_index}-r", align_slots=True, model=right_tag, slot=right_slot
+                    )
                 else:
                     unanswered[1] = _side_outcome(right_mode, right_model)
                     _render_unanswered_side(unanswered[1], key=f"answer-h{message_index}-r", model=right_tag)
@@ -1086,25 +1168,22 @@ def _render_card(record, key, align_slots=False, slot=None, model=""):
             _render_answer_body(record.get("answer") or "")
         if rag:
             st.markdown(evidence_block_html(record, collapsed=True), unsafe_allow_html=True)
-        elif align_slots:
-            st.markdown(
-                empty_slot_html("ev", f"No sources in {mode_name(mode)}"),
-                unsafe_allow_html=True,
-            )
-        st.markdown(
-            retrieval_bar_html(
-                record.get("retrieval_max_dense"),
-                record.get("threshold"),
-                retrieval_off=not rag,
-                mode=mode,
-            ),
-            unsafe_allow_html=True,
-        )
+            st.markdown(retrieval_chart_html(record.get("hits") or [], record.get("threshold")), unsafe_allow_html=True)
+        else:
+            if align_slots:
+                st.markdown(
+                    empty_slot_html("ev", f"No sources in {mode_name(mode)}"),
+                    unsafe_allow_html=True,
+                )
+            st.markdown(retrieval_bar_html(None, record.get("threshold"), retrieval_off=True, mode=mode), unsafe_allow_html=True)
         if abstained:
             st.markdown(best_match_html(record), unsafe_allow_html=True)
         elif align_slots:
             st.markdown(empty_slot_html("best"), unsafe_allow_html=True)
         st.markdown(metrics_html(record), unsafe_allow_html=True)
+        trace = trace_html((st.session_state.get("live_traces") or {}).get(key) or {})
+        if trace:
+            st.markdown(trace, unsafe_allow_html=True)
 
 
 def _render_answer_body(text):
