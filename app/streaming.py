@@ -163,18 +163,26 @@ class CancellableChat:
         self.raise_if_cancelled()
         conn = http.client.HTTPConnection(self._url.hostname, self._url.port or 80, timeout=self._timeout)
         conn.auto_open = 0
+        with self._lock:
+            if self.cancelled:
+                conn.close()
+                raise ChatCancelled()
+            self._conn = conn
         try:
             conn.connect()
         except (OSError, http.client.HTTPException) as e:
+            with self._lock:
+                if self._conn is conn:
+                    self._conn = None
             conn.close()
             if self.cancelled:
                 raise ChatCancelled() from e
             raise requests.ConnectionError(str(e)) from e
         with self._lock:
             if self.cancelled:
+                self._conn = None
                 conn.close()
                 raise ChatCancelled()
-            self._conn = conn
         try:
             try:
                 conn.request("POST", self._url.path, body=body, headers={"Content-Type": "application/json"})

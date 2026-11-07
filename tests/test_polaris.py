@@ -1247,13 +1247,14 @@ class StopTests(unittest.TestCase):
 
             def connect(self):
                 connected.set()
-                release.wait(2)
+                release.wait(5)
 
             def request(self, *args, **kwargs):
                 calls.append("request")
 
             def close(self):
                 calls.append("close")
+                release.set()
 
         chat = CancellableChat(self.host)
         box = {}
@@ -1269,8 +1270,8 @@ class StopTests(unittest.TestCase):
             worker.start()
             self.assertTrue(connected.wait(2))
             chat.cancel()
+            worker.join(1)
             release.set()
-            worker.join(2)
         self.assertFalse(worker.is_alive())
         self.assertIsInstance(box.get("err"), ChatCancelled)
         self.assertNotIn("request", calls)
