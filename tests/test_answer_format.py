@@ -11,10 +11,13 @@ sys.path.insert(0, str(ROOT))
 import shared.prompt as prompt
 from app.answer_format import (
     app_messages,
+    compare_step_note,
+    is_inline_command,
     memory_text,
     normalize_placeholders,
     parse_answer,
     safe_markdown,
+    side_label,
     step_note,
     step_query,
     step_reference,
@@ -185,6 +188,89 @@ class ParseTests(unittest.TestCase):
         self.assertNotIn("Source", memory)
         self.assertNotIn("[1]", memory)
         self.assertIn("2. Add the user to the `sudo` group:\n```bash\nsudo usermod -aG sudo <username>\n```", memory)
+
+
+class CommandPlacementTests(unittest.TestCase):
+    # Shapes qwen3.5:2b wrote for the sudo question (+RAG, +CoT), cut down.
+    RAG_INLINE = ("1. Create the new user using `adduser`.\n"
+                  "2. Add the user to the `sudo` group using `usermod -aG sudo {{username}}`.\n"
+                  "3. Edit the `/etc/sudoers` file, then run `visudo` and add `ALL=(ALL) NOPASSWD: ALL`.\n\n"
+                  "Source: [1], [2]")
+    COT_TRAILING = ("1. Create the new user account.\n2. Add the user to the sudo group.\n"
+                    "3. Set up a home directory if it is missing.\n\n"
+                    "```bash\nsudo adduser <username>\n```\n\n```bash\nsudo usermod -aG sudo <username>\n```\n\n"
+                    "```bash\nsudo mkdir -p /home/<username>\n```")
+
+    def test_inline_command_rule(self):
+        for span in ("sudo usermod -aG sudo <username>", "usermod -aG sudo <username>", "apt update",
+                     "groups <username>", "sudo reboot", 'tar -xzf "my file.tar.gz"', "cat ~/notes"):
+            self.assertTrue(is_inline_command(span), span)
+        for span in ("adduser", "visudo", "/etc/sudoers", "ALL=(ALL) NOPASSWD: ALL", "-aG sudo", "sudo group",
+                     "the user", "file permissions", "id alice", 'echo "open', "sudo -u x ls", "Usermod -aG x y",
+                     " ls -l"):
+            self.assertFalse(is_inline_command(span), span)
+
+    def test_a_whole_inline_command_gets_a_box_under_its_step_byte_for_byte(self):
+        answer = parse_answer(self.RAG_INLINE, "rag", n_hits=2)
+        codes = [(b.step, b.text, b.derived) for b in answer.blocks if b.kind == "code"]
+        self.assertEqual(codes, [(2, "usermod -aG sudo <username>", True)])
+        self.assertEqual(answer.blocks[1].text, "2. Add the user to the `sudo` group using `usermod -aG sudo <username>`.")
+        self.assertEqual(answer.steps[1].commands, ("usermod -aG sudo <username>",))
+        self.assertEqual(answer.steps[0].commands, ())
+        quoted = parse_answer('1. Extract it with `tar -xzf "my file.tar.gz"`.').steps[0].commands
+        self.assertEqual(quoted, ('tar -xzf "my file.tar.gz"',))
+
+    def test_inline_commands_are_not_lifted_outside_steps_or_beside_fences(self):
+        prose = parse_answer("Run `sudo usermod -aG sudo <username>`, then log in again.")
+        self.assertEqual([b.kind for b in prose.blocks], ["md"])
+        fenced = parse_answer("1. Add it with `usermod`:\n```bash\nsudo usermod -aG sudo x\n```\n"
+                              "2. Check with `groups x`.\n```bash\ngroups x\n```")
+        self.assertFalse(any(b.derived for b in fenced.blocks))
+
+    def test_commands_after_steps_without_their_own_get_no_step(self):
+        answer = parse_answer(self.COT_TRAILING, "cot")
+        self.assertEqual([s.commands for s in answer.steps], [(), (), ()])
+        self.assertEqual(answer.loose, ("sudo adduser <username>", "sudo usermod -aG sudo <username>",
+                                        "sudo mkdir -p /home/<username>"))
+        self.assertTrue(all(b.step is None for b in answer.blocks if b.loose))
+        live = parse_answer(self.COT_TRAILING, "cot", streaming=True)
+        self.assertEqual(live.loose, ())
+
+    def test_commands_after_the_last_step_stay_with_it_when_the_layout_says_so(self):
+        cases = {
+            "only step": "1. Create the user:\n\n```bash\nsudo adduser x\n```\n\n```bash\nsudo passwd x\n```",
+            "earlier steps fenced": ("1. Create:\n```bash\nsudo adduser x\n```\n2. Check:\n\n```bash\ngroups x\n```"
+                                     "\n\n```bash\nid x\n```"),
+            "right under it": "1. Update.\n2. Install it.\n```bash\nsudo apt install git\n```",
+            "after a colon": "1. Update.\n2. Install it:\n\n```bash\nsudo apt install git\n```",
+        }
+        for name, text in cases.items():
+            answer = parse_answer(text)
+            self.assertEqual(answer.loose, (), name)
+            self.assertTrue(answer.steps[-1].commands, name)
+        loose = parse_answer("1. Update.\n2. Install it.\n\n```bash\nsudo apt install git\n```")
+        self.assertEqual(loose.loose, ("sudo apt install git",))
+
+    def test_memory_keeps_what_the_model_wrote(self):
+        self.assertNotIn("```", memory_text(self.RAG_INLINE, "rag"))
+        memory = memory_text(self.COT_TRAILING, "cot")
+        self.assertIn("3. Set up a home directory if it is missing.\n\n```bash\nsudo adduser <username>\n```", memory)
+
+    def test_step_note_shows_loose_commands_apart_from_the_step(self):
+        note = step_note("explain step 2", self.COT_TRAILING, "cot")
+        self.assertIn("step 2 was shown as:\n2. Add the user to the sudo group.\nAfter its steps it also listed", note)
+        self.assertIn("say so instead of guessing", note)
+        lifted = step_note("explain step 2", self.RAG_INLINE, "rag")
+        self.assertIn("```bash\nusermod -aG sudo <username>\n```", lifted)
+
+    def test_compare_step_note_labels_both_sides(self):
+        note = compare_step_note("explain step 2", (
+            (side_label("Left", "base", "m"), self.RAG_INLINE, "base"),
+            (side_label("Right", "cot", "m"), None, "cot"),
+        ))
+        self.assertIn("Left answer (m · BASE): step 2 was shown as:\n2. Add the user", note)
+        self.assertIn("Right answer (m · +CoT): no answer, it was stopped or failed.", note)
+        self.assertEqual(compare_step_note("why sudo?", ()), "")
 
 
 class StepFollowUpTests(unittest.TestCase):

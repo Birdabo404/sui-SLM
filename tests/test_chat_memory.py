@@ -101,15 +101,40 @@ class ChatContextTests(unittest.TestCase):
         self.assertEqual(context.retrieval_query, "add a sudo user Add sudo: sudo usermod -aG sudo username explain step 2")
         self.assertEqual(build_chat_context(messages, "why sudo?").step_note, "")
 
-    def test_a_compare_turn_gives_no_step_note(self):
-        side = {"answer": "1. Create it:\n```bash\nsudo adduser x\n```", "mode": "base"}
+    def test_after_a_compare_each_side_gets_its_own_step_and_one_answer_gets_both(self):
+        left = {"answer": "1. Create it:\n```bash\nsudo adduser x\n```\n2. Add sudo:\n```bash\nsudo usermod -aG sudo x\n```",
+                "mode": "base", "model": "qwen3.5:2b"}
+        right = {"answer": "1. Make the user:\n```bash\nsudo useradd -m x\n```\n2. Set a password:\n```bash\nsudo passwd x\n```",
+                 "mode": "cot", "model": "qwen3.5:2b"}
         messages = [
             {"role": "user", "content": "add a user"},
-            {"role": "assistant", "compare": (side, dict(side, mode="cot"))},
+            {"role": "assistant", "compare": (left, right)},
+        ]
+        context = build_chat_context(messages, "explain step 2")
+        both = context.step_note
+        self.assertIn("either of the two answers", both)
+        self.assertIn("Left answer (qwen3.5:2b · BASE): step 2 was shown as:\n2. Add sudo:", both)
+        self.assertIn("Right answer (qwen3.5:2b · +CoT): step 2 was shown as:\n2. Set a password:", both)
+        self.assertEqual(context.note_for(""), both)
+        self.assertIn("sudo usermod -aG sudo x", context.note_for("L"))
+        self.assertNotIn("passwd", context.note_for("L"))
+        self.assertIn("sudo passwd x", context.note_for("R"))
+        self.assertNotIn("usermod", context.note_for("R"))
+        self.assertEqual(context.retrieval_query,
+                         "add a user Add sudo: sudo usermod -aG sudo x Set a password: sudo passwd x explain step 2")
+
+    def test_a_compare_side_that_never_answered_is_named_not_dropped(self):
+        right = {"answer": "1. Make the user:\n```bash\nsudo useradd -m x\n```", "mode": "cot", "model": "m"}
+        messages = [
+            {"role": "user", "content": "add a user"},
+            {"role": "assistant", "compare": (None, right),
+             "compare_unanswered": ({"mode": "base", "model": "m", "state": "cancelled"}, None)},
         ]
         context = build_chat_context(messages, "explain step 1")
-        self.assertEqual(context.step_note, "")
-        self.assertEqual(context.retrieval_query, "add a user explain step 1")
+        self.assertIn("Left answer (m · BASE): no answer, it was stopped or failed.", context.step_note)
+        self.assertEqual(context.note_for("L"), context.step_note)
+        self.assertIn("sudo useradd -m x", context.note_for("R"))
+        self.assertNotIn("Left answer", context.note_for("R"))
 
     def test_weak_retrieval_uses_combined_query_and_frozen_policy(self):
         retriever = FakeRetriever([{

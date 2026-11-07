@@ -1194,14 +1194,64 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.at.button(key="new-chat").click().run()
         self.at.button(key=f"hist-open-{cid}").click().run()
         compact()
+
+    def _sudo_compare(self):
+        texts = lambda question, mode: SUDO_FULL if mode == "cot" else BASE_STEPS  # noqa: E731
+        self._compare_base_vs_cot()
+        with self._answers(texts):
+            self._ask(SUDO_QUESTION, "landing")
+        return texts
+
+    def test_a_compare_follow_up_gives_each_side_its_own_step(self):
+        texts = self._sudo_compare()
         with self._answers(texts):
             self._ask("explain step 2")
-        self.assertEqual(_FakeStream.made[-1].kw["context"].step_note, "")
+        left, right = _FakeStream.made[-2:]
+
+        def note(stream, mode):
+            return stream.kw["messages_fn"]("explain step 2", [], mode)[1]["content"]
+
+        self.assertIn("sudo passwd <username>", note(left, "base"))
+        self.assertNotIn("usermod", note(left, "base"))
+        self.assertIn("sudo usermod -aG sudo <username>", note(right, "cot"))
+        self.assertNotIn("passwd", note(right, "cot"))
+
+    def test_one_answer_after_a_compare_gets_both_steps_labelled(self):
+        texts = self._sudo_compare()
+        self.at.toggle(key="compare").set_value(False).run()
+        with self._answers(texts):
+            self._ask("explain step 2")
+        (stream,) = _FakeStream.made[2:]
+        user = stream.kw["messages_fn"]("explain step 2", [], "base")[1]["content"]
+        self.assertIn("Left answer (qwen3.5:2b · BASE): step 2 was shown as:\n2. Set a password:", user)
+        self.assertIn("Right answer (qwen3.5:2b · +CoT): step 2 was shown as:\n2. Add the user", user)
+        self.assertIn("Answer for each separately, starting with its label.", user)
+
+    def test_inline_commands_get_boxes_and_trailing_ones_are_not_given_a_step(self):
+        text = ("1. Create the user with `sudo adduser {{username}}`.\n2. Give it sudo.\n3. Check it.\n\n"
+                "```bash\nsudo usermod -aG sudo {{username}}\n```\n\n```bash\ngroups {{username}}\n```")
+        with self._answers(lambda question, mode: text):
+            self.at.run()
+            self._ask(SUDO_QUESTION, "landing")
+            self._ask("explain step 2")
+        self.assertEqual([c.value for c in self.at.code][:3], list(SUDO_COMMANDS))
+        shown = [m.value for m in self.at.markdown]
+        self.assertIn("1. Create the user with `sudo adduser <username>`.", shown)
+        self.assertIn('<p class="cmd-loose">The model listed these 2 commands after its steps without saying which '
+                      "step each belongs to.</p>", shown)
+        note = _FakeStream.made[-1].kw["context"].step_note
+        self.assertIn("step 2 was shown as:\n2. Give it sudo.\nAfter its steps it also listed these commands", note)
+        self.assertIn("```bash\nsudo usermod -aG sudo <username>\n```", note)
+        self.assertNotIn("adduser", note)
 
 
 SUDO_QUESTION = "How do I add a new user on Ubuntu and give them sudo access?"
 SUDO_COMMANDS = ("sudo adduser <username>", "sudo usermod -aG sudo <username>", "groups <username>")
 SUDO_HITS = [dict(HIT, title="adduser", path="tldr/adduser.md"), dict(HIT, title="usermod", path="tldr/usermod.md")]
+BASE_STEPS = (
+    "1. Create the user:\n```bash\nsudo adduser {{username}}\n```\n"
+    "2. Set a password:\n```bash\nsudo passwd {{username}}\n```"
+)
 SUDO_FULL = (
     "Reasoning:\n- adduser creates the account.\n- usermod -aG appends the sudo group.\n\nAnswer:\n"
     "Create the account, then add it to the sudo group.\n\n"
