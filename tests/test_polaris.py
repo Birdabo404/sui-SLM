@@ -1264,7 +1264,7 @@ class StopTests(unittest.TestCase):
             except BaseException as e:
                 box["err"] = e
 
-        with patch("app.polaris.http.client.HTTPConnection", Conn):
+        with patch("app.streaming.http.client.HTTPConnection", Conn):
             worker = threading.Thread(target=run)
             worker.start()
             self.assertTrue(connected.wait(2))
@@ -1317,7 +1317,7 @@ class StopTests(unittest.TestCase):
             except BaseException as e:
                 box["err"] = e
 
-        with patch("app.polaris.http.client.HTTPConnection", Conn):
+        with patch("app.streaming.http.client.HTTPConnection", Conn):
             worker = threading.Thread(target=run)
             worker.start()
             self.assertTrue(request_entered.wait(2))
