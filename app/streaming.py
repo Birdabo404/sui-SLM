@@ -139,6 +139,8 @@ class CancellableChat:
         self._conn = None
         self._committed = False
         self.cancelled = False
+        # Ollama's reason for ending the last stream: "stop" (end of turn), "length" (a token or context limit).
+        self.done_reason = None
 
     def configure(self, *, temperature, seed, keep_alive):
         with self._lock:
@@ -257,6 +259,8 @@ class CancellableChat:
                         yield content
                 done = payload.get("done")
                 if done is True:
+                    reason = payload.get("done_reason")
+                    self.done_reason = reason if isinstance(reason, str) else None
                     return _terminal_result("".join(pieces), payload)
                 if done is not False and done is not None:
                     raise OllamaStreamError("Ollama stream field 'done' must be boolean")
@@ -456,6 +460,7 @@ class StreamingAnswer:
                 git_sha=self.git_sha,
                 model_info=self.model_info or OllamaInfo(),
             )
+            self._result["done_reason"] = None if weak else self.chat.done_reason
             complete = True
         finally:
             if not complete:

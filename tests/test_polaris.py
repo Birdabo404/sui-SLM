@@ -60,8 +60,11 @@ from app.polaris import (
     best_match_label,
     build_run_record,
     card_head_html,
-    card_html,
+    cube_frame,
+    cube_html,
+    cut_off_html,
     debug_rows_html,
+    empty_slot_html,
     doc_label,
     evidence_block_html,
     evidence_panel_html,
@@ -83,9 +86,10 @@ from app.polaris import (
     records_to_json,
     source_chips_html,
     source_key,
-    split_code_blocks,
-    split_reasoning,
     style_path,
+    CUBE_COLS,
+    CUBE_FRAMES,
+    CUBE_ROWS,
     waiting_html,
     STILL_WORKING,
     CancellableChat,
@@ -297,8 +301,7 @@ class RunRecordTests(unittest.TestCase):
         self.assertNotIn("Steps:", html)
         self.assertIn("<code>man &lt;command&gt;</code>", html)
         self.assertIn("Please ask the lab technician", html)
-        card = card_html(rec)
-        self.assertIn("idk-card", card)
+        card = html + evidence_block_html(rec) + best_match_html(rec) + metrics_html(rec)
         self.assertNotIn("retr", card)
         self.assertIn("Best match:", card)
         self.assertIn("<code>tldr ls</code>", card)
@@ -451,6 +454,14 @@ class CompareTests(unittest.TestCase):
             def __exit__(self, *a):
                 return False
 
+        class View:
+            def __init__(self, key, model):
+                self.key, self.model = key, model
+
+            def finish(self, rec, align_slots=False):
+                events.append(("render", rec["mode"], self.key, align_slots))
+                events.append(("tag", self.key, self.model))
+
         def answer(question, mode, option, *a, **k):
             events.append(("start", mode, option.name, option.key, k.get("side")))
             return {
@@ -465,17 +476,11 @@ class CompareTests(unittest.TestCase):
                 "total_mb": 2,
                 "retrieval_max_dense": None,
                 "threshold": 0.3,
-            }
-
-        def render(rec, key, align_slots=False, model="", slot=None):
-            events.append(("render", rec["mode"], key))
-            events.append(("tag", key, model))
+            }, View(k["key"], k.get("tag", ""))
 
         with patch.object(app_mod.st, "container", return_value=Box()), patch.object(
             app_mod.st, "columns", return_value=(Col(), Col())
-        ), patch.object(app_mod, "_answer_record", side_effect=answer), patch.object(
-            app_mod, "_render_card", side_effect=render
-        ):
+        ), patch.object(app_mod, "_answer_record", side_effect=answer):
             base = ModelOption("base", "qwen3.5:2b", "default base", "ollama pull qwen3.5:2b")
             student = ModelOption("distilled", "student:latest", "KD student", "ollama create student:latest -f Modelfile")
             monitor = MagicMock()
@@ -495,8 +500,8 @@ class CompareTests(unittest.TestCase):
             [e for e in events if isinstance(e, tuple) and e[0] == "start"],
             [left_start, right_start],
         )
-        self.assertIn(("render", "base", "answer-h1-l"), events)
-        self.assertIn(("render", "full", "answer-h1-r"), events)
+        self.assertIn(("render", "base", "answer-h1-l", True), events)
+        self.assertIn(("render", "full", "answer-h1-r", True), events)
         # Different models on each side, so both heads name theirs.
         self.assertIn(("tag", "answer-h1-l", "qwen3.5:2b"), events)
         self.assertIn(("tag", "answer-h1-r", "student:latest"), events)
@@ -641,7 +646,8 @@ class HtmlTests(unittest.TestCase):
         self.assertNotIn("slot-line", html)
         css = style_path().read_text(encoding="utf-8")
         self.assertIn(".card.waiting-card{border:1pxsolidvar(--c-line)", css.replace(" ", ""))
-        self.assertIn(".thinking.queued .dots i{animation:none", css)
+        self.assertIn('<span class="cube still"', html)
+        self.assertIn(".cube.still .cube-reel{animation:none", css)
         self.assertIn("1px dashed var(--c-idk)", css)
 
     def test_compare_base_vs_full_slots(self):
@@ -678,8 +684,9 @@ class HtmlTests(unittest.TestCase):
             "total_mb": 2520,
             "abstained": False,
         }
-        left = card_html(base, align_slots=True)
-        right = card_html(full, align_slots=True)
+        # The pieces a compare card is drawn from (app._AnswerView.finish with align_slots).
+        left = card_head_html("base") + empty_slot_html("ev", "No sources in BASE") + metrics_html(base)
+        right = card_head_html("full") + evidence_block_html(full) + metrics_html(full)
         self.assertIn('<span class="mode">BASE</span>', left)
         self.assertIn("Plain model, no documents", left)
         self.assertIn('<span class="mode">+RAG+CoT</span>', right)
@@ -691,10 +698,7 @@ class HtmlTests(unittest.TestCase):
         for card in (left, right):
             self.assertNotIn("retr", card)
             self.assertNotIn('class="spark"', card)
-        self.assertIn("slot-empty best", left)
-        self.assertIn("slot-empty best", right)
-        self.assertNotIn("idk-card", left)
-        self.assertNotIn("idk-card", right)
+        self.assertIn("slot-empty best", empty_slot_html("best"))
         wait = waiting_html("full", "BASE")
         self.assertIn("waiting-card", wait)
         self.assertIn("slot-empty ev", wait)
@@ -711,10 +715,15 @@ class HtmlTests(unittest.TestCase):
 
 
 class LoaderAndNamingTests(unittest.TestCase):
-    def test_thinking_loader_is_css_only_constellation(self):
+    def test_thinking_loader_is_a_css_only_cube_reel(self):
         html = thinking_html("Searching the lab docs")
         self.assertIn('role="status"', html)
-        self.assertEqual(html.count("<i></i>"), 9)
+        self.assertIn('<span class="cube" aria-hidden="true">', html)
+        reel = html.split('<span class="cube-reel">', 1)[1].split("</span>", 1)[0]
+        lines = reel.split("<br>")
+        self.assertEqual(len(lines), CUBE_FRAMES * CUBE_ROWS)
+        self.assertTrue(all(len(line) == CUBE_COLS for line in lines))
+        self.assertNotIn("\n", html)
         self.assertIn("Searching the lab docs", html)
         self.assertIn(STILL_WORKING, html)
         self.assertNotIn("<script", html)
@@ -724,6 +733,16 @@ class LoaderAndNamingTests(unittest.TestCase):
             for frames in block.split("@keyframes")[1:]:
                 body = frames.split("}}", 1)[0]
                 self.assertNotIn(prop, body, f"loader keyframes animate {prop}")
+
+    def test_cube_turns_a_seamless_quarter_turn_and_rests_under_reduced_motion(self):
+        frames = [cube_frame(t) for t in range(CUBE_FRAMES)]
+        self.assertEqual(len({tuple(f) for f in frames}), CUBE_FRAMES)
+        self.assertEqual(cube_frame(CUBE_FRAMES), frames[0])
+        css = style_path().read_text(encoding="utf-8")
+        self.assertIn(f"animation:polaris-cube 1.2s steps({CUBE_FRAMES}) infinite", css)
+        reduced = [block.split("\n}", 1)[0] for block in css.split("@media (prefers-reduced-motion:reduce){")[1:]]
+        self.assertTrue(any(".cube-reel{animation:none" in block for block in reduced))
+        self.assertIn('class="cube still"', cube_html(still=True))
 
     def test_thinking_label_follows_mode(self):
         self.assertEqual(thinking_label("full"), "Generating an answer from the lab docs")
@@ -1505,7 +1524,7 @@ class StopTests(unittest.TestCase):
         self.monitor = app_mod._Monitor(MagicMock())
         self.monitor.plan([("", "m", "base")])
         option = ModelOption("base", "m", "default base", "ollama pull m")
-        rec = app_mod._answer_record("q", "base", option, None, "idx", slot, key="answer-1", monitor=self.monitor)
+        rec, _ = app_mod._answer_record("q", "base", option, None, "idx", slot, key="answer-1", monitor=self.monitor)
         return rec, self.monitor.runs[0]
 
     def test_interrupt_before_the_first_chunk_cancels_and_closes_the_stream(self):
@@ -1659,14 +1678,19 @@ class _BlockingAnswer:
 
 
 class HelperTests(unittest.TestCase):
-    def test_split_reasoning_and_code(self):
-        reason, answer = split_reasoning("Steps:\n1. x\n\nAnswer: use tar")
-        self.assertIn("Steps:", reason)
-        self.assertEqual(answer, "use tar")
-        parts = list(split_code_blocks("do this\n```bash\ntar -xzf a.tar.gz\n```\ndone"))
-        kinds = [k for k, _ in parts]
-        self.assertIn("code", kinds)
-        self.assertEqual(parts[1][1], "tar -xzf a.tar.gz")
+    def test_abstain_card_reads_the_answer_with_the_one_parser(self):
+        html = idk_card_html({"answer": ABSTAIN})
+        self.assertNotIn("I checked the excerpts", html)
+        self.assertIn("I don&#x27;t know.", html)
+
+    def test_cut_off_only_when_ollama_says_length(self):
+        self.assertIn("cut off at a length limit", cut_off_html({"done_reason": "length"}))
+        for reason in ("stop", None, ""):
+            self.assertEqual(cut_off_html({"done_reason": reason}), "")
+        self.assertIn("cut off", metrics_html({"done_reason": "length", "mode": "base"}))
+        self.assertEqual(build_run_record({"done_reason": "length", "mode": "base"})["done_reason"], "length")
+        self.assertIsNone(build_run_record({"mode": "base"})["done_reason"])
+        self.assertIn("done_reason", EXPORT_FIELDS)
 
     def test_max_dense(self):
         self.assertIsNone(max_dense([]))
@@ -1707,6 +1731,7 @@ class HelperTests(unittest.TestCase):
         self.assertNotIn("transition:all", css.replace(" ", ""))
         self.assertIn("@keyframes star-breathe", css)
         self.assertIn("@keyframes polaris-breathe", css)
+        self.assertIn("@keyframes polaris-cube", css)
         self.assertIn("prefers-reduced-motion", css)
         self.assertIn(".idk-star svg{width:18px;height:18px;fill:none;stroke:var(--c-idk);stroke-width:1.5;animation:none}", css.replace("\n", ""))
         self.assertNotIn(".waiting{border:1px dashed", css.replace(" ", ""))

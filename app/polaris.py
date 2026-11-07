@@ -25,7 +25,7 @@ from app.engine import (
     mode_choices,
     uses_rag,
 )
-from app.answer_format import parse_answer
+from app.answer_format import parse_answer, split_reasoning
 from app.models import is_installed
 from app.streaming import CancellableChat, ChatCancelled
 from shared.frozen import format_threshold
@@ -89,6 +89,7 @@ EXPORT_FIELDS = (
     "gen_s",
     "prompt_s",
     "load_s",
+    "done_reason",
     "ollama_version",
     "model_digest",
     "app_rss_mb",
@@ -269,6 +270,7 @@ class RunRecord(TypedDict):
     gen_s: float | None
     prompt_s: float | None
     load_s: float | None
+    done_reason: str | None
     ollama_version: str
     model_digest: str
     app_rss_mb: float
@@ -358,6 +360,7 @@ def build_run_record(result, index_path=""):
         "gen_s": _opt_float(result.get("gen_s")),
         "prompt_s": _opt_float(result.get("prompt_s")),
         "load_s": _opt_float(result.get("load_s")),
+        "done_reason": str(result["done_reason"]) if result.get("done_reason") else None,
         "ollama_version": str(result.get("ollama_version") or ""),
         "model_digest": str(result.get("model_digest") or ""),
         "app_rss_mb": float(result.get("app_rss_mb") or 0.0),
@@ -502,15 +505,6 @@ def source_count_label(n):
 
 def format_total_ram(mb):
     return f"{float(mb or 0.0) / 1024.0:.1f} GB"
-
-
-def split_reasoning(text):
-    body = text or ""
-    for sep in ("\n\nAnswer:", "\nAnswer:", "\n\n**Answer:**"):
-        if sep in body:
-            head, tail = body.split(sep, 1)
-            return head.strip(), tail.strip()
-    return "", body
 
 
 def first_line(text, limit=88):
@@ -1105,8 +1099,20 @@ def metrics_html(record):
         + answer_stats_html(record)
         + ram_html(record)
         + "".join(f"<span>{b}</span>" for b in bits)
+        + cut_off_html(record)
         + "</div>"
     )
+
+
+CUT_OFF_TITLE = ("Ollama ended this answer with done_reason=length: generation hit a token or context limit, so the "
+                 "text may stop mid-way. The app shows everything Ollama sent.")
+
+
+def cut_off_html(record):
+    """Only when Ollama itself says it stopped at a limit; an answer that ended on its own says nothing here."""
+    if record.get("done_reason") != "length":
+        return ""
+    return f'<span class="stat warn" title="{escape(CUT_OFF_TITLE)}">cut off at a length limit</span>'
 
 
 def ram_split_html(record):
@@ -1239,59 +1245,79 @@ def evidence_block_html(record, collapsed=True):
     )
 
 
-def answer_body_html(text):
-    parts = []
-    for kind, chunk in split_code_blocks(text):
-        if kind == "code":
-            parts.append(f'<pre class="cmd"><code>{escape(chunk)}</code></pre>')
-        elif chunk.strip():
-            parts.append(f'<div class="prose">{escape(chunk).replace(chr(10), "<br>")}</div>')
-    if not parts:
-        return '<div class="prose"></div>'
-    return "".join(parts)
+CUBE_COLS, CUBE_ROWS, CUBE_FRAMES = 16, 8, 12
+_CUBE_RAMP = ".-~=+*#%@"
+_CUBE_TILT = math.radians(-28)
+_CUBE_LIGHT = (-0.5, 0.75, -0.45)
 
 
-def card_html(record, align_slots=False):
-    mode = record.get("mode") or ""
-    rag = uses_rag(mode)
-    abstained = bool(record.get("abstained"))
-    klass = "card idk-card" if abstained else "card"
-    parts = [f'<div class="{klass}">']
-    if abstained:
-        parts.append('<div class="polaris-idk-flag" hidden></div>')
-    parts.append(card_head_html(mode))
-    if abstained:
-        parts.append(idk_card_html(record))
-    else:
-        parts.append(answer_body_html(record.get("answer") or ""))
-    if rag:
-        parts.append(evidence_block_html(record, collapsed=True))
-    elif align_slots:
-        parts.append(empty_slot_html("ev", f"No sources in {mode_name(mode)}"))
-    if abstained:
-        parts.append(best_match_html(record))
-    elif align_slots:
-        parts.append(empty_slot_html("best"))
-    parts.append(metrics_html(record))
-    parts.append("</div>")
-    return "".join(parts)
+def _cube_turn(p, a):
+    x, y, z = p
+    x, z = x * math.cos(a) - z * math.sin(a), x * math.sin(a) + z * math.cos(a)
+    return x, y * math.cos(_CUBE_TILT) - z * math.sin(_CUBE_TILT), y * math.sin(_CUBE_TILT) + z * math.cos(_CUBE_TILT)
 
 
-def _dots_html():
-    return '<span class="dots" aria-hidden="true">' + "<i></i>" * 9 + "</span>"
+def cube_frame(t, cols=CUBE_COLS, rows=CUBE_ROWS, frames=CUBE_FRAMES):
+    """Frame t of a lit cube turning about its vertical axis, as rows of text: each cell takes the shade of the
+    visible face whose sample lands nearest its centre, shaded by how squarely that face meets the light. A
+    convex cube's front faces never overlap, so no depth test is needed, and a quarter turn brings the cube back
+    onto itself, so `frames` frames over 90 degrees loop without a seam."""
+    a = math.radians(20) + t * (math.pi / 2) / frames
+    norm = math.sqrt(sum(c * c for c in _CUBE_LIGHT))
+    light = [c / norm for c in _CUBE_LIGHT]
+    nearest = [[math.inf] * cols for _ in range(rows)]
+    grid = [[" "] * cols for _ in range(rows)]
+    for axis in range(3):
+        u, v = (k for k in range(3) if k != axis)
+        for sign in (-1, 1):
+            normal = _cube_turn(tuple(sign if k == axis else 0 for k in range(3)), a)
+            if normal[2] >= 0:
+                continue
+            lum = max(0.0, sum(n * l for n, l in zip(normal, light)))
+            glyph = _CUBE_RAMP[min(len(_CUBE_RAMP) - 1, int(lum * len(_CUBE_RAMP)))]
+            for i in range(40):
+                for j in range(40):
+                    p = [0.0, 0.0, 0.0]
+                    p[axis], p[u], p[v] = sign, (i + 0.5) / 20 - 1, (j + 0.5) / 20 - 1
+                    x, y, _ = _cube_turn(p, a)
+                    cx = (cols - 1) / 2 + x * cols * 0.27
+                    cy = (rows - 1) / 2 - y * rows * 0.28
+                    col, row = round(cx), round(cy)
+                    gap = round((cx - col) ** 2 + (cy - row) ** 2, 9)
+                    if 0 <= col < cols and 0 <= row < rows and gap < nearest[row][col]:
+                        nearest[row][col] = gap
+                        grid[row][col] = glyph
+    return ["".join(row) for row in grid]
+
+
+# One line of HTML, every frame stacked in a reel that one CSS steps() animation slides through.
+_CUBE_REEL = "<br>".join(line for t in range(CUBE_FRAMES) for line in cube_frame(t))
+
+
+def cube_html(still=False):
+    klass = "cube still" if still else "cube"
+    return f'<span class="{klass}" aria-hidden="true"><span class="cube-reel">{_CUBE_REEL}</span></span>'
 
 
 def thinking_html(label, still=STILL_WORKING):
-    """Loader for a running answer: a 3x3 constellation breathing out from its center star beside one plain
-    label. Sent once per answer; the dots are pure CSS, so they keep moving while the script waits."""
+    """Loader for the wait before an answer's first text: a turning ASCII cube beside one plain label. Sent once;
+    the cube is a CSS animation, so it keeps turning while the script waits, and goes when the first text lands."""
     return (
         '<div class="thinking" role="status">'
-        + _dots_html()
+        + cube_html()
         + '<span class="thinking-text">'
         f'<span class="thinking-label">{escape(label)}…</span>'
         f'<span class="thinking-note">{escape(still)}</span>'
         "</span></div>"
     )
+
+
+REASONING_FIRST = "Writing its reasoning first, under Show reasoning. The answer starts after its Answer: line."
+
+
+def reasoning_first_html():
+    """Under +CoT and +RAG+CoT, between the first text and the answer: nothing moves, the text is real and shown."""
+    return f'<p class="reasoning-first" role="status">{escape(REASONING_FIRST)}</p>'
 
 
 def flags_html(sky, daylight=False, compare=False, generating=False):
@@ -1332,7 +1358,7 @@ def waiting_html(mode, after_label, model=""):
         '<div class="card waiting-card">'
         + card_head_html(mode, model)
         + '<div class="slot-empty body"><div class="thinking queued">'
-        + _dots_html()
+        + cube_html(still=True)
         + f'<span class="thinking-text"><span class="queued-label">Starts when {escape(after_label)} finishes</span></span>'
         + "</div></div>"
         + empty_slot_html("ev", "No sources yet")
@@ -1501,22 +1527,6 @@ def avg_latency(records):
     if not records:
         return None
     return sum(float(r.get("latency_s") or 0.0) for r in records) / len(records)
-
-
-_FENCE_RE = re.compile(r"```(?:[a-zA-Z0-9_-]+)?\n(.*?)```", re.DOTALL)
-
-
-def split_code_blocks(text):
-    """Yield ('md'|'code', chunk) pairs so command fences can use st.code."""
-    body = text or ""
-    pos = 0
-    for m in _FENCE_RE.finditer(body):
-        if m.start() > pos:
-            yield "md", body[pos : m.start()]
-        yield "code", m.group(1).strip("\n")
-        pos = m.end()
-    if pos < len(body):
-        yield "md", body[pos:]
 
 
 def sidebar_kv_html(rows):

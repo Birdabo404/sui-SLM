@@ -101,6 +101,7 @@ from app.polaris import (
     sky_level,
     sidebar_kv_html,
     loose_commands_html,
+    reasoning_first_html,
     source_line_html,
     stopped_html,
     thinking_html,
@@ -479,7 +480,7 @@ def _answer_turn(question, option, mode, compare_on, left, right, index_dir, *, 
 
     key = f"answer-{len(st.session_state.messages)}"
     monitor.plan([("", option.name, mode)])
-    rec = _answer_record(
+    rec, view = _answer_record(
         question,
         mode,
         option,
@@ -496,8 +497,8 @@ def _answer_turn(question, option, mode, compare_on, left, right, index_dir, *, 
             return False
         st.session_state.messages.append({"role": "assistant", "error": st.session_state.pop("last_error", "")})
         return False
-    _render_card(rec, key=key, slot=slot)
     st.session_state.messages.append({"role": "assistant", "record": rec})
+    view.finish(rec)
     return True
 
 
@@ -1042,8 +1043,9 @@ def _answer_record(
     tag="",
     show_error=True,
 ):
-    """Stream one answer into slot and return its run record, or None if it was stopped or failed. On success the
-    caller draws the finished card into the same slot; `key` is that card's key."""
+    """Stream one answer into slot. Returns its run record and the view it streamed into, or (None, None) if it was
+    stopped or failed. The caller stores the record, then calls view.finish, so the card that streamed is the card
+    that stays; `key` is its key."""
     run = monitor.begin(side)
     missing = _still_missing(option, names)
     if missing:
@@ -1053,7 +1055,7 @@ def _answer_record(
             slot.error(missing)
         else:
             slot.empty()
-        return None
+        return None, None
     events = queue.Queue()
     answer = stream_answer_question(
         question,
@@ -1073,43 +1075,46 @@ def _answer_record(
     done = False
     try:
         with slot.container(key=f"live-{key}"):
-            st.markdown(card_head_html(mode, tag), unsafe_allow_html=True)
-            body = st.container()
-            status = st.empty()
-            status.markdown(thinking_html(live_phase_label(mode)), unsafe_allow_html=True)
+            view = _AnswerView(mode, tag)
+        view.status.markdown(thinking_html(live_phase_label(mode)), unsafe_allow_html=True)
+        weak = False
 
-            def on_event(kind, value):
-                if kind == "retrieval":
-                    monitor.retrieval(run, value)
-                    label = live_phase_label(mode, retrieved=True, weak=value.weak)
-                    status.markdown(thinking_html(label), unsafe_allow_html=True)
-                    return
-                if run["trace"].last is None:
-                    status.empty()
-                monitor.progress(run, value)
+        def on_event(kind, value):
+            nonlocal weak
+            if kind == "retrieval":
+                monitor.retrieval(run, value)
+                weak = value.weak
+                if weak:
+                    # No generation: the abstain card is drawn when the turn finishes, so the cube stops here.
+                    view.status.empty()
+                else:
+                    view.status.markdown(thinking_html(live_phase_label(mode, retrieved=True)),
+                                         unsafe_allow_html=True)
+                return
+            monitor.progress(run, value)
 
-            worker.start()
-            view = body.empty()
-            text, reasoning_note = "", False
-            for piece in _stream_text(events, on_event):
-                text += piece
-                parsed = parse_answer(text, mode, n_hits=len(run.get("hits") or ()), streaming=True)
-                if parsed.reasoning_open != reasoning_note:
-                    reasoning_note = parsed.reasoning_open
-                    if reasoning_note:
-                        status.markdown(thinking_html("Writing its reasoning, hidden until you open it"),
-                                        unsafe_allow_html=True)
-                    else:
-                        status.empty()
-                with view.container():
-                    _render_answer(parsed)
+        worker.start()
+        text, status = "", "loader"
+        for piece in _stream_text(events, on_event):
+            if weak:
+                continue
+            text += piece
+            parsed = parse_answer(text, mode, n_hits=len(run.get("hits") or ()), streaming=True)
+            view.show(parsed)
+            now = "reasoning" if parsed.reasoning_open else None
+            if now != status:
+                status = now
+                if now:
+                    view.status.markdown(reasoning_first_html(), unsafe_allow_html=True)
+                else:
+                    view.status.empty()
         result = answer.result
         done = True
     except ChatCancelled:
         st.session_state.last_cancelled = True
         monitor.end(run, "stopped")
         slot.empty()
-        return None
+        return None, None
     except requests.RequestException as e:
         message = _ollama_error_text(e)
         st.session_state.last_error = message
@@ -1118,7 +1123,7 @@ def _answer_record(
             slot.error(message)
         else:
             slot.empty()
-        return None
+        return None, None
     finally:
         if not done:
             answer.cancel()
@@ -1131,7 +1136,7 @@ def _answer_record(
     st.session_state.setdefault("live_traces", {})[key] = run["trace"].frozen()
     st.session_state.run_records.append(rec)
     st.session_state.warmed = True
-    return rec
+    return rec, view
 
 
 def _run_compare(question, left, right, retriever, index_dir, *, monitor, names=None, context=None):
@@ -1159,7 +1164,7 @@ def _run_compare(question, left, right, retriever, index_dir, *, monitor, names=
             )
             with col_l:
                 left_slot = st.empty()
-                recs[0] = _answer_record(
+                recs[0], view = _answer_record(
                     question,
                     left_mode,
                     left.option,
@@ -1177,9 +1182,7 @@ def _run_compare(question, left, right, retriever, index_dir, *, monitor, names=
                 if recs[0] is not None:
                     unanswered[0] = None
                     _keep_compare(messages, message, recs, unanswered)
-                    _render_card(
-                        recs[0], key=f"answer-h{message_index}-l", align_slots=True, model=left_tag, slot=left_slot
-                    )
+                    view.finish(recs[0], align_slots=True)
                 else:
                     unanswered[0] = _side_outcome(left_mode, left_model)
                     _render_unanswered_side(unanswered[0], key=f"answer-h{message_index}-l", model=left_tag)
@@ -1190,7 +1193,7 @@ def _run_compare(question, left, right, retriever, index_dir, *, monitor, names=
                 return tuple(recs), tuple(unanswered)
             with col_r:
                 right_slot = st.empty()
-                recs[1] = _answer_record(
+                recs[1], view = _answer_record(
                     question,
                     right_mode,
                     right.option,
@@ -1208,9 +1211,7 @@ def _run_compare(question, left, right, retriever, index_dir, *, monitor, names=
                 if recs[1] is not None:
                     unanswered[1] = None
                     _keep_compare(messages, message, recs, unanswered)
-                    _render_card(
-                        recs[1], key=f"answer-h{message_index}-r", align_slots=True, model=right_tag, slot=right_slot
-                    )
+                    view.finish(recs[1], align_slots=True)
                 else:
                     unanswered[1] = _side_outcome(right_mode, right_model)
                     _render_unanswered_side(unanswered[1], key=f"answer-h{message_index}-r", model=right_tag)
@@ -1290,45 +1291,111 @@ def _replay_message(msg, index, compact_compare=False):
     st.markdown(msg.get("content") or "")
 
 
-def _render_card(record, key, align_slots=False, slot=None, model=""):
-    mode = record.get("mode") or ""
-    abstained = bool(record.get("abstained"))
-    with (slot.container(key=key) if slot is not None else st.container(key=key)):
-        st.markdown(card_head_html(mode, model), unsafe_allow_html=True)
-        if abstained:
-            st.markdown(idk_card_html(record), unsafe_allow_html=True)
-        else:
-            hits = record.get("hits") or []
-            parsed = parse_answer(record.get("answer") or "", mode, n_hits=len(hits))
-            _render_answer(parsed)
-            st.markdown(source_line_html(parsed, mode, hits), unsafe_allow_html=True)
-        if uses_rag(mode):
-            st.markdown(evidence_block_html(record, collapsed=True), unsafe_allow_html=True)
-        elif align_slots:
-            st.markdown(empty_slot_html("ev", f"No sources in {mode_name(mode)}"), unsafe_allow_html=True)
-        if abstained:
-            st.markdown(best_match_html(record), unsafe_allow_html=True)
-        elif align_slots:
-            st.markdown(empty_slot_html("best"), unsafe_allow_html=True)
-        st.markdown(metrics_html(record), unsafe_allow_html=True)
+def _render_card(record, key, align_slots=False, model=""):
+    with st.container(key=key):
+        view = _AnswerView(record.get("mode") or "", model)
+    view.finish(record, align_slots=align_slots)
 
 
-def _render_answer(parsed):
-    """One answer, live or finished, from the same parse: reasoning folded away, then the blocks in order, each
-    command its own st.code box with Streamlit's copy button. Step numbers are the parser's, so a code box
-    between two steps can't restart the list at 1."""
-    if parsed.reasoning:
-        with st.expander("Show reasoning", expanded=False):
-            st.markdown(safe_markdown(parsed.reasoning))
-    noted = False
+def _answer_parts(parsed):
+    """The answer's blocks as the values its slots show, in order: ("md", text), ("code", text, lang) or
+    ("html", html) for the app's own note. Step numbers are the parser's, so a code box between two steps
+    can't restart the list at 1."""
+    parts, noted = [], False
     for block in parsed.blocks:
         if block.loose and not noted:
             noted = True
-            st.markdown(loose_commands_html(len(parsed.loose)), unsafe_allow_html=True)
+            parts.append(("html", loose_commands_html(len(parsed.loose))))
         if block.kind == "code":
-            st.code(block.text, language=block.lang or "bash")
+            parts.append(("code", block.text, block.lang or "bash"))
         else:
-            st.markdown(safe_markdown(block.text))
+            parts.append(("md", block.text))
+    return parts
+
+
+def _draw_part(slot, part):
+    kind = part[0]
+    if kind == "code":
+        slot.code(part[1], language=part[2])
+    elif kind == "md":
+        slot.markdown(safe_markdown(part[1]))
+    else:
+        slot.markdown(part[1], unsafe_allow_html=True)
+
+
+class _AnswerView:
+    """One answer, streaming or replayed, in a container built once: head, reasoning, blocks, loader, footer.
+
+    Streamlit keeps the children of a container that is sent again, so redrawing a whole container per chunk
+    leaves rows of an earlier, longer draft under the new text until the run ends. Here every block has its own
+    slot, rewritten only when its content changes, and slots the answer no longer needs are emptied. A replay
+    builds the same slots and draws the finished answer once, so streamed, finished and replayed cards match."""
+
+    def __init__(self, mode, model=""):
+        self.mode = mode
+        st.markdown(card_head_html(mode, model), unsafe_allow_html=True)
+        self._reasoning = st.empty()
+        self._reasoning_body = None
+        self._reasoning_shown = None
+        self._blocks = st.container()
+        self._slots, self._shown = [], []
+        self.status = st.empty()
+        self._foot = st.container()
+
+    def show(self, parsed):
+        self._show_reasoning(parsed.reasoning)
+        self._show_parts(_answer_parts(parsed))
+
+    def _show_reasoning(self, text):
+        if not text:
+            if self._reasoning_body is not None:
+                self._reasoning.empty()
+                self._reasoning_body = self._reasoning_shown = None
+            return
+        if self._reasoning_body is None:
+            with self._reasoning.container():
+                self._reasoning_body = st.expander("Show reasoning", expanded=False).empty()
+        if text != self._reasoning_shown:
+            self._reasoning_body.markdown(safe_markdown(text))
+            self._reasoning_shown = text
+
+    def _show_parts(self, parts):
+        for i, part in enumerate(parts):
+            if i == len(self._slots):
+                self._slots.append(self._blocks.empty())
+                self._shown.append(None)
+            if self._shown[i] != part:
+                _draw_part(self._slots[i], part)
+                self._shown[i] = part
+        for i in range(len(parts), len(self._slots)):
+            if self._shown[i] is not None:
+                self._slots[i].empty()
+                self._shown[i] = None
+
+    def finish(self, record, align_slots=False):
+        """The finished answer from its record: the final parse (or the abstain card), then sources and metrics."""
+        mode = self.mode
+        hits = record.get("hits") or []
+        abstained = bool(record.get("abstained"))
+        self.status.empty()
+        if abstained:
+            self._show_reasoning("")
+            self._show_parts([("html", idk_card_html(record))])
+        else:
+            parsed = parse_answer(record.get("answer") or "", mode, n_hits=len(hits))
+            self.show(parsed)
+        with self._foot:
+            if not abstained:
+                st.markdown(source_line_html(parsed, mode, hits), unsafe_allow_html=True)
+            if uses_rag(mode):
+                st.markdown(evidence_block_html(record, collapsed=True), unsafe_allow_html=True)
+            elif align_slots:
+                st.markdown(empty_slot_html("ev", f"No sources in {mode_name(mode)}"), unsafe_allow_html=True)
+            if abstained:
+                st.markdown(best_match_html(record), unsafe_allow_html=True)
+            elif align_slots:
+                st.markdown(empty_slot_html("best"), unsafe_allow_html=True)
+            st.markdown(metrics_html(record), unsafe_allow_html=True)
 
 
 if __name__ == "__main__":

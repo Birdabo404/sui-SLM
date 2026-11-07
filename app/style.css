@@ -301,7 +301,7 @@ p.stopped{margin:0;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-
 :is([class*="st-key-answer"],[class*="st-key-live-"]){gap:var(--s-3);padding:0 0 0 1.4em;background:transparent;border:0}
 :is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stMarkdownContainer"] p,
 :is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stMarkdownContainer"] li{font:400 var(--fs-body)/var(--lh-body) var(--f-sans);color:var(--c-text);max-width:68ch}
-[class*="st-key-answer"]:has(.polaris-idk-flag){border:1px dashed var(--c-idk);border-radius:var(--r-lg);padding:var(--s-4)}
+:is([class*="st-key-answer"],[class*="st-key-live-"]):has(.polaris-idk-flag){border:1px dashed var(--c-idk);border-radius:var(--r-lg);padding:var(--s-4)}
 .card-head{display:flex;align-items:center;gap:var(--s-2);min-width:0;font:400 var(--fs-cap)/1 var(--f-ui);color:var(--c-text-3)}
 .card-head .mode{flex:none;padding:4px 7px;border:1px solid var(--c-line-strong);border-radius:var(--r-xs);background:var(--c-raised);color:var(--c-text);font-weight:600}
 .card-head .model{flex:0 1 auto;min-width:0;max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--f-mono);color:var(--c-text-2)}
@@ -377,6 +377,7 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(-
 .stat b{font-weight:600;color:var(--c-text);font-variant-numeric:tabular-nums}
 .stat.calc{border-color:transparent;background:transparent;padding:0 2px;font-variant-numeric:tabular-nums}
 .stat.na{border-style:dashed;border-color:var(--c-line-strong);background:transparent}
+.stat.warn{border-color:color-mix(in oklch,var(--c-danger) 55%,transparent);background:transparent;color:var(--c-danger)}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 
 .idk-body{display:grid;grid-template-columns:24px 1fr;column-gap:var(--s-3);row-gap:var(--s-1)}
@@ -476,29 +477,27 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(-
 .cmp-top .card-head .sub{display:none}
 .cmp-top .card-head .model{max-width:none}
 
-/* ---------- loader: a 3×3 constellation breathing out from its star ---------- */
+/* ---------- loader: an ASCII cube turning until the first text ----------
+ * Every frame is in one reel of text; a single steps() keyframe slides the reel one frame (8 lines) at a time,
+ * 12 frames per quarter turn at 10 fps. It is a transform on one small layer, gone once the first text lands. */
 .thinking{display:flex;align-items:center;gap:var(--s-3);min-height:40px;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-text-2)}
-.thinking .dots{display:grid;grid-template-columns:repeat(3,5px);grid-auto-rows:5px;gap:4px;flex:none}
-.thinking .dots i{width:5px;height:5px;border-radius:50%;background:var(--c-text-2);opacity:.2;transform:scale(.55);
-  animation:polaris-breathe 1.8s var(--ease-breathe) var(--d,0s) infinite both;will-change:transform,opacity}
-.thinking .dots i:nth-child(5){background:var(--c-star);--d:0s}
-.thinking .dots i:nth-child(2n){--d:.16s}
-.thinking .dots i:is(:nth-child(1),:nth-child(3),:nth-child(7),:nth-child(9)){--d:.32s}
-@keyframes polaris-breathe{0%,100%{opacity:.2;transform:scale(.55)}42%{opacity:1;transform:scale(1)}}
+.cube{--cube-lh:7px;flex:none;display:block;height:calc(var(--cube-lh) * 8 - 1px);overflow:hidden;contain:strict;width:calc(16 * 0.6 * 8.5px)}
+.cube-reel{display:block;white-space:pre;font:400 8.5px/var(--cube-lh) var(--f-mono);letter-spacing:0;color:var(--c-text-2);
+  animation:polaris-cube 1.2s steps(12) infinite;will-change:transform}
+@keyframes polaris-cube{to{transform:translateY(-100%)}}
+.cube.still .cube-reel{animation:none;will-change:auto;color:var(--c-text-3)}
 .thinking-text{display:flex;flex-direction:column;gap:2px;min-width:0}
-/* one plain label for what is running; the dots are the only thing that moves */
+/* one plain label for what is running; the cube is the only thing that moves */
 .thinking-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--c-text)}
 .thinking-note{font-size:var(--fs-cap);color:var(--c-text-3);opacity:0;animation:polaris-fade-in .4s var(--ease-out) 15s forwards}
 @keyframes polaris-fade-in{to{opacity:1}}
 .queued-label{color:var(--c-text-3)}
-.thinking.queued .dots i{animation:none;opacity:.35;transform:scale(.7);will-change:auto}
-.thinking.queued .dots i:nth-child(5){opacity:.6}
 .thinking.queued{color:var(--c-text-3)}
+:is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stMarkdownContainer"] p.reasoning-first{margin:0;font:400 var(--fs-cap)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
 @media (prefers-reduced-motion:reduce){
   [data-testid="stMarkdownContainer"] .sky{animation:none;transition-duration:.15s}
   .q,.thinking,p.stopped,.cmp-compact,.card,.st-key-composer-dock,.st-key-stop-gen{animation:polaris-fade-in .15s linear both!important}
-  .thinking .dots i{transform:none;animation-name:polaris-breathe-reduced;animation-duration:2.4s}
-  @keyframes polaris-breathe-reduced{0%,100%{opacity:.3}50%{opacity:.9}}
+  .cube-reel{animation:none;will-change:auto}
   .thinking-note{animation-duration:1ms}
   [class*="st-key-tab-on-"] [class*="st-key-tab-open-"] button::before{animation:none!important}
 }
@@ -629,6 +628,7 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(-
 /* the open tab shows a gold dot while its answer streams */
 :root:has(.polaris-generating) [class*="st-key-tab-on-"] [class*="st-key-tab-open-"] button::before{content:"";flex:none;width:6px;height:6px;margin-right:var(--s-2);
   border-radius:50%;background:var(--c-star);animation:polaris-breathe 1.8s var(--ease-breathe) infinite both}
+@keyframes polaris-breathe{0%,100%{opacity:.2;transform:scale(.55)}42%{opacity:1;transform:scale(1)}}
 /* History and New sit after the tabs, like a browser's tab-search and + buttons */
 .st-key-tabbar > :nth-child(n+2){flex:none;width:auto!important;margin-bottom:5px}
 :is(.st-key-tab-history [data-testid="stPopoverButton"],.st-key-new-chat button){min-height:30px;height:30px;padding:0 var(--s-2);border:0;border-radius:var(--r-sm);

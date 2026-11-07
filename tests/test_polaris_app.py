@@ -83,10 +83,20 @@ class _Retriever:
         return [dict(HIT)]
 
 
+def _ndjson(pieces, done_reason="stop"):
+    return [
+        *({"message": {"role": "assistant", "content": piece}, "done": False} for piece in pieces),
+        {"message": {"role": "assistant", "content": ""}, "done": True, "done_reason": done_reason, "eval_count": 20,
+         "eval_duration": 2_000_000_000, "prompt_eval_count": 40, "prompt_eval_duration": 500_000_000,
+         "load_duration": 100_000_000},
+    ]
+
+
 class _NdjsonOllama(BaseHTTPRequestHandler):
-    """/api/chat streaming two text deltas and Ollama's terminal record."""
+    """/api/chat streaming `events`: by default two text deltas and Ollama's terminal record."""
 
     bodies = []
+    events = _ndjson(["Use ", "`tar -xzf`."])
 
     def do_POST(self):
         size = int(self.headers.get("Content-Length") or 0)
@@ -94,13 +104,7 @@ class _NdjsonOllama(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson")
         self.end_headers()
-        for event in (
-            {"message": {"role": "assistant", "content": "Use "}, "done": False},
-            {"message": {"role": "assistant", "content": "`tar -xzf`."}, "done": False},
-            {"message": {"role": "assistant", "content": ""}, "done": True, "eval_count": 20,
-             "eval_duration": 2_000_000_000, "prompt_eval_count": 40, "prompt_eval_duration": 500_000_000,
-             "load_duration": 100_000_000},
-        ):
+        for event in type(self).events:
             self.wfile.write(json.dumps(event).encode("utf-8") + b"\n")
             self.wfile.flush()
 
@@ -421,14 +425,63 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertIn("tok/s unavailable", html)
         self.assertNotRegex(html, r"<b>[\d.]+</b> tok/s")
 
-    def test_the_real_stream_renders_and_logs_through_the_app(self):
+    def _ollama(self, events=None):
         _NdjsonOllama.bodies = []
+        _NdjsonOllama.events = events or _ndjson(["Use ", "`tar -xzf`."])
         server = ThreadingHTTPServer(("127.0.0.1", 0), _NdjsonOllama)
         server.daemon_threads = True
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
-        host = f"http://127.0.0.1:{server.server_address[1]}"
+        return f"http://127.0.0.1:{server.server_address[1]}"
+
+    def _ask_real(self, question, events=None, mode="base", dense=0.7):
+        host = self._ollama(events)
+        retriever = MagicMock(HybridRetriever=lambda index_dir: MagicMock(
+            retrieve=lambda *a, **k: [dict(HIT, dense=dense)]))
+        self.streamlit.cache_resource.clear()
+        self.at.session_state["mode"] = mode
+        with patch("app.streaming.stream_answer_question", REAL_STREAM), patch("app.streaming.OLLAMA_HOST", host), \
+                patch("app.engine.LOG_CSV", Path(tempfile.mkdtemp()) / "answers.csv"), \
+                patch("app.engine.index_ok", return_value=True), patch.dict(sys.modules, {"rag.query_hybrid": retriever}):
+            self.at.run()
+            self._ask(question, "landing")
+        self.assertFalse(self.at.exception)
+
+    def test_a_numbered_draft_before_answer_stays_under_show_reasoning(self):
+        draft = ("Reasoning:\n1. The excerpts show `chmod 600` gives the owner read and write.\n"
+                 "2. `ls -l` shows the result.\n3. A third draft line, longer than the answer.\n\nAnswer:\n"
+                 "To make a file readable only by you:\n1. Remove group and other access:\n"
+                 "```bash\nchmod 600 <path/to/file>\n```\n2. Check it:\n```bash\nls -l <path/to/file>\n```\nSource: [1]")
+        self._ask_real("make a file readable only by me", _ndjson([draft[i:i + 7] for i in range(0, len(draft), 7)]),
+                       mode="full")
+        (body,) = _NdjsonOllama.bodies
+        self.assertEqual(sorted(body["options"]), ["num_ctx", "temperature"])
+        self.assertEqual((body["think"], body["options"]["temperature"]), (False, 0.2))
+        (reasoning,) = self.at.expander
+        self.assertEqual(reasoning.label, "Show reasoning")
+        self.assertIn("The excerpts show", reasoning.markdown[0].value)
+        answer = [m.value for m in self.at.markdown if m not in reasoning.markdown]
+        self.assertFalse([m for m in answer if "excerpts" in m or "draft line" in m])
+        self.assertEqual([c.value for c in self.at.code], ["chmod 600 <path/to/file>", "ls -l <path/to/file>"])
+        self.assertEqual(self.store.load_chat(self._chat_id()).messages[1]["record"]["done_reason"], "stop")
+        self.assertNotIn("cut off", self._html())
+
+    def test_an_answer_cut_at_a_length_limit_says_so(self):
+        self._ask_real("extract a .tar.gz file", _ndjson(["Use ", "`tar -x"], done_reason="length"))
+        self.assertEqual(len(_NdjsonOllama.bodies), 1)
+        self.assertIn("cut off at a length limit", self._html())
+
+    def test_a_weak_retrieval_never_calls_the_model(self):
+        self._ask_real("what's the lab wi-fi password?", mode="full", dense=0.1)
+        self.assertEqual(_NdjsonOllama.bodies, [])
+        html = self._html()
+        self.assertIn("No fix on this one", html)
+        self.assertNotIn('class="cube"', html)
+        self.assertEqual(self.at.code, [])
+
+    def test_the_real_stream_renders_and_logs_through_the_app(self):
+        host = self._ollama()
         log = Path(tempfile.mkdtemp()) / "answers.csv"
         with patch("app.streaming.stream_answer_question", REAL_STREAM), patch("app.streaming.OLLAMA_HOST", host), \
                 patch("app.engine.LOG_CSV", log):
