@@ -307,13 +307,24 @@ p.stopped{margin:0;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-
 .card-head .model{flex:0 1 auto;min-width:0;max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--f-mono);color:var(--c-text-2)}
 .card-head .sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
-.prose{font:400 var(--fs-body)/var(--lh-body) var(--f-sans);color:var(--c-text);margin:0 0 var(--s-3)}
-.cmd{margin:0 0 var(--s-3);padding:var(--s-3);background:var(--c-raised);border:1px solid var(--c-line);border-radius:var(--r-sm);
-  font:400 var(--fs-ui)/var(--lh-ui) var(--f-mono);color:var(--c-text);overflow:auto}
-/* Command boxes stay a dark terminal in both themes: a command reads the same wherever it is pasted from. */
-[data-testid="stCode"]{--term-bg:oklch(0.15 0.03 260);--term-line:oklch(0.3 0.04 260);--term-text:oklch(0.93 0.012 250)}
+/* Command boxes stay a dark terminal in both themes: a command reads the same wherever it is pasted from.
+   Phosphor palette, one meaning per ink: command names green, strings and $variables amber, flags sand where
+   Prism marks them (its bash grammar leaves most plain), arguments and paths plain, operators, redirections and
+   the <placeholder> brackets dim. Prism only knows command names from a list, so a group named sudo is green
+   too. Streamlit's blue, extra-bold command names are replaced; contrast is measured on --term-bg. */
+[data-testid="stCode"]{--term-bg:oklch(0.15 0.03 260);--term-line:oklch(0.3 0.04 260);--term-text:oklch(0.9 0.012 250);
+  --term-cmd:oklch(0.82 0.1 152);    /* 11.7:1 */
+  --term-flag:oklch(0.8 0.045 85);   /* 10.5:1 */
+  --term-str:oklch(0.82 0.085 75);   /* 11.2:1 */
+  --term-dim:oklch(0.66 0.03 254)}   /* 6.3:1 */
 [data-testid="stCode"] pre{background:var(--term-bg)!important;border:1px solid var(--term-line);border-radius:var(--r-sm);padding:var(--s-3) calc(var(--s-4) + 32px) var(--s-3) var(--s-4)!important}
 [data-testid="stCode"] code{font:400 var(--fs-ui)/1.55 var(--f-mono)!important;color:var(--term-text)}
+[data-testid="stCode"] pre code :is(.token.function,.token.builtin,.token.class-name,.token.keyword,.token.selector){color:var(--term-cmd);font-weight:600}
+[data-testid="stCode"] pre code :is(.token.parameter,.token.attr-name,.token.property){color:var(--term-flag);font-weight:400}
+[data-testid="stCode"] pre code :is(.token.string,.token.char,.token.attr-value,.token.variable:not(.parameter),.token.environment){color:var(--term-str)}
+[data-testid="stCode"] pre code :is(.token.operator,.token.punctuation,.token.file-descriptor,.token.entity){color:var(--term-dim)}
+[data-testid="stCode"] pre code :is(.token.number,.token.boolean,.token.constant,.token.symbol,.token.regex,.token.url,.token.assign-left){color:var(--term-text)}
+[data-testid="stCode"] pre code :is(.token.comment,.token.prolog,.token.shebang){color:var(--term-dim);font-style:italic;font-weight:400}
 :root:has(.polaris-daylight) [data-testid="stCode"] pre{border-color:transparent}
 /* Streamlit's copy button only shows on hover; keep it visible so touch screens and keyboards can find it. */
 [data-testid="stCode"] div:has(> [data-testid="stCodeCopyButton"]){opacity:1!important}
