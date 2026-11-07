@@ -37,8 +37,6 @@ from app.polaris import (
     DELETE_ASK,
     EXAMPLES,
     HISTORY_EMPTY,
-    CancellableChat,
-    ChatCancelled,
     avg_latency,
     best_match_html,
     build_run_record,
@@ -89,6 +87,7 @@ from app.polaris import (
     waiting_html,
     warm_label,
 )
+from app.streaming import CancellableChat, ChatCancelled
 from shared.frozen import format_threshold, load_frozen
 
 

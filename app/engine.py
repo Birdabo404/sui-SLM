@@ -198,13 +198,13 @@ def keep_alive_setting(environ=None):
     return environ.get("OLLAMA_KEEP_ALIVE") or DEFAULT_KEEP_ALIVE
 
 
-def ollama_chat_body(messages, model, temperature=0.2, seed=None, keep_alive=None):
+def ollama_chat_body(messages, model, temperature=0.2, seed=None, keep_alive=None, stream=False):
     options = {"temperature": temperature, "num_ctx": NUM_CTX}
     if seed is not None:
         options["seed"] = seed
     body = {
         "model": model,
-        "stream": False,
+        "stream": bool(stream),
         "think": False,
         "messages": messages,
         "options": options,
@@ -439,76 +439,29 @@ def _csv_metric(value):
     return "" if value is None else f"{value:.4f}"
 
 
-def answer_question(
+def _finalize_answer(
+    result,
+    *,
     question,
     mode,
     model,
-    retriever=None,
-    chat_fn=None,
-    k=None,
-    threshold=None,
-    log_path=None,
-    model_key="base",
-    temperature=0.2,
-    seed=None,
-    extra_log=None,
-    log_fields=None,
-    log_commit=None,
-    keep_alive=None,
-    git_sha=None,
-    model_info=None,
-    context=None,
+    model_key,
+    hits,
+    weak,
+    context_turns,
+    started_at,
+    ram,
+    threshold,
+    k,
+    log_path,
+    extra_log,
+    log_fields,
+    log_commit,
+    git_sha,
+    model_info,
 ):
-    k = K if k is None else k
-    threshold = WEAK_DENSE if threshold is None else threshold
-    if chat_fn is None:
-        def chat_fn(messages, model_name):
-            return ollama_chat_result(
-                messages,
-                model_name,
-                temperature=temperature,
-                seed=seed,
-                keep_alive=keep_alive,
-            )
-    else:
-        configure = getattr(chat_fn, "configure", None)
-        if configure is not None:
-            configure(
-                temperature=temperature,
-                seed=seed,
-                keep_alive=keep_alive,
-            )
-
-    t0 = time.perf_counter()
-    sampler = RamSampler()
-    sampler.start()
-    hits = []
-    weak = False
-    context_turns = 0
-    result = OllamaChatResult(text="")
-    try:
-        if uses_rag(mode):
-            if retriever is None:
-                raise RuntimeError("RAG index is not loaded")
-            retrieval_query = question if context is None else context.retrieval_query
-            hits = retriever.retrieve(retrieval_query, k=k, tldr_lane=True)
-            weak = is_weak(hits, threshold=threshold)
-            messages = build_messages(question, hits, mode)
-            if context is not None:
-                messages, context_turns = context.apply_with_count(messages)
-            if weak:
-                result = OllamaChatResult(text=ABSTAIN)
-            else:
-                result = _chat_result(chat_fn(messages, model))
-        else:
-            messages = build_messages(question, hits, mode)
-            if context is not None:
-                messages, context_turns = context.apply_with_count(messages)
-            result = _chat_result(chat_fn(messages, model))
-    finally:
-        ram = sampler.stop()
     text = result.text
-    latency = time.perf_counter() - t0
+    latency = time.perf_counter() - started_at
     gen_s = _seconds(result.eval_duration)
     prompt_s = _seconds(result.prompt_eval_duration)
     load_s = _seconds(result.load_duration)
@@ -577,3 +530,93 @@ def answer_question(
         "model_digest": model_info.model_digest,
         **ram,
     }
+
+
+def answer_question(
+    question,
+    mode,
+    model,
+    retriever=None,
+    chat_fn=None,
+    k=None,
+    threshold=None,
+    log_path=None,
+    model_key="base",
+    temperature=0.2,
+    seed=None,
+    extra_log=None,
+    log_fields=None,
+    log_commit=None,
+    keep_alive=None,
+    git_sha=None,
+    model_info=None,
+    context=None,
+):
+    k = K if k is None else k
+    threshold = WEAK_DENSE if threshold is None else threshold
+    if chat_fn is None:
+        def chat_fn(messages, model_name):
+            return ollama_chat_result(
+                messages,
+                model_name,
+                temperature=temperature,
+                seed=seed,
+                keep_alive=keep_alive,
+            )
+    else:
+        configure = getattr(chat_fn, "configure", None)
+        if configure is not None:
+            configure(
+                temperature=temperature,
+                seed=seed,
+                keep_alive=keep_alive,
+            )
+
+    t0 = time.perf_counter()
+    sampler = RamSampler()
+    sampler.start()
+    hits = []
+    weak = False
+    context_turns = 0
+    result = OllamaChatResult(text="")
+    try:
+        if uses_rag(mode):
+            if retriever is None:
+                raise RuntimeError("RAG index is not loaded")
+            retrieval_query = question if context is None else context.retrieval_query
+            hits = retriever.retrieve(retrieval_query, k=k, tldr_lane=True)
+            weak = is_weak(hits, threshold=threshold)
+            messages = build_messages(question, hits, mode)
+            if context is not None:
+                messages, context_turns = context.apply_with_count(messages)
+            if weak:
+                result = OllamaChatResult(text=ABSTAIN)
+            else:
+                result = _chat_result(chat_fn(messages, model))
+        else:
+            messages = build_messages(question, hits, mode)
+            if context is not None:
+                messages, context_turns = context.apply_with_count(messages)
+            result = _chat_result(chat_fn(messages, model))
+    finally:
+        ram = sampler.stop()
+    return _finalize_answer(
+        result,
+        question=question,
+        mode=mode,
+        model=model,
+        model_key=model_key,
+        hits=hits,
+        weak=weak,
+        context_turns=context_turns,
+        started_at=t0,
+        ram=ram,
+        threshold=threshold,
+        k=k,
+        log_path=log_path,
+        extra_log=extra_log,
+        log_fields=log_fields,
+        log_commit=log_commit,
+        git_sha=git_sha,
+        model_info=model_info,
+    )

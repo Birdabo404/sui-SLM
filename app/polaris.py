@@ -6,35 +6,27 @@ app.engine.answer_question.
 from __future__ import annotations
 
 import csv
-import http.client
 import io
 import json
 import os
 import random
 import re
-import socket
-import threading
-from contextlib import contextmanager
 from html import escape
 from pathlib import Path
 from typing import TypedDict
-from urllib.parse import urlsplit
 
 import psutil
-import requests
 
 from app.engine import (
     MODE_LABELS,
     MODE_SUBS,
     MODE_SUFFIX,
-    OLLAMA_HOST,
     THESIS_CONFIGS,
     config_id,
     mode_choices,
-    ollama_chat_body,
-    parse_ollama_chat_response,
     uses_rag,
 )
+from app.streaming import CancellableChat, ChatCancelled
 from shared.frozen import format_threshold
 
 STAR_SVG = (
@@ -149,103 +141,6 @@ SOURCE_KEY_RULES = (
     ("ubuntu", "UBUNTU-HELP"),
     ("help", "UBUNTU-HELP"),
 )
-
-
-class ChatCancelled(Exception):
-    """The user stopped the answer before Ollama replied."""
-
-
-class CancellableChat:
-    """chat_fn for answer_question that the UI can stop.
-
-    Sends the same body as engine.ollama_chat. cancel() shuts the socket down, which unblocks the waiting
-    thread and makes Ollama abandon the generation instead of finishing it in the background.
-    """
-
-    def __init__(self, host=None, timeout=300, temperature=0.2, seed=None, keep_alive=None):
-        self._url = urlsplit((host or OLLAMA_HOST).rstrip("/") + "/api/chat")
-        self._timeout = timeout
-        self._temperature = temperature
-        self._seed = seed
-        self._keep_alive = keep_alive
-        self._lock = threading.Lock()
-        self._conn = None
-        self._committed = False
-        self.cancelled = False
-
-    def configure(self, *, temperature, seed, keep_alive):
-        with self._lock:
-            self._temperature = temperature
-            self._seed = seed
-            self._keep_alive = keep_alive
-
-    def __call__(self, messages, model):
-        conn = http.client.HTTPConnection(self._url.hostname, self._url.port or 80, timeout=self._timeout)
-        conn.auto_open = 0
-        body = json.dumps(
-            ollama_chat_body(
-                messages,
-                model,
-                temperature=self._temperature,
-                seed=self._seed,
-                keep_alive=self._keep_alive,
-            )
-        ).encode("utf-8")
-        try:
-            conn.connect()
-        except (OSError, http.client.HTTPException) as e:
-            conn.close()
-            if self.cancelled:
-                raise ChatCancelled() from e
-            raise requests.ConnectionError(str(e)) from e
-        with self._lock:
-            if self.cancelled:
-                conn.close()
-                raise ChatCancelled()
-            self._conn = conn
-        try:
-            conn.request("POST", self._url.path, body=body, headers={"Content-Type": "application/json"})
-            resp = conn.getresponse()
-            data = resp.read()
-        except (OSError, http.client.HTTPException) as e:
-            if self.cancelled:
-                raise ChatCancelled() from e
-            raise requests.ConnectionError(str(e)) from e
-        finally:
-            with self._lock:
-                if self._conn is conn:
-                    self._conn = None
-            conn.close()
-        if self.cancelled:
-            raise ChatCancelled()
-        if resp.status >= 400:
-            raise requests.HTTPError(f"Ollama returned HTTP {resp.status}")
-        return parse_ollama_chat_response(json.loads(data))
-
-    @contextmanager
-    def commit(self):
-        with self._lock:
-            if self.cancelled:
-                raise ChatCancelled()
-            if self._committed:
-                raise RuntimeError("chat result already committed")
-            self._committed = True
-        yield
-
-    def cancel(self):
-        with self._lock:
-            if self._committed:
-                return
-            self.cancelled = True
-            conn = self._conn
-        sock = getattr(conn, "sock", None)
-        if sock is not None:
-            try:
-                sock.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
-        if conn is not None:
-            conn.close()
 
 
 SKY_COLS, SKY_ROWS = 220, 56
