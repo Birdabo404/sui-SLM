@@ -110,6 +110,8 @@ class Block:
     derived: bool = False
     # A command written after the last step that the answer doesn't tie to any step.
     loose: bool = False
+    # Which line of a fence split into one box per command; 0 for the first or an unsplit fence.
+    piece: int = 0
 
 
 @dataclass(frozen=True)
@@ -253,10 +255,12 @@ def parse_answer(text, mode="", n_hits=0, streaming=False):
                 j += 1
             code = _dedent(lines[i + 1:j], indent)
             is_open = j >= len(lines)
-            lang = lang.lower()
+            lang = "bash" if lang.lower() in _SHELL_LANGS else lang.lower()
             if code or is_open:
-                blocks.append(Block("code", code, step_no, "bash" if lang in _SHELL_LANGS else lang, is_open,
-                                    gap=i > 0 and not lines[i - 1].strip(), indented=bool(indent)))
+                gap = i > 0 and not lines[i - 1].strip()
+                pieces = (_command_lines(code) if lang == "bash" and not is_open else None) or [code]
+                blocks.extend(Block("code", piece, step_no, lang, is_open, gap=gap and not k, indented=bool(indent),
+                                    piece=k) for k, piece in enumerate(pieces))
             i = j + 1
             continue
         source = _SOURCE.match(line)
@@ -307,10 +311,38 @@ def _place_trailing_commands(blocks):
         return blocks
     earlier = any(b.kind == "code" and b.step is not None and b.step < last for b in blocks)
     leads_in = not trailing[0].gap or blocks[head].text.rstrip().endswith(":")
-    if last == 1 or earlier or (len(trailing) == 1 and leads_in):
+    fences = sum(1 for b in trailing if b.piece == 0)
+    if last == 1 or earlier or (fences == 1 and leads_in):
         return blocks
     after = [replace(b, step=None) if b.step == last else b for b in blocks[end:]]
     return [*blocks[:head + 1], *(replace(b, step=None, loose=True) for b in trailing), *after]
+
+
+_SHELL_WORDS = frozenset("if then else elif fi for while until do done case esac function select { } [[ ]]".split())
+
+
+def _command_lines(code):
+    """A fence of several commands, one per line, as those lines, so each gets its own copy box. Only when every
+    line is a standalone simple command with a known name: a continuation, pipe or && at a line end, a heredoc, a
+    comment, a prompt sign, a shell keyword or an indented line keeps the fence whole. None otherwise."""
+    lines = [line for line in code.split("\n") if line.strip()]
+    if len(lines) < 2:
+        return None
+    for line in lines:
+        if line != line.strip() or "<<" in line or line.startswith(("#", "|", "&")):
+            return None
+        if line.endswith(("\\", "|", "&&", "||", "{", "(")):
+            return None
+        try:
+            words = shlex.split(line)
+        except ValueError:
+            return None
+        if not words or words[0] in _SHELL_WORDS:
+            return None
+        name = words[1] if words[0] == "sudo" and len(words) > 1 else words[0]
+        if name not in _KNOWN_COMMANDS or name == "sudo":
+            return None
+    return lines
 
 
 def is_inline_command(span):
@@ -369,11 +401,14 @@ def safe_markdown(md):
 
 def canonical_text(answer):
     """The answer as the model wrote it, normalised, without reasoning or the Source line: steps carry their shown
-    numbers and fenced commands stay fenced. Copy boxes the app lifted from inline commands are left out, and loose
-    commands stay after the steps, apart. This is what the chat memory sends back to the model."""
+    numbers and fenced commands stay fenced, a fence split into one box per command whole again. Copy boxes the app
+    lifted from inline commands are left out, and loose commands stay after the steps, apart. This is what the chat memory sends back to the model."""
     parts = []
     for block in answer.blocks:
         if block.derived:
+            continue
+        if block.piece:
+            parts[-1] = parts[-1].removesuffix("\n```") + f"\n{block.text}\n```"
             continue
         if block.loose and parts:
             parts.append("")
@@ -433,9 +468,10 @@ def _step_shown(n, step, answer):
     return text
 
 
-_RULES = ("Explain it in two to four sentences without listing the other steps again. If you show a command, copy "
-          "it exactly as shown; if it is not clear which command goes with the step, say so instead of guessing. "
-          "Step {n} is not excerpt [{n}] and not a reasoning line.")
+_RULES = ("Explain step {n} itself, as worded above, in two to four sentences, without listing the other steps "
+          "again. If you show a command, copy it exactly as shown. Commands listed after the steps are there only "
+          "so you can tell whether one of them does what step {n} says; if none clearly does, say so instead of "
+          "guessing. Step {n} is not excerpt [{n}] and not a reasoning line.")
 
 
 def step_note(question, previous_raw, previous_mode=""):

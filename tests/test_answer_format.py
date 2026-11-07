@@ -251,6 +251,28 @@ class CommandPlacementTests(unittest.TestCase):
         loose = parse_answer("1. Update.\n2. Install it.\n\n```bash\nsudo apt install git\n```")
         self.assertEqual(loose.loose, ("sudo apt install git",))
 
+    def test_a_fence_of_simple_commands_becomes_one_box_per_line(self):
+        # +RAG, qwen3.5:2b: both commands in one fence under its last step.
+        text = ("1. Create the new user using `adduser`.\n2. Add the user to the `sudo` group using `usermod`.\n"
+                "3. Run the following commands in your terminal:\n\n```bash\nsudo adduser {{username}}\n"
+                "sudo usermod -aG sudo {{username}}\n```")
+        answer = parse_answer(text, "rag")
+        self.assertEqual([s.commands for s in answer.steps],
+                         [(), (), ("sudo adduser <username>", "sudo usermod -aG sudo <username>")])
+        self.assertEqual(answer.loose, ())
+        self.assertIn("```bash\nsudo adduser <username>\nsudo usermod -aG sudo <username>\n```",
+                      memory_text(text, "rag"))
+
+    def test_fences_that_are_not_a_list_of_simple_commands_stay_whole(self):
+        for code in ("cd build \\\n  && make", "# make the user\nsudo adduser x", "for u in a b; do id $u; done\nls",
+                     "$ ls\n$ pwd", "cat <<EOF\nhi\nEOF", "sudo adduser x\nmyscript --go", "if true; then\nls\nfi"):
+            boxes = [b.text for b in parse_answer(f"```bash\n{code}\n```").blocks]
+            self.assertEqual(boxes, [code], code)
+        self.assertEqual(len(parse_answer("```python\nimport os\nprint(1)\n```").blocks), 1)
+        streaming = parse_answer("1. Run:\n```bash\nsudo apt update\nsudo apt install git\n", streaming=True)
+        self.assertEqual([b.text for b in streaming.blocks if b.kind == "code"],
+                         ["sudo apt update\nsudo apt install git"])
+
     def test_memory_keeps_what_the_model_wrote(self):
         self.assertNotIn("```", memory_text(self.RAG_INLINE, "rag"))
         memory = memory_text(self.COT_TRAILING, "cot")
