@@ -135,22 +135,26 @@ class Answer:
 
 
 def split_reasoning(text, streaming=False):
-    """(reasoning, answer). An explicit `Answer:` line splits them. Without one, only text that opens with a
-    `Reasoning:` label is reasoning, and only up to the first numbered step or command; with neither, nothing
-    is hidden, so a procedure is never mistaken for reasoning. The same holds when the commands sit above
-    `Answer:` and none below it. While streaming, a labelled lead is reasoning until a step or `Answer:` comes."""
+    """(reasoning, answer) for a +CoT or +RAG+CoT reply, which the app asks for as `Reasoning:` then `Answer:`, or
+    for any reply that opens with a `Reasoning:` or `Steps:` label.
+
+    The `Answer:` line is the boundary. While streaming, nothing before it is answer: a reply can open with a
+    numbered draft ("1. The excerpts show ...") and only then write `Answer:`, so until that line arrives the text
+    is held as reasoning and the answer stays empty. A finished reply without `Answer:` hides only the block a
+    `Reasoning:` label opens (see _lead_end), and only when more follows it; without the label nothing is hidden,
+    so a procedure is never taken for reasoning. The same holds when the commands sit above `Answer:` and none
+    below it."""
     body = text or ""
     mark = _ANSWER_MARK.search(body)
     if mark is None:
-        if not _REASON_LABEL.match(body):
-            return "", body.strip()
-        lines = body.split("\n")
-        start = next((i for i, line in enumerate(lines) if i and (_item(line) or _FENCE_OPEN.match(line))), None)
-        if start is not None:
-            return _REASON_LABEL.sub("", "\n".join(lines[:start]), count=1).strip(), "\n".join(lines[start:]).strip()
         if streaming:
             return _REASON_LABEL.sub("", body, count=1).strip(), ""
-        return "", body.strip()
+        if not _REASON_LABEL.match(body):
+            return "", body.strip()
+        lines = _REASON_LABEL.sub("", body, count=1).split("\n")
+        end = _lead_end(lines)
+        lead, rest = "\n".join(lines[:end]).strip(), "\n".join(lines[end:]).strip()
+        return (lead, rest) if lead and rest else ("", body.strip())
     head, tail = body[: mark.start()], body[mark.end():]
     reasoning = _REASON_LABEL.sub("", head, count=1).strip()
     if not tail.strip() and not streaming:
@@ -162,7 +166,8 @@ def split_reasoning(text, streaming=False):
 
 def _settled(text, streaming):
     """While streaming, hold back a last partial line that may still become a fence, a step number or a label,
-    so the view never flips from one element type to another under the reader."""
+    so the view never flips from one element type to another under the reader, and an inline `span` until its
+    closing backtick arrives."""
     if not streaming:
         return text
     head, sep, tail = text.rpartition("\n")
@@ -171,6 +176,8 @@ def _settled(text, streaming):
     stripped = tail.strip()
     if stripped.startswith(("`", "~")) or (stripped and len(stripped) < 12):
         return head
+    if tail.count("`") % 2:
+        return text[: len(text) - len(tail) + tail.rindex("`")].rstrip()
     return text
 
 
@@ -206,6 +213,26 @@ def _item(line):
     return int(n), text
 
 
+def _lead_end(lines):
+    """Where the block a `Reasoning:` label opens ends, as Markdown would end it: at a blank line or a fence, or at
+    a numbered step after prose or bullets. A lead written as a numbered list ends where the numbering restarts."""
+    started, last = False, None
+    for i, line in enumerate(lines):
+        if not line.strip():
+            if started:
+                return i
+            continue
+        if _FENCE_OPEN.match(line):
+            return i
+        item = _item(line)
+        if item:
+            if started and (last is None or item[0] <= last):
+                return i
+            last = item[0]
+        started = True
+    return len(lines)
+
+
 def _dedent(lines, indent):
     width = len(indent.expandtabs(4))
     out = []
@@ -224,7 +251,9 @@ def parse_answer(text, mode="", n_hits=0, streaming=False):
     was retrieved; BASE and +CoT retrieve nothing, so any [n] there is dropped rather than shown.
     """
     raw = normalize_placeholders(text)
-    reasoning, body = split_reasoning(raw, streaming=streaming) if mode in ("cot", "full") else ("", raw.strip())
+    # BASE and +RAG are not asked for reasoning, but a reply that opens with the label is still a draft.
+    split = mode in ("cot", "full") or _REASON_LABEL.match(raw)
+    reasoning, body = split_reasoning(raw, streaming=streaming) if split else ("", raw.strip())
     reasoning_open = streaming and not body and bool(reasoning)
     body = _settled(body, streaming)
     hits = n_hits if uses_rag(mode) else 0
@@ -281,7 +310,7 @@ def parse_answer(text, mode="", n_hits=0, streaming=False):
     flush_md()
     if not streaming:
         blocks = _place_trailing_commands(blocks)
-    blocks = _lift_inline_commands(blocks)
+    blocks = _lift_inline_commands(blocks, open_step=step_no if streaming else None)
     return Answer(
         reasoning=reasoning,
         blocks=tuple(blocks),
@@ -363,10 +392,11 @@ def is_inline_command(span):
     return bool(args) or words[0] == "sudo"
 
 
-def _lift_inline_commands(blocks):
+def _lift_inline_commands(blocks, open_step=None):
     """A step with no fenced command but a whole command written inline gets that command, byte for byte, as a copy
-    box under its text. The sentence is left as written; nothing is lifted from text outside numbered steps."""
-    fenced = {b.step for b in blocks if b.kind == "code" and b.step is not None}
+    box under its text. The sentence is left as written; nothing is lifted from text outside numbered steps.
+    `open_step` is the step still streaming: its own fence may be on the way, so it gets no box yet."""
+    fenced = {b.step for b in blocks if b.kind == "code" and b.step is not None} | {open_step}
     out = []
     for block in blocks:
         out.append(block)

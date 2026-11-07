@@ -123,13 +123,29 @@ class ParseTests(unittest.TestCase):
         steps = parse_answer("1. Edit the file:\n   1. open it\n   2. save it\n2. Reload").steps
         self.assertEqual([s.number for s in steps], [1, 2])
 
-    def test_reasoning_is_split_only_on_an_answer_line_in_cot_modes(self):
+    def test_reasoning_is_split_on_an_answer_line_in_cot_modes_or_after_a_label(self):
         text = "Reasoning:\n- adduser makes it\n- usermod adds sudo\n\nAnswer:\n" + SUDO
         full = parse_answer(text, "full", n_hits=2)
         self.assertEqual(full.reasoning, "- adduser makes it\n- usermod adds sudo")
         self.assertEqual(len(full.steps), 3)
-        self.assertEqual(parse_answer(text, "rag", n_hits=2).reasoning, "")
         self.assertEqual(parse_answer(SUDO, "full", n_hits=2).reasoning, "")
+        rag = parse_answer(text, "rag", n_hits=2)
+        self.assertEqual((rag.reasoning, len(rag.steps)), (full.reasoning, 3))
+        unlabelled = parse_answer("Some thoughts.\n\nAnswer: use `id`.", "rag")
+        self.assertEqual(unlabelled.reasoning, "")
+        self.assertTrue(unlabelled.blocks[0].text.startswith("Some thoughts."))
+
+    def test_a_labelled_draft_in_base_or_rag_streams_as_reasoning(self):
+        draft = prompt.ABSTAIN.replace("I don't know.", "Use `ls -l`.")
+        for mode in ("base", "rag"):
+            head = draft[: draft.index("Answer:") + len("Answer:")]
+            for prefix in prefixes(head):
+                self.assertEqual(parse_answer(prefix, mode, n_hits=1, streaming=True).blocks, (), (mode, prefix))
+            final = parse_answer(draft, mode, n_hits=1)
+            self.assertIn("I checked the excerpts", final.reasoning)
+            self.assertNotIn("excerpts", canonical(final))
+        steps = parse_answer("Steps:\n1. Open a terminal.\n2. Run `id`.", "base")
+        self.assertEqual((steps.reasoning, len(steps.steps)), ("", 2))
 
     def test_a_labelled_lead_without_answer_is_reasoning_up_to_the_first_step(self):
         # qwen3.5:2b's +CoT reply to the sudo question had this shape: no Answer: line, bullets numbered "- 1.".
@@ -188,6 +204,93 @@ class ParseTests(unittest.TestCase):
         self.assertNotIn("Source", memory)
         self.assertNotIn("[1]", memory)
         self.assertIn("2. Add the user to the `sudo` group:\n```bash\nsudo usermod -aG sudo <username>\n```", memory)
+
+
+DRAFT = ("Reasoning:\n1. The excerpts show `chmod 600` gives the owner read and write.\n"
+         "2. `ls -l` shows the result as -rw-------.\n\nAnswer:\nTo make a file readable only by you:\n"
+         "1. Remove group and other access:\n```bash\nchmod 600 <path/to/file>\n```\n"
+         "2. Check it:\n```bash\nls -l <path/to/file>\n```\nSource: [1]")
+MIXED = ("Use `sudo` only when a step says so; a literal ``` in prose stays prose.\n\n"
+         "1. Create the user:\n   ```bash\n   sudo adduser <username>\n   ```\n"
+         "2. Add them to sudo with `sudo usermod -aG sudo <username>`.\n   - this nested bullet stays in step 2\n"
+         "3. Several commands in one fence:\n```bash\nid <username>\ngroups <username>\n```\n"
+         "4. A pipeline stays whole:\n```bash\ngetent group sudo | cut -d: -f4\n```\n"
+         "5. An unclosed fence at the end:\n```bash\nsu - <username> -c 'sudo -l'")
+
+
+def prefixes(text):
+    return (text[:i] for i in range(1, len(text) + 1))
+
+
+class StreamingTests(unittest.TestCase):
+    def test_a_numbered_draft_before_answer_never_reaches_the_answer(self):
+        head = DRAFT[: DRAFT.index("Answer:") + len("Answer:")]
+        for prefix in prefixes(head):
+            parsed = parse_answer(prefix, "full", n_hits=1, streaming=True)
+            self.assertEqual(parsed.blocks, (), prefix)
+            self.assertEqual(parsed.reasoning_open, bool(parsed.reasoning), prefix)
+        final = parse_answer(DRAFT, "full", n_hits=1)
+        self.assertTrue(final.reasoning.startswith("1. The excerpts show"))
+        self.assertEqual([s.commands for s in final.steps], [("chmod 600 <path/to/file>",), ("ls -l <path/to/file>",)])
+        self.assertNotIn("excerpts", canonical(final))
+        self.assertEqual(parse_answer(DRAFT, "rag", n_hits=1).reasoning, final.reasoning)
+
+    def test_every_prefix_shows_only_what_the_model_wrote(self):
+        for text, mode in ((MIXED, "rag"), (DRAFT, "full")):
+            final = parse_answer(text, mode, n_hits=1)
+            final_lines = [line for b in final.blocks if b.kind == "code" for line in b.text.split("\n")]
+            for prefix in prefixes(text):
+                parsed = parse_answer(prefix, mode, n_hits=1, streaming=True)
+                for block in parsed.blocks:
+                    if block.kind != "code":
+                        continue
+                    for line in block.text.split("\n"):
+                        self.assertTrue(any(f.startswith(line) for f in final_lines), (prefix, line))
+                opened = [i for i, b in enumerate(parsed.blocks) if b.open]
+                self.assertIn(opened, ([], [len(parsed.blocks) - 1]), prefix)
+                self.assertEqual([s.number for s in parsed.steps], list(range(1, len(parsed.steps) + 1)), prefix)
+
+    def test_streamed_to_the_end_it_matches_the_final_card(self):
+        for text, mode in ((MIXED, "rag"), (DRAFT, "full"), (SUDO, "rag")):
+            self.assertEqual(parse_answer(text + "\n", mode, n_hits=2, streaming=True).blocks,
+                             parse_answer(text, mode, n_hits=2).blocks)
+
+    def test_a_cot_reply_without_answer_is_held_until_it_ends_then_shown_whole(self):
+        live = parse_answer(SUDO + "\n", "full", n_hits=2, streaming=True)
+        self.assertEqual((live.blocks, live.reasoning_open), ((), True))
+        final = parse_answer(SUDO, "full", n_hits=2)
+        self.assertEqual((final.reasoning, len(final.steps)), ("", 3))
+
+    def test_mixed_markdown_keeps_prose_lists_and_fences_apart(self):
+        answer = parse_answer(MIXED, "rag")
+        self.assertEqual(answer.blocks[0].kind, "md")
+        self.assertIn("a literal ``` in prose stays prose", answer.blocks[0].text)
+        self.assertIn("nested bullet", answer.steps[1].text)
+        self.assertEqual(answer.steps[1].commands, ("sudo usermod -aG sudo <username>",))
+        self.assertEqual(answer.steps[2].commands, ("id <username>", "groups <username>"))
+        self.assertEqual(answer.steps[3].commands, ("getent group sudo | cut -d: -f4",))
+        self.assertEqual((answer.blocks[-1].text, answer.blocks[-1].open), ("su - <username> -c 'sudo -l'", True))
+
+    def test_a_fence_closes_only_on_a_matching_run(self):
+        for text in ("```bash\nls -l\n``", "````\nls -l\n```", "```\nls -l\n~~~"):
+            block = parse_answer(text).blocks[0]
+            self.assertTrue(block.open, text)
+            self.assertTrue(block.text.startswith("ls -l"), text)
+        self.assertFalse(parse_answer("~~~\nls -l\n~~~~").blocks[0].open)
+
+    def test_an_inline_span_shows_once_its_closing_backtick_arrives(self):
+        self.assertEqual(parse_answer("Create the user using `addus", streaming=True).blocks[0].text,
+                         "Create the user using")
+        self.assertEqual(parse_answer("Create the user using `adduser` now", streaming=True).blocks[0].text,
+                         "Create the user using `adduser` now")
+        held = parse_answer("1. Make it:\n```bash\necho today is `date", streaming=True).blocks[-1]
+        self.assertEqual((held.kind, held.open, held.text), ("code", True, "echo today is"))
+
+    def test_a_streaming_step_gets_no_inline_box_until_the_next_step(self):
+        text = "1. Check it with `ls -l <path/to/file>` now.\n"
+        self.assertEqual([b.kind for b in parse_answer(text, streaming=True).blocks], ["md"])
+        later = parse_answer(text + "2. Done here.\n", streaming=True).blocks
+        self.assertEqual([(b.kind, b.derived) for b in later], [("md", False), ("code", True), ("md", False)])
 
 
 class CommandPlacementTests(unittest.TestCase):
