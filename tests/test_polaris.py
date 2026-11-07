@@ -1604,6 +1604,21 @@ class HelperTests(unittest.TestCase):
             (Path(td) / "chunks.jsonl").write_text('{"id":1}\n\n{"id":2}\n', encoding="utf-8")
             self.assertEqual(index_chunk_count(td), 2)
 
+    def test_every_static_url_is_served_from_the_entry_scripts_static_dir(self):
+        # Streamlit serves /app/static/ from <main script dir>/static, and the launcher runs streamlit_app.py.
+        try:
+            from streamlit.file_util import get_app_static_dir
+        except ImportError:
+            self.skipTest("streamlit not installed")
+        static = Path(get_app_static_dir(str(ROOT / "streamlit_app.py")))
+        css = style_path().read_text(encoding="utf-8") + orbit_style_path().read_text(encoding="utf-8")
+        config = (ROOT / ".streamlit" / "config.toml").read_text(encoding="utf-8")
+        names = set(re.findall(r"/app/static/([\w.-]+)", css)) | set(re.findall(r'"app/static/([\w.-]+)"', config))
+        self.assertGreaterEqual(len(names), 3)
+        for name in sorted(names):
+            self.assertTrue((static / name).is_file(), f"{name} is not served from {static}")
+            self.assertEqual(os.path.commonpath([os.path.abspath(static / name), str(static)]), str(static))
+
     def test_style_ships_offline(self):
         css = style_path().read_text(encoding="utf-8")
         self.assertIn("/app/static/UbuntuSans-Variable-Latin.woff2", css)
