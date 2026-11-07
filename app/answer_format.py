@@ -9,10 +9,11 @@ nothing under eval/, kd/ or shared/ imports this module.
 model and a follow-up's "step 2" all come from it, so step 2 on screen is step 2 everywhere.
 """
 import re
+import shlex
 import textwrap
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
-from app.engine import uses_rag
+from app.engine import MODE_SUFFIX, uses_rag
 from shared.prompt import system_for_mode, user_msg
 
 _FORMAT = (
@@ -71,6 +72,30 @@ _CITATION = re.compile(r"\[(\d{1,2})\]")
 _SHELL_LANGS = {"", "bash", "sh", "shell", "console", "terminal", "zsh"}
 
 
+_INLINE_CODE = re.compile(r"(?<!`)`([^`\n]+)`(?!`)")
+_COMMAND_NAME = re.compile(r"^[a-z][a-z0-9_.+-]*$")
+# Command names an inline `span` may start with to be shown as its own copyable command. Deliberately a fixed list,
+# so what gets a copy box doesn't depend on what the machine running the app has installed.
+_KNOWN_COMMANDS = frozenset("""
+    adduser useradd usermod userdel deluser passwd chpasswd chage groupadd groupdel groupmod gpasswd groups id whoami
+    su sudo visudo newgrp chsh chown chmod chgrp umask ls cd pwd mkdir rmdir rm cp mv ln touch cat less more head
+    tail grep egrep fgrep find locate updatedb which whereis file stat du df free top htop ps kill killall pkill
+    uptime uname hostname hostnamectl date timedatectl tar gzip gunzip zip unzip bzip2 bunzip2 xz unxz 7z apt
+    apt-get apt-cache dpkg snap flatpak systemctl journalctl service reboot shutdown poweroff mount umount lsblk
+    blkid fdisk parted mkfs fsck ip ifconfig ping traceroute nslookup dig host curl wget ssh ssh-keygen ssh-copy-id
+    scp sftp rsync nmcli iwconfig ufw iptables nano vim vi gedit git python3 python pip pip3 make gcc g++ java javac
+    node npm echo printf export source env alias history man tldr sort uniq wc cut awk sed tr tee xargs diff cmp
+    crontab nohup jobs watch lsusb lspci lscpu xdg-open gsettings update-alternatives localectl setxkbmap lpstat lp
+    lpr last lastlog w getent
+""".split())
+# Names that are also English words: a span starting with one needs an argument that looks like shell syntax.
+_WORDLIKE = frozenset("""
+    file find less more head tail sort cut watch last w free top kill make host man history date id groups touch
+    env echo printf source export alias jobs which diff cat ln cd at lp
+""".split())
+_SHELLISH = re.compile(r"""^-|[/.<>=$*~|&;'"\d]""")
+
+
 @dataclass(frozen=True)
 class Block:
     kind: str
@@ -78,6 +103,13 @@ class Block:
     step: int | None = None
     lang: str = ""
     open: bool = False
+    # A fence with a blank line before it.
+    gap: bool = False
+    indented: bool = False
+    # A copy box for a command the model wrote inline, as `code`, in a step's sentence.
+    derived: bool = False
+    # A command written after the last step that the answer doesn't tie to any step.
+    loose: bool = False
 
 
 @dataclass(frozen=True)
@@ -97,6 +129,7 @@ class Answer:
     dropped: tuple[int, ...]
     source_line: bool
     reasoning_open: bool = False
+    loose: tuple[str, ...] = ()
 
 
 def split_reasoning(text, streaming=False):
@@ -222,7 +255,8 @@ def parse_answer(text, mode="", n_hits=0, streaming=False):
             is_open = j >= len(lines)
             lang = lang.lower()
             if code or is_open:
-                blocks.append(Block("code", code, step_no, "bash" if lang in _SHELL_LANGS else lang, is_open))
+                blocks.append(Block("code", code, step_no, "bash" if lang in _SHELL_LANGS else lang, is_open,
+                                    gap=i > 0 and not lines[i - 1].strip(), indented=bool(indent)))
             i = j + 1
             continue
         source = _SOURCE.match(line)
@@ -241,6 +275,9 @@ def parse_answer(text, mode="", n_hits=0, streaming=False):
             md.append(line)
         i += 1
     flush_md()
+    if not streaming:
+        blocks = _place_trailing_commands(blocks)
+    blocks = _lift_inline_commands(blocks)
     return Answer(
         reasoning=reasoning,
         blocks=tuple(blocks),
@@ -249,7 +286,64 @@ def parse_answer(text, mode="", n_hits=0, streaming=False):
         dropped=tuple(sorted(set(dropped))),
         source_line=source_line,
         reasoning_open=reasoning_open,
+        loose=tuple(b.text for b in blocks if b.loose),
     )
+
+
+def _place_trailing_commands(blocks):
+    """Fences right after the last step's text belong to it only when the answer's own layout says so: it is the
+    only step, earlier steps carry their own fences, or a single fence follows directly or after a line ending in
+    ':'. Otherwise (several steps without commands, then the commands in a row) which command goes with which step
+    is the model's to say, not ours: they stay in order, marked loose, tied to no step."""
+    last = max((b.step for b in blocks if b.step is not None), default=None)
+    if last is None:
+        return blocks
+    head = next(i for i, b in enumerate(blocks) if b.step == last)
+    end = head + 1
+    while end < len(blocks) and blocks[end].kind == "code" and blocks[end].step == last:
+        end += 1
+    trailing = blocks[head + 1:end]
+    if not trailing:
+        return blocks
+    earlier = any(b.kind == "code" and b.step is not None and b.step < last for b in blocks)
+    leads_in = not trailing[0].gap or blocks[head].text.rstrip().endswith(":")
+    if last == 1 or earlier or (len(trailing) == 1 and leads_in):
+        return blocks
+    after = [replace(b, step=None) if b.step == last else b for b in blocks[end:]]
+    return [*blocks[:head + 1], *(replace(b, step=None, loose=True) for b in trailing), *after]
+
+
+def is_inline_command(span):
+    """Whether an inline `span` is a whole shell command to offer as its own copy box: it splits as shell words,
+    starts with a known command name (after an optional bare sudo) and has an argument or follows sudo. Names alone
+    (`adduser`), paths, options, config lines and anything that doesn't parse stay inline."""
+    try:
+        words = shlex.split(span)
+    except ValueError:
+        return False
+    if len(words) < 2 or span != span.strip():
+        return False
+    name, args = (words[1], words[2:]) if words[0] == "sudo" else (words[0], words[1:])
+    if not _COMMAND_NAME.match(name) or name not in _KNOWN_COMMANDS or name == "sudo":
+        return False
+    if name in _WORDLIKE:
+        return any(_SHELLISH.search(arg) for arg in args)
+    return bool(args) or words[0] == "sudo"
+
+
+def _lift_inline_commands(blocks):
+    """A step with no fenced command but a whole command written inline gets that command, byte for byte, as a copy
+    box under its text. The sentence is left as written; nothing is lifted from text outside numbered steps."""
+    fenced = {b.step for b in blocks if b.kind == "code" and b.step is not None}
+    out = []
+    for block in blocks:
+        out.append(block)
+        if block.kind != "md" or block.step is None or block.step in fenced:
+            continue
+        for span in _INLINE_CODE.findall(block.text):
+            if is_inline_command(span):
+                out.append(Block("code", span, block.step, "bash", derived=True))
+    return out
 
 
 def _block_text(block):
@@ -274,9 +368,17 @@ def safe_markdown(md):
 
 
 def canonical_text(answer):
-    """The answer as the reader sees it, without reasoning or the Source line: steps carry their shown numbers
-    and every command is a fenced block. This is what the chat memory sends back to the model."""
-    return "\n".join(_block_text(b) for b in answer.blocks).strip()
+    """The answer as the model wrote it, normalised, without reasoning or the Source line: steps carry their shown
+    numbers and fenced commands stay fenced. Copy boxes the app lifted from inline commands are left out, and loose
+    commands stay after the steps, apart. This is what the chat memory sends back to the model."""
+    parts = []
+    for block in answer.blocks:
+        if block.derived:
+            continue
+        if block.loose and parts:
+            parts.append("")
+        parts.append(_block_text(block))
+    return "\n".join(parts).strip()
 
 
 def memory_text(raw, mode=""):
@@ -304,38 +406,81 @@ def step_reference(question):
     return None
 
 
+def _named_step(question, raw, mode):
+    """(n, step, answer) for the step a follow-up names, step None when that answer doesn't have it; None when the
+    question names no step."""
+    n = step_reference(question)
+    if n is None:
+        return None
+    answer = parse_answer(raw or "", mode=mode)
+    if n == -1 and answer.steps:
+        n = answer.steps[-1].number
+    return n, next((s for s in answer.steps if s.number == n), None), answer
+
+
+def _step_shown(n, step, answer):
+    """Step n as the reader saw it, or that the answer doesn't have it, plus any commands the answer listed after
+    its steps without tying them to one."""
+    if step is None:
+        count = f"only {len(answer.steps)} numbered steps" if answer.steps else "no numbered steps"
+        text = f"it had {count}, so there is no step {n if n > 0 else '(last)'}."
+    else:
+        text = f"step {n} was shown as:\n{step.shown}"
+    if answer.loose:
+        fences = "\n".join(f"```bash\n{c}\n```" for c in answer.loose)
+        text += ("\nAfter its steps it also listed these commands without saying which step each belongs to:\n"
+                 + fences)
+    return text
+
+
+_RULES = ("Explain it in two to four sentences without listing the other steps again. If you show a command, copy "
+          "it exactly as shown; if it is not clear which command goes with the step, say so instead of guessing. "
+          "Step {n} is not excerpt [{n}] and not a reasoning line.")
+
+
 def step_note(question, previous_raw, previous_mode=""):
     """What the model is told when a follow-up names a step: the step as the reader saw it, so "step 2" is never
     read as excerpt [2] or a reasoning line. A step the last answer doesn't have is said to be missing."""
+    named = _named_step(question, previous_raw, previous_mode)
+    if named is None:
+        return ""
+    n, step, answer = named
+    if step is None and not answer.loose:
+        return (f"The student refers to step {n if n > 0 else '(last)'} of your previous answer, but "
+                f"{_step_shown(n, step, answer)} Say so briefly instead of guessing.")
+    return (f"In this question, step {n} means step {n} of your previous answer. In that answer, "
+            f"{_step_shown(n, step, answer)}\n{_RULES.format(n=n)}")
+
+
+def side_label(side, mode, model=""):
+    """How a compare side is named to the model: "Left answer (qwen3.5:2b · +CoT)"."""
+    config = " · ".join(part for part in (model, MODE_SUFFIX.get(mode) or "BASE") if part)
+    return f"{side} answer ({config})"
+
+
+def compare_step_note(question, sides):
+    """For a single follow-up after a compare: step n of each side, labelled, since the question doesn't say which
+    answer it means. `sides` is ((label, raw or None, mode), ...); None is a side that never answered."""
     n = step_reference(question)
     if n is None:
         return ""
-    steps = parse_answer(previous_raw, mode=previous_mode).steps
-    if n == -1 and steps:
-        n = steps[-1].number
-    step = next((s for s in steps if s.number == n), None)
-    if step is None:
-        count = f"only {len(steps)} numbered steps" if steps else "no numbered steps"
-        return (f'The student refers to step {n if n > 0 else "(last)"} of your previous answer, which had {count}. '
-                "Say so briefly instead of guessing.")
-    return (
-        f"In this question, step {n} means step {n} of your previous answer, shown to the student as:\n"
-        f"{step.shown}\n"
-        f"Explain that step in two to four sentences without listing the other steps again. If you show its "
-        f"command, copy it exactly as shown. It is not excerpt [{n}] and not a reasoning line."
-    )
+    parts = []
+    for label, raw, mode in sides:
+        if raw is None:
+            parts.append(f"{label}: no answer, it was stopped or failed.")
+            continue
+        number, step, answer = _named_step(question, raw, mode)
+        parts.append(f"{label}: {_step_shown(number, step, answer)}")
+    shown = "\n\n".join(parts)
+    return (f"In this question, step {n} could mean step {n} of either of the two answers the student saw side by "
+            f"side. Answer for each separately, starting with its label.\n\n{shown}\n\n{_RULES.format(n=n)}")
 
 
 def step_query(question, previous_raw, previous_mode=""):
     """Extra retrieval words for a follow-up that names a step: that step's text and commands."""
-    n = step_reference(question)
-    if n is None:
+    named = _named_step(question, previous_raw, previous_mode)
+    if named is None or named[1] is None:
         return ""
-    steps = parse_answer(previous_raw, mode=previous_mode).steps
-    if n == -1 and steps:
-        n = steps[-1].number
-    step = next((s for s in steps if s.number == n), None)
-    if step is None:
-        return ""
+    step = named[1]
     words = " ".join([step.text, *step.commands])
     return " ".join(re.sub(r"[`*_<>#]", " ", words).split())

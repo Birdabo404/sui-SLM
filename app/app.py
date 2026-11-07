@@ -100,6 +100,7 @@ from app.polaris import (
     sky_html,
     sky_level,
     sidebar_kv_html,
+    loose_commands_html,
     source_line_html,
     stopped_html,
     thinking_html,
@@ -1064,7 +1065,7 @@ def _answer_record(
         git_sha=_session_git_commit(),
         model_info=_model_info(option.name),
         context=context,
-        messages_fn=partial(app_messages, step_note=context.step_note if context is not None else ""),
+        messages_fn=partial(app_messages, step_note=context.note_for(side) if context is not None else ""),
         on_retrieval=lambda chart: events.put(("retrieval", chart)),
         on_progress=lambda live: events.put(("progress", live)),
     )
@@ -1319,7 +1320,11 @@ def _render_answer(parsed):
     if parsed.reasoning:
         with st.expander("Show reasoning", expanded=False):
             st.markdown(safe_markdown(parsed.reasoning))
+    noted = False
     for block in parsed.blocks:
+        if block.loose and not noted:
+            noted = True
+            st.markdown(loose_commands_html(len(parsed.loose)), unsafe_allow_html=True)
         if block.kind == "code":
             st.code(block.text, language=block.lang or "bash")
         else:

@@ -1353,6 +1353,13 @@ def preview_text(answer, mode=""):
     return first_line(prose.replace("`", ""))
 
 
+def loose_commands_html(count):
+    """Above commands the model listed after its steps without tying them to one: the app doesn't guess the step."""
+    what = "this command" if count == 1 else f"these {count} commands"
+    return (f'<p class="cmd-loose">The model listed {what} after its steps without saying which step each belongs '
+            "to.</p>")
+
+
 def source_line_html(answer, mode, hits):
     """Under an answer: the excerpts it cites, by name, or that there were none to cite. A [n] that points at no
     retrieved excerpt was taken out of the text and is named here, so nothing is quietly dropped."""

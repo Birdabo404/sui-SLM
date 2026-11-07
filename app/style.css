@@ -322,6 +322,8 @@ p.stopped{margin:0;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-
 [data-testid="stCodeCopyButton"]:is(:hover,:focus-visible){opacity:1}
 /* A command under a numbered step sits on the step's text, not under its number. */
 :is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stElementContainer"]:has(ol) ~ [data-testid="stElementContainer"]:has([data-testid="stCode"]){padding-left:1.55em}
+:is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stElementContainer"]:has(.cmd-loose) ~ [data-testid="stElementContainer"]:has([data-testid="stCode"]){padding-left:0}
+:is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stMarkdownContainer"] p.cmd-loose{margin:.2em 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(--f-mono);color:var(--c-text-3)}
 :is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stMarkdownContainer"] ol{margin-bottom:0}
 :is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stMarkdownContainer"] p.src-line{margin:0;font:400 var(--fs-cap)/var(--lh-ui) var(--f-mono);color:var(--c-text-3)}
 .src-line b{font-weight:600;color:var(--c-text-2)}
