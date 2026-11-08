@@ -491,7 +491,7 @@ class PolarisRunLoopTests(unittest.TestCase):
     def _loader_lifecycles(deltas):
         """Per answer card, in send order: its loader going on (with its label) and off, and its reasoning and answer
         blocks being drawn, with repeats folded. An answer view's children are the head (0), reasoning (1), blocks
-        (2), loader (3) and footer (4)."""
+        (2) and footer (3); the loader is the first block's slot until that block replaces it."""
         cards = sorted({path[:-1] for path, kind, text in deltas
                         if kind == "markdown" and text.startswith('<div class="card-head">')})
         lifecycles = []
@@ -502,10 +502,10 @@ class PolarisRunLoopTests(unittest.TestCase):
                 if path[:n] != card or len(path) == n:
                     continue
                 child = path[n]
-                if child == 3 and kind == "markdown" and 'class="thinking" role="status"' in text:
+                if child == 2 and kind == "markdown" and 'class="thinking" role="status"' in text:
                     event = "loader"
                     labels.append(text.split('class="thinking-label">', 1)[1].split("…<", 1)[0])
-                elif child == 3 and kind == "empty" and labels:
+                elif path[n:] == (2, 0) and labels and not text.strip():
                     event = "off"
                 elif child == 1 and kind == "markdown":
                     event = "reasoning"
@@ -532,7 +532,8 @@ class PolarisRunLoopTests(unittest.TestCase):
                        mode="cot")
         self.assertEqual(len(_NdjsonOllama.bodies), 1)
         ((events, labels),) = self._loader_lifecycles(deltas)
-        self.assertEqual(events, ["loader", "reasoning", "loader", "reasoning", "off", "answer"])
+        # The first answer block replaces the cube in the same redraw: no "off" between them.
+        self.assertEqual(events, ["loader", "reasoning", "loader", "reasoning", "answer"])
         self.assertEqual(labels, ["Waiting for the model", polaris.REASONING_LABEL])
         self.assertNotIn('class="cube"', self._html())
 
@@ -543,12 +544,24 @@ class PolarisRunLoopTests(unittest.TestCase):
         self._ask_real("how much disk space is free", self._paced(text, 40, 90, 120), mode="cot")
         ((events, labels),) = self._loader_lifecycles(deltas)
         # Every streamed piece is held as reasoning; the finished reply then shows its last paragraph as the answer.
-        self.assertEqual(events[-2:], ["off", "answer"])
+        self.assertEqual(events[-2:], ["reasoning", "answer"])
         self.assertNotIn("answer", events[:-1])
+        self.assertNotIn("off", events)
         self.assertEqual(labels[-1], polaris.REASONING_LABEL)
         (reasoning,) = self.at.expander
         self.assertIn("du -sh", reasoning.markdown[0].value)
         self.assertIn("Run `df -h` to see free space on every mounted filesystem.", [m.value for m in self.at.markdown])
+
+    def test_an_answer_that_opens_with_a_command_keeps_the_cube_until_the_command_shows(self):
+        deltas = self._record_deltas()
+        text = "Reasoning:\n1. The excerpts show `chmod 600`.\n\nAnswer:\n```bash\nchmod 600 notes.txt\n```\nDone."
+        start = text.index("chmod 600 notes")
+        self._ask_real("make a file readable only by me", self._paced(text, 30, start + 5, start + 20), mode="cot")
+        ((events, labels),) = self._loader_lifecycles(deltas)
+        self.assertEqual(events[-2:], ["reasoning", "answer"])
+        self.assertNotIn("off", events)
+        self.assertEqual(labels[-1], polaris.REASONING_LABEL)
+        self.assertEqual([c.value for c in self.at.code], ["chmod 600 notes.txt"])
 
     def test_both_compare_sides_keep_the_cube_through_reasoning_and_drop_it_at_the_answer(self):
         deltas = self._record_deltas()
@@ -567,7 +580,7 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertEqual(len(_NdjsonOllama.bodies), 2)
         left, right = self._loader_lifecycles(deltas)
         for events, labels in (left, right):
-            self.assertEqual(events, ["loader", "reasoning", "loader", "reasoning", "off", "answer"])
+            self.assertEqual(events, ["loader", "reasoning", "loader", "reasoning", "answer"])
             self.assertEqual(labels[-1], polaris.REASONING_LABEL)
         self.assertEqual(right[1][0], "Searching the lab docs")
         self.assertNotIn('class="cube"', self._html())

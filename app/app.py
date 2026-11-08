@@ -1294,6 +1294,9 @@ def _answer_parts(parsed):
     can't restart the list at 1."""
     parts, noted = [], False
     for block in parsed.blocks:
+        # mid-stream, a command box whose first line hasn't arrived has no text yet; it waits with the loader
+        if not block.text.strip():
+            continue
         if block.loose and not noted:
             noted = True
             parts.append(("html", loose_commands_html(len(parsed.loose))))
@@ -1315,15 +1318,15 @@ def _draw_part(slot, part):
 
 
 class _AnswerView:
-    """One answer, streaming or replayed, in a container built once: head, reasoning, blocks, loader, footer.
+    """One answer, streaming or replayed, in a container built once: head, reasoning, blocks, footer.
 
     Streamlit keeps the children of a container that is sent again, so redrawing a whole container per chunk
     leaves rows of an earlier, longer draft under the new text until the run ends. Here every block has its own
     slot, rewritten only when its content changes, and slots the answer no longer needs are emptied. A replay
     builds the same slots and draws the finished answer once, so streamed, finished and replayed cards match.
 
-    The loader stays through the search, the wait and any reasoning, and goes when the first answer block is drawn
-    (or the turn ends). A new label keeps the cube's place in its turn."""
+    The loader stays through the search, the wait and any reasoning, in the first block's slot: the answer's first
+    block replaces it in one redraw, so there is no frame with neither. A new label keeps the cube's place."""
 
     def __init__(self, mode, model=""):
         self.mode = mode
@@ -1332,8 +1335,8 @@ class _AnswerView:
         self._reasoning_body = None
         self._reasoning_shown = None
         self._blocks = st.container()
-        self._slots, self._shown = [], []
-        self._status = st.empty()
+        self._status = self._blocks.empty()
+        self._slots, self._shown = [self._status], [None]
         self._loading = None
         self._loading_since = None
         self._foot = st.container()
@@ -1355,9 +1358,7 @@ class _AnswerView:
     def show(self, parsed):
         parts = _answer_parts(parsed)
         self._show_reasoning(parsed.reasoning)
-        if parts:
-            self.stop_loading()
-        elif parsed.reasoning_open and self._loading is not None:
+        if not parts and parsed.reasoning_open and self._loading is not None:
             self.loading(REASONING_LABEL, REASONING_NOTE)
         self._show_parts(parts)
 
@@ -1375,6 +1376,8 @@ class _AnswerView:
             self._reasoning_shown = text
 
     def _show_parts(self, parts):
+        if parts:
+            self._loading = None
         for i, part in enumerate(parts):
             if i == len(self._slots):
                 self._slots.append(self._blocks.empty())
