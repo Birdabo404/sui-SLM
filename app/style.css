@@ -38,10 +38,11 @@
   --shadow-float:0 1px 0 oklch(1 0 0 / 0.04) inset,0 10px 30px -12px oklch(0.08 0.04 260 / 0.7);
 
   /* type: JetBrains Mono carries the interface, the way a lab terminal does; Ubuntu Sans, the lab desktop's own
-     face, carries only the answer's prose, where long lines in mono read slowly. Dense, Linear-like steps:
-     meta 12.5, UI 13, body 14.5, question 15. Hierarchy comes from weight and ink, not size. */
+     face, carries the answer's prose and its reasoning, where long lines in mono read slowly. Dense steps, one per
+     role: rail section titles 11 in capitals, readout units and notes 12, labels 12.5, controls and commands 13,
+     reasoning 13.5, the answer 14.5, the question 16. Weight and ink separate what shares a size. */
   --f-sans:"Ubuntu Sans",system-ui,sans-serif; --f-mono:"JetBrains Mono",ui-monospace,monospace; --f-ui:var(--f-mono);
-  --fs-cap:12.5px; --fs-ui:13px; --fs-body:14.5px; --fs-q:15px;
+  --fs-label:11px; --fs-meta:12px; --fs-cap:12.5px; --fs-ui:13px; --fs-reason:13.5px; --fs-body:14.5px; --fs-q:16px;
   --lh-tight:1.35; --lh-ui:1.45; --lh-body:1.62;
 
   --s-1:4px; --s-2:8px; --s-3:12px; --s-4:16px; --s-5:20px; --s-6:24px; --s-7:32px; --s-8:40px;
@@ -337,7 +338,7 @@ p.stopped{margin:0;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-
 :is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stElementContainer"]:has(.cmd-loose) ~ [data-testid="stElementContainer"]:has([data-testid="stCode"]){padding-left:0}
 :is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stMarkdownContainer"] p.cmd-loose{margin:.2em 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(--f-mono);color:var(--c-text-3)}
 :is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stMarkdownContainer"] ol{margin-bottom:0}
-:is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stMarkdownContainer"] p.src-line{margin:0;font:400 var(--fs-cap)/var(--lh-ui) var(--f-mono);color:var(--c-text-3)}
+:is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stMarkdownContainer"] p.src-line{margin:0;font:400 var(--fs-meta)/var(--lh-ui) var(--f-mono);color:var(--c-text-3)}
 .src-line b{font-weight:600;color:var(--c-text-2)}
 [data-testid="stMarkdownContainer"] code{font-family:var(--f-mono);font-size:.875em;padding:.1em .35em;border-radius:var(--r-xs);background:var(--c-raised);color:var(--c-text)}
 
@@ -347,7 +348,7 @@ p.stopped{margin:0;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-
 :is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stExpander"] summary p{font:inherit!important;color:inherit!important}
 :is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stExpander"] summary:hover{color:var(--c-text)}
 :is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stExpanderDetails"]{padding:var(--s-2) 0 var(--s-2) var(--s-4);border-left:2px solid var(--c-line);margin-left:var(--s-2)}
-:is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stExpanderDetails"] :is(p,li){color:var(--c-text-2)!important;font-size:var(--fs-ui)!important}
+:is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stExpanderDetails"] :is(p,li){color:var(--c-text-2)!important;font-size:var(--fs-reason)!important;line-height:1.55!important}
 
 /* evidence disclosure */
 .ev-box{font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-text-2)}
@@ -371,7 +372,7 @@ p.best-panel,p.best{margin:0;font:400 var(--fs-cap)/var(--lh-ui) var(--f-ui);col
 .ev .title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--c-text)}
 .ev .sc{font-size:var(--fs-cap);color:var(--c-text-3);font-variant-numeric:tabular-nums;white-space:nowrap}
 .ev p.snip{grid-column:3 / -1;margin:var(--s-1) 0 0;font-size:var(--fs-ui);line-height:var(--lh-ui);color:var(--c-text-2)}
-p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
+p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
 .ram-split b{font-weight:600;color:var(--c-text-2);font-variant-numeric:tabular-nums}
 .dbg > summary{cursor:pointer;width:fit-content}
 .dbg-ev{list-style:none;margin:var(--s-1) 0 0;padding:0}
@@ -379,14 +380,14 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(-
 .dbg-ev .path,.dbg-ev .sc{display:block;overflow-wrap:anywhere}
 
 .metrics{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-1) var(--s-4);padding-top:var(--s-3);margin-top:var(--s-1);border-top:1px solid var(--c-line);
-  font:400 var(--fs-cap)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
+  font:400 var(--fs-meta)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
 .metrics b{font-weight:600;color:var(--c-text-2);font-variant-numeric:tabular-nums}
 /* response time and tok/s: the two numbers people compare, so they sit first, as readout cells. tok/s is always
    there: Ollama's own eval_count / eval_duration, or a dashed cell that says why there is no number. */
 .stats{display:inline-flex;flex-wrap:wrap;flex:none;gap:var(--s-1)}
 .stat{display:inline-flex;align-items:baseline;gap:4px;height:22px;padding:0 7px;border:1px solid var(--c-line);border-radius:var(--r-xs);background:var(--c-raised);
-  font:400 var(--fs-cap)/20px var(--f-ui);color:var(--c-text-3);white-space:nowrap;cursor:default}
-.stat b{font-weight:600;color:var(--c-text);font-variant-numeric:tabular-nums}
+  font:400 var(--fs-meta)/20px var(--f-ui);color:var(--c-text-3);white-space:nowrap;cursor:default}
+.stat b{font-size:var(--fs-cap);font-weight:600;color:var(--c-text);font-variant-numeric:tabular-nums}
 .stat.calc{border-color:transparent;background:transparent;padding:0 2px;font-variant-numeric:tabular-nums}
 .stat.na{border-style:dashed;border-color:var(--c-line-strong);background:transparent}
 .stat.warn{border-color:color-mix(in oklch,var(--c-danger) 55%,transparent);background:transparent;color:var(--c-danger)}
@@ -419,7 +420,7 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(-
   box-shadow:0 1px 0 oklch(1 0 0 / 0.05) inset}
 .mon-switch input:focus-visible + label{outline:2px solid var(--c-accent);outline-offset:1px}
 .st-key-rail-mon:has(#mon-v-scores:checked) .mon-rate,.st-key-rail-mon:not(:has(#mon-v-scores:checked)) .mon-scores{display:none}
-.mon{font:400 var(--fs-cap)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
+.mon{font:400 var(--fs-meta)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
 .mon p{margin:0}
 .mon-view{display:flex;flex-direction:column;gap:6px}
 .mon-head{display:flex;align-items:center;justify-content:space-between;gap:var(--s-2)}
@@ -553,8 +554,9 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(-
 [data-testid="stSidebarUserContent"] > div > [data-testid="stVerticalBlockBorderWrapper"] > [data-testid="stVerticalBlock"]{gap:var(--s-4)}
 [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(> .st-key-rail-mon){flex:1 0 auto;display:flex;flex-direction:column}
 .st-key-rail-mon{flex:1 0 auto;gap:var(--s-2)}
-[data-testid="stSidebar"] .side-h{margin:0;font:600 var(--fs-cap)/22px var(--f-ui);color:var(--c-text-3);letter-spacing:.02em}
-[data-testid="stSidebar"] .side-note{margin:0;font:400 var(--fs-cap)/var(--lh-ui) var(--f-ui);color:var(--c-text-3);text-wrap:pretty}
+/* rail ranks: section title in small capitals, field label, then the control's own value at 13 */
+[data-testid="stSidebar"] .side-h{margin:0;font:600 var(--fs-label)/22px var(--f-ui);color:var(--c-text-3);letter-spacing:.08em;text-transform:uppercase}
+[data-testid="stSidebar"] .side-note{margin:0;font:400 var(--fs-meta)/var(--lh-ui) var(--f-ui);color:var(--c-text-3);text-wrap:pretty}
 [data-testid="stSidebar"] .side-note.err{color:var(--c-danger)}
 [data-testid="stSidebar"] .side-note .ok{color:var(--c-data)}
 [data-testid="stSidebar"] .side-note code{font-size:11.5px;overflow-wrap:anywhere}
@@ -581,7 +583,7 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(-
 /* run controls */
 [class*="st-key-rail-run"]{gap:var(--s-2)}
 [data-testid="stSidebar"] [data-testid="stWidgetLabel"]{min-height:0;margin-bottom:2px}
-[data-testid="stSidebar"] [data-testid="stWidgetLabel"] p{font:400 var(--fs-cap)/1.3 var(--f-ui);color:var(--c-text-3)}
+[data-testid="stSidebar"] [data-testid="stWidgetLabel"] p{font:400 var(--fs-cap)/1.3 var(--f-ui);color:var(--c-text-2)}
 [data-testid="stSidebar"] [data-testid="stCheckbox"] label p{font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-text)}
 [data-testid="stSidebar"] [data-baseweb="select"] > div{min-height:34px;background:var(--c-raised);border-color:var(--c-line);border-radius:var(--r-sm);color:var(--c-text)}
 [data-testid="stSidebar"] [data-baseweb="select"] > div > div:first-child{font:500 var(--fs-ui)/1.2 var(--f-mono)}
