@@ -4,7 +4,7 @@
  * fonts: JetBrains Mono (interface, questions, readouts) + Ubuntu Sans (answer prose only) · motion: CSS only
  *
  * style.css — Polaris. Inject once with star-orbit.css. Fonts also declared in .streamlit/config.toml.
- * NIGHT = :root. DAYLIGHT when the app renders <div class="polaris-flags polaris-daylight">.
+ * NIGHT = :root. LIGHT MODE when the app renders <div class="polaris-flags polaris-daylight">.
  * No JS, no images, no network fonts: this runs on 8 GB lab ThinkPads while Ollama holds the CPU, so every
  * animation is a transform/opacity keyframe the compositor can run without the main thread, and the live
  * meter is redrawn by the server at most twice a second rather than animated.

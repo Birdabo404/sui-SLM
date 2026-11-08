@@ -1,4 +1,4 @@
-# Daylight fallback. Primary switch is the sidebar toggle (CSS). Copy over
+# Light mode fallback. Primary switch is the sidebar toggle (CSS). Copy over
 # config.toml and restart only if a native widget stays dark.
 [server]
 enableStaticServing = true

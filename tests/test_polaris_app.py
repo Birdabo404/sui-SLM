@@ -805,6 +805,21 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertIsNone(self._chat_id())
         self.assertEqual(self._rows(), [])
 
+    def test_the_theme_toggle_says_light_mode_and_keeps_the_stored_key(self):
+        self.at.run()
+        toggle = self.at.toggle(key="daylight")
+        self.assertEqual(toggle.label, "Light mode")
+
+        def flags():
+            return next(m.value for m in self.at.markdown if m.value.startswith('<div class="polaris-flags'))
+
+        self.assertNotIn("polaris-daylight", flags())
+        toggle.set_value(True).run()
+        self.assertTrue(self.at.session_state["daylight"])
+        self.assertIn("polaris-daylight", flags())
+        shown = [t.label for t in self.at.toggle] + [m.value for m in self.at.markdown if "<style" not in m.value]
+        self.assertFalse(any("Daylight" in s for s in shown))
+
     # ---------- compare ----------
 
     def test_compare_starts_off_with_one_picker_per_side(self):

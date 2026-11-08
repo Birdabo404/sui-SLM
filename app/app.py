@@ -735,10 +735,10 @@ class _Rail:
             elif st.button("Settings", key="settings", icon=":material/tune:"):
                 _settings_dialog(self.status)
             if busy:
-                st.toggle("Daylight", value=bool(st.session_state.get("daylight")), key="daylight-busy",
+                st.toggle("Light mode", value=bool(st.session_state.get("daylight")), key="daylight-busy",
                           disabled=True)
             else:
-                st.toggle("Daylight", key="daylight")
+                st.toggle("Light mode", key="daylight")
 
     def refresh(self):
         self.draw(busy=False)
