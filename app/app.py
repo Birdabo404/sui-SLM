@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Offline Streamlit chat app for the CCIS Linux lab assistant."""
 import os
+import queue
 import sqlite3
 import threading
+import time
+from functools import partial
+from html import escape
 from pathlib import Path
 
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
@@ -14,12 +18,14 @@ os.environ.setdefault("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "false")
 import requests
 import streamlit as st
 
+from app.answer_format import app_messages, parse_answer, safe_markdown
 from app.chat_memory import ChatStore, build_chat_context
 from app.engine import (
     BASE_MODEL,
     DEFAULT_INDEX,
     DISTILLED_MODEL,
     MODE_LABELS,
+    NUM_CTX,
     OLLAMA_HOST,
     answer_question,
     config_id,
@@ -27,29 +33,44 @@ from app.engine import (
     index_ok,
     keep_alive_setting,
     model_name_for,
-    mode_choices,
     ollama_info,
     ollama_reachable,
     uses_rag,
     warm_model,
 )
+from app.models import (
+    compare_picks,
+    installed_names,
+    is_installed,
+    missing_text,
+    model_options,
+    modes_for,
+    option_named,
+    pair_compare_ids,
+    pick_by_id,
+)
 from app.polaris import (
     DELETE_ASK,
     EXAMPLES,
     HISTORY_EMPTY,
+    MONITOR_SWITCH,
+    RAM_TITLE,
+    RATE_NOTE,
+    REASONING_LABEL,
+    REASONING_NOTE,
+    SCORES_NOTE,
+    RateTrace,
     avg_latency,
     best_match_html,
     build_run_record,
     cancelled_side_html,
     card_head_html,
     compare_compact_html,
-    compare_configs,
     compare_model_tags,
     compare_summary_html,
     composer_note_html,
+    config_summary_html,
     connection_html,
-    default_compare_modes,
-    default_compare_model_keys,
     empty_hero_html,
     empty_slot_html,
     evidence_block_html,
@@ -57,29 +78,32 @@ from app.polaris import (
     header_band_html,
     history_error_text,
     history_note_html,
+    hits_from_chart,
     idk_card_html,
     index_chunk_count,
     injected_css,
+    last_runs,
+    live_phase_label,
     metrics_html,
-    mode_menu_css,
+    mode_hint,
     mode_name,
-    model_key_choices,
+    model_choice_label,
+    model_status_html,
+    models_table_html,
+    monitor_html,
     network_online,
-    pair_compare_config_modes,
-    pair_compare_model_keys,
     plain_label,
     polaris_on,
+    rail_art_html,
     records_in,
     records_to_csv,
     records_to_json,
-    retrieval_bar_html,
-    running_card_html,
     side_logo_html,
     sky_html,
     sky_level,
     sidebar_kv_html,
-    split_code_blocks,
-    split_reasoning,
+    loose_commands_html,
+    source_line_html,
     stopped_html,
     thinking_html,
     thinking_label,
@@ -87,7 +111,7 @@ from app.polaris import (
     waiting_html,
     warm_label,
 )
-from app.streaming import CancellableChat, ChatCancelled
+from app.streaming import ChatCancelled, stream_answer_question
 from shared.frozen import format_threshold, load_frozen
 
 
@@ -272,25 +296,21 @@ def _inject_css():
     st.markdown(f"<style>{injected_css()}</style>", unsafe_allow_html=True)
 
 
+# Tabs open at once; older ones stay one click away in History.
+MAX_TABS = 6
+
+
 def _init_session():
     st.session_state.setdefault("messages", [])
     st.session_state.setdefault("run_records", [])
     st.session_state.setdefault("warmed", False)
     st.session_state.setdefault("mode", "full")
     st.session_state.setdefault("compare", False)
+    st.session_state.setdefault("model_pick", BASE_MODEL)
     st.session_state.setdefault("chat", _chat_state())
     _session_git_commit()
-    if "cmp_left" not in st.session_state or "cmp_right" not in st.session_state:
-        if len(model_key_choices(DISTILLED_MODEL)) > 1:
-            left, right = "full", "full"
-        else:
-            left, right = default_compare_modes()
-        st.session_state.setdefault("cmp_left", left)
-        st.session_state.setdefault("cmp_right", right)
-    if "cmp_left_model" not in st.session_state or "cmp_right_model" not in st.session_state:
-        left, right = default_compare_model_keys(DISTILLED_MODEL)
-        st.session_state.setdefault("cmp_left_model", left)
-        st.session_state.setdefault("cmp_right_model", right)
+    if "tabs" not in st.session_state:
+        st.session_state["tabs"] = _recent_chat_ids()
 
 
 @st.cache_resource
@@ -298,18 +318,49 @@ def _loaded_indexes():
     return set()
 
 
+@st.cache_data(ttl=15, show_spinner=False)
+def _installed_names():
+    return installed_names(OLLAMA_HOST)
+
+
+def _still_missing(option, names):
+    """The not-installed message for option, or None. A cached "missing" is checked once more against Ollama, so a
+    model created a moment ago is picked up without waiting for the cache."""
+    if is_installed(option.name, names) is not False:
+        return None
+    _installed_names.clear()
+    if is_installed(option.name, _installed_names()) is not False:
+        return None
+    return missing_text(option)
+
+
+def _compare_pair(options):
+    """Both compare sides as picks, made valid together and written back to the cmp_*_pick keys."""
+    configured = bool(DISTILLED_MODEL.strip())
+    left, right = pair_compare_ids(
+        st.session_state.get("cmp_left_pick"), st.session_state.get("cmp_right_pick"), options, configured
+    )
+    st.session_state.cmp_left_pick, st.session_state.cmp_right_pick = left, right
+    return pick_by_id(options, left), pick_by_id(options, right)
+
+
 def run_polaris():
     _inject_css()
     _init_session()
     index_dir = DEFAULT_INDEX
-    model = BASE_MODEL
     frozen = load_frozen()
     up = _ollama_up()
-    if up and not st.session_state.warmed:
-        st.session_state.warmed = _warm_model_at_startup(model, keep_alive_setting())
-    elif not up:
+    names = _installed_names() if up else None
+    options = model_options(BASE_MODEL, DISTILLED_MODEL)
+    picked = option_named(options, st.session_state.model_pick)
+    modes = modes_for(picked)
+    mode = st.session_state.mode if st.session_state.mode in modes else modes[-1]
+    if up and is_installed(picked.name, names) is not False:
+        st.session_state.warmed = _warm_model_at_startup(picked.name, keep_alive_setting())
+    else:
         st.session_state.warmed = False
-        _warmed_models().discard(model)
+        if not up:
+            _warmed_models().discard(picked.name)
     online = _network_online()
     # A question from the landing (typed or an example chip) is answered in the run it arrives in. The layout is
     # chosen here, before anything renders, so this run builds the thread exactly where every later run does.
@@ -318,9 +369,10 @@ def run_polaris():
     msgs = st.session_state.messages
     chat = st.session_state.chat
     if incoming and chat["id"] is None:
-        # Stored with its question before the sidebar draws, so a new chat is listed as current in this same run.
+        # Stored with its question before the tabs draw, so a new chat is listed as current in this same run.
         _sync_chat(chat, [*msgs, {"role": "user", "content": incoming}])
     compare_on = bool(st.session_state.get("compare"))
+    left, right = _compare_pair(options)
     asked = sum(1 for m in msgs if m.get("role") == "user") + (1 if incoming else 0)
 
     flags = st.empty()
@@ -330,35 +382,24 @@ def run_polaris():
             flags_html(
                 sky_level(asked),
                 daylight=bool(st.session_state.get("daylight")),
-                compare=compare_on,
                 generating=generating,
-            )
-            + mode_menu_css(model, mode_choices()),
+            ),
             unsafe_allow_html=True,
         )
 
-    # Before the sidebar, so the star's first wrap starts out paused while this run generates.
+    # Before the rail, so the star's first wrap starts out paused while this run generates.
     mark(generating=bool(incoming))
-    refresh_sidebar = _render_sidebar(model, index_dir, frozen, up, online, chat=bool(msgs or incoming))
+    status = dict(options=options, picked=picked, mode=mode, names=names, up=up, online=online,
+                  index_dir=index_dir, frozen=frozen)
+    rail = _render_rail(status, compare_on, left, right, busy=bool(incoming), chat=bool(msgs or incoming))
     st.markdown(sky_html(), unsafe_allow_html=True)
+    _render_tabs()
 
-    left_model_key, left_mode, right_model_key, right_mode = _compare_sides(
-        st.session_state.get("cmp_left_model"),
-        st.session_state.get("cmp_left"),
-        st.session_state.get("cmp_right_model"),
-        st.session_state.get("cmp_right"),
-    )
-    conn = connection_html(online, up)
-    composer = dict(
-        compare_on=compare_on,
-        compare_line=compare_summary_html(
-            model_name_for(left_model_key, base_model=model, distilled_model=DISTILLED_MODEL),
-            left_mode,
-            model_name_for(right_model_key, base_model=model, distilled_model=DISTILLED_MODEL),
-            right_mode,
-        ),
-        conn=conn,
-    )
+    if compare_on:
+        summary = compare_summary_html(left.option.name, left.mode, right.option.name, right.mode)
+    else:
+        summary = config_summary_html(picked.name, mode)
+    composer = dict(summary=summary, conn=connection_html(online, up))
 
     if not (msgs or incoming):
         with st.container(key="landing"):
@@ -378,54 +419,50 @@ def run_polaris():
     st.session_state.pop("pending_q", None)
     question = landing_q or typed
     if not question:
+        if incoming:
+            rail.refresh()
         return
 
-    mode = st.session_state.get("mode", "full")
     context = build_chat_context(msgs, question)
     msgs.append({"role": "user", "content": question})
     try:
         with thread:
-            answered = _answer_turn(
+            _answer_turn(
                 question,
+                picked,
                 mode,
                 compare_on,
-                left_mode,
-                right_mode,
-                model,
+                left,
+                right,
                 index_dir,
-                left_model_key=left_model_key,
-                right_model_key=right_model_key,
+                monitor=rail.monitor,
+                names=names,
                 context=context,
             )
     finally:
         # Stored before the next st call: a click can end this run at any st call, and reading session state counts
         # as one. A stopped or failed turn still keeps its question.
         _sync_chat(chat, msgs)
-        # A turn that raises still takes the Stop button away and lets the sky move again.
+        # A turn that raises still takes the Stop buttons away and lets the sky move again.
         stop_slot.empty()
+        rail.foot.empty()
         mark(generating=False)
-    if answered:
-        refresh_sidebar()
+    rail.refresh()
 
 
-def _answer_turn(
-    question,
-    mode,
-    compare_on,
-    left_mode,
-    right_mode,
-    model,
-    index_dir,
-    *,
-    left_model_key="base",
-    right_model_key="base",
-    context=None,
-):
+def _answer_turn(question, option, mode, compare_on, left, right, index_dir, *, monitor, names, context=None):
     st.session_state.pop("last_cancelled", None)
     st.markdown(user_turn_html(question), unsafe_allow_html=True)
     slot = st.empty()
 
-    need_rag = (uses_rag(left_mode) or uses_rag(right_mode)) if compare_on else uses_rag(mode)
+    if not compare_on:
+        missing = _still_missing(option, names)
+        if missing:
+            slot.error(missing)
+            st.session_state.messages.append({"role": "assistant", "error": missing})
+            return False
+
+    need_rag = (uses_rag(left.mode) or uses_rag(right.mode)) if compare_on else uses_rag(mode)
     retriever = None
     if need_rag:
         if not index_ok(index_dir):
@@ -437,26 +474,22 @@ def _answer_turn(
 
     if compare_on:
         slot.empty()
-        recs, _ = _run_compare(
-            question,
-            left_mode,
-            right_mode,
-            model,
-            retriever,
-            index_dir,
-            left_model_key=left_model_key,
-            right_model_key=right_model_key,
-            context=context,
-        )
+        recs, _ = _run_compare(question, left, right, retriever, index_dir, monitor=monitor, names=names,
+                               context=context)
         return any(recs)
 
-    rec = _answer_record(
+    key = f"answer-{len(st.session_state.messages)}"
+    monitor.plan([("", option.name, mode)])
+    rec, view = _answer_record(
         question,
         mode,
-        model,
+        option,
         retriever,
         index_dir,
-        slot=slot,
+        slot,
+        key=key,
+        monitor=monitor,
+        names=names,
         context=context,
     )
     if rec is None:
@@ -464,8 +497,8 @@ def _answer_turn(
             return False
         st.session_state.messages.append({"role": "assistant", "error": st.session_state.pop("last_error", "")})
         return False
-    _render_card(rec, key=f"answer-{len(st.session_state.messages)}", slot=slot)
     st.session_state.messages.append({"role": "assistant", "record": rec})
+    view.finish(rec)
     return True
 
 
@@ -486,11 +519,21 @@ def _chat_state(chat_id=None, saved=0):
     return {"id": chat_id, "saved": saved, "error": None}
 
 
+def _recent_chat_ids():
+    """The most recent chats, oldest first, as the tabs a new session opens with."""
+    try:
+        chats = ChatStore().list_chats()
+    except (sqlite3.Error, OSError):
+        return []
+    return [c.chat_id for c in chats[: MAX_TABS - 1]][::-1]
+
+
 def _new_chat():
     st.session_state.messages = []
     st.session_state.run_records = []
     st.session_state.chat = _chat_state()
     st.session_state.pop("hist_confirm", None)
+    st.session_state.pop("live_traces", None)
 
 
 def _sync_chat(chat, messages):
@@ -533,6 +576,28 @@ def _open_chat(chat_id):
     st.session_state.run_records = records_in(st.session_state.messages)
     st.session_state.chat = _chat_state(stored.chat_id, len(stored.messages))
     st.session_state.pop("pending_q", None)
+    st.session_state.pop("live_traces", None)
+    if chat_id not in st.session_state.tabs:
+        st.session_state.tabs.append(chat_id)
+
+
+def _close_tab(chat_id):
+    """Close a tab; the chat stays in History. Closing the open tab moves to its neighbour, or to a new chat."""
+    tabs = st.session_state.tabs
+    st.session_state.pop("hist_confirm", None)
+    if chat_id is None:
+        if tabs:
+            _open_chat(tabs[-1])
+        return
+    at = tabs.index(chat_id) if chat_id in tabs else len(tabs)
+    if chat_id in tabs:
+        tabs.remove(chat_id)
+    if chat_id != st.session_state.chat["id"]:
+        return
+    if tabs:
+        _open_chat(tabs[min(at, len(tabs) - 1)])
+    else:
+        _new_chat()
 
 
 def _ask_delete(chat_id):
@@ -551,16 +616,66 @@ def _delete_chat(chat_id):
     except (sqlite3.Error, OSError):
         st.session_state.chat["error"] = history_error_text(store.root)
         return
+    if chat_id in st.session_state.tabs:
+        st.session_state.tabs.remove(chat_id)
     if chat_id == st.session_state.chat["id"]:
         _new_chat()
 
 
-def _history_panel():
-    st.markdown('<p class="side-h">Chats</p>', unsafe_allow_html=True)
+def _visible_tabs(chats, current):
+    """Open tabs that still exist (another browser tab may have deleted one), the open chat always among them,
+    capped at MAX_TABS by dropping the oldest."""
+    known = {c.chat_id for c in chats}
+    tabs = [cid for cid in st.session_state.tabs if cid in known or cid == current]
+    if current is not None and current not in tabs:
+        tabs.append(current)
+    room = MAX_TABS - (1 if current is None else 0)
+    while len(tabs) > room:
+        tabs.remove(next(cid for cid in tabs if cid != current))
+    st.session_state.tabs = tabs
+    return tabs
+
+
+def _render_tabs():
+    """Browser-style tabs over the thread: one per open chat, a draft tab for a new one, History and New on the
+    right. Only the open chat's thread is ever drawn."""
     store = ChatStore()
     try:
         chats = store.list_chats()
+        failed = False
     except (sqlite3.Error, OSError):
+        chats, failed = [], True
+    current = st.session_state.chat["id"]
+    titles = {c.chat_id: c.title for c in chats}
+    if current is not None and current not in titles:
+        titles[current] = next((m.get("content") for m in st.session_state.messages if m.get("role") == "user"), "")
+    tabs = _visible_tabs(chats, current)
+    with st.container(key="tabbar"):
+        with st.container(key="tabs"):
+            for cid in tabs:
+                _tab(cid, titles.get(cid) or "Untitled", active=cid == current)
+            if current is None:
+                _tab(None, "New chat", active=True, closable=bool(tabs))
+        with st.container(key="tab-history"):
+            with st.popover("History", icon=":material/history:", help=f"All saved chats ({len(chats)})"):
+                _history_list(chats, store, failed)
+        st.button("New chat", key="new-chat", icon=":material/add:", help="New chat", on_click=_new_chat)
+
+
+def _tab(chat_id, title, active, closable=True):
+    name = "draft" if chat_id is None else chat_id
+    label = plain_label(title)
+    with st.container(key=f"tab-{'on' if active else 'off'}-{name}"):
+        # The open tab is disabled: clicking it would only re-run, and that stops an answer mid-flight.
+        st.button(label, key=f"tab-open-{name}", disabled=active, on_click=_open_chat, args=(chat_id,),
+                  use_container_width=True)
+        if closable:
+            st.button(f"Close {label}", key=f"tab-close-{name}", icon=":material/close:", help="Close tab",
+                      on_click=_close_tab, args=(chat_id,))
+
+
+def _history_list(chats, store, failed):
+    if failed:
         st.markdown(history_note_html(history_error_text(store.root), error=True), unsafe_allow_html=True)
         return
     error = st.session_state.chat["error"]
@@ -581,7 +696,6 @@ def _history_panel():
                     st.button("Delete", key=f"hist-yes-{cid}", on_click=_delete_chat, args=(cid,))
                     st.button("Cancel", key=f"hist-no-{cid}", on_click=_cancel_delete)
                 continue
-            # The open chat's row is disabled: clicking it would only re-run, and that stops an answer mid-flight.
             row = "hist-current" if cid == current else "hist-item"
             with st.container(key=f"{row}-{cid}"):
                 st.button(
@@ -601,185 +715,184 @@ def _history_panel():
                 )
 
 
-def _compare_sides(left_key, left_mode, right_key, right_mode):
-    """Each compare side's model key and config, made valid as a pair: the model keys first, then the configs for
-    those models. Returns them in the order they came in."""
-    left_key, right_key = pair_compare_model_keys(left_key, right_key, DISTILLED_MODEL)
-    left_mode, right_mode = pair_compare_config_modes(left_mode, right_mode, left_key, right_key)
-    return left_key, left_mode, right_key, right_mode
+class _Rail:
+    """The sidebar: run controls, the monitor and the footer. While an answer streams the controls are drawn
+    disabled under their own keys, since any click reruns the script and would stop the answer; refresh() draws
+    them again under the usual keys once it ends."""
+
+    def __init__(self, status, compare_on, left, right, controls, foot, monitor):
+        self.status, self.compare_on, self.left, self.right = status, compare_on, left, right
+        self.controls, self.foot, self.monitor = controls, foot, monitor
+
+    def draw(self, busy):
+        suffix = "-busy" if busy else ""
+        with self.controls.container(key=f"rail-run{suffix}"):
+            _run_controls(self.status, self.compare_on, self.left, self.right, suffix, busy)
+        with self.foot.container(key=f"rail-foot{suffix}"):
+            if busy:
+                # Settings can't open mid-answer (it would rerun and stop it), so Stop takes its place.
+                st.button("Stop", key="stop-rail", icon=":material/stop:", help="Stop generating")
+            elif st.button("Settings", key="settings", icon=":material/tune:"):
+                _settings_dialog(self.status)
+            if busy:
+                st.toggle("Light mode", value=bool(st.session_state.get("daylight")), key="daylight-busy",
+                          disabled=True)
+            else:
+                st.toggle("Light mode", key="daylight")
+
+    def refresh(self):
+        self.draw(busy=False)
+        self.monitor.show_last()
 
 
-def _compare_pickers():
-    """One picker per side over the thesis configs, written back to the cmp_* keys run_polaris pairs up."""
-    configs = compare_configs(DISTILLED_MODEL)
-    two_models = len(model_key_choices(DISTILLED_MODEL)) > 1
-
-    def label(cid):
-        return cid if two_models else mode_name(configs[cid][1])
-
-    left_key, left_mode, right_key, right_mode = _compare_sides(
-        st.session_state.get("cmp_left_model"),
-        st.session_state.get("cmp_left"),
-        st.session_state.get("cmp_right_model"),
-        st.session_state.get("cmp_right"),
-    )
-    # Pass index rather than seeding the key through session state: the browser shows a seeded value once, then
-    # falls back to the widget's default, so the default has to be the current pick.
-    left_options = list(configs)
-    left = st.selectbox(
-        "Left",
-        left_options,
-        index=left_options.index(config_id(left_key, left_mode)),
-        format_func=label,
-        key="cmp-left-config",
-    )
-    right_options = [cid for cid in configs if cid != left]
-    wanted = config_id(right_key, right_mode)
-    right = st.selectbox(
-        "Right",
-        right_options,
-        index=right_options.index(wanted) if wanted in right_options else 0,
-        format_func=label,
-        key="cmp-right-config",
-    )
-    st.session_state.cmp_left_model, st.session_state.cmp_left = configs[left]
-    st.session_state.cmp_right_model, st.session_state.cmp_right = configs[right]
-
-
-def _render_sidebar(model, index_dir, frozen, up, online, chat=False):
-    """Draw the sidebar and return refresh(), which redraws the parts an answer changes in place."""
+def _render_rail(status, compare_on, left, right, busy, chat=False):
     with st.sidebar:
         with st.container(key="side-top"):
             st.markdown(side_logo_html(play=chat), unsafe_allow_html=True)
-            st.button(
-                "New chat",
-                key="new-chat",
-                icon=":material/edit_square:",
-                use_container_width=True,
-                on_click=_new_chat,
+            st.markdown(rail_art_html(), unsafe_allow_html=True)
+        controls = st.empty()
+        with st.container(key="rail-mon"):
+            st.markdown(
+                '<div class="mon-top"><p class="side-h">Monitor</p>' + MONITOR_SWITCH + "</div>",
+                unsafe_allow_html=True,
             )
+            monitor = _Monitor(st.empty())
+        foot = st.empty()
+    rail = _Rail(status, compare_on, left, right, controls, foot, monitor)
+    rail.draw(busy)
+    monitor.show_last()
+    return rail
 
-        _history_panel()
 
-        st.markdown('<p class="side-h">View</p>', unsafe_allow_html=True)
-        st.toggle("Compare two configs", key="compare")
-        if st.session_state.get("compare"):
-            with st.container(key="cmp-pickers"):
-                _compare_pickers()
-        st.toggle("Daylight", key="daylight")
+def _sync_pick(key, target):
+    picked = st.session_state.get(key)
+    if picked:
+        st.session_state[target] = picked
 
-        session = st.empty()
-        system = st.empty()
-        st.markdown(
-            '<p class="footer-license">Ubuntu Sans, Ubuntu Font Licence 1.0<br>'
-            "JetBrains Mono, SIL OFL 1.1</p>",
-            unsafe_allow_html=True,
+
+def _run_controls(status, compare_on, left, right, suffix, busy):
+    options, names = status["options"], status["names"]
+    st.markdown('<p class="side-h">Run</p>', unsafe_allow_html=True)
+    if compare_on:
+        _compare_pickers(options, names, left, right, suffix, busy)
+    else:
+        picked, mode = status["picked"], status["mode"]
+        labels = [o.name for o in options]
+        st.selectbox(
+            "Model",
+            labels,
+            index=labels.index(picked.name),
+            format_func=lambda name: model_choice_label(option_named(options, name), names),
+            key=f"model-select{suffix}",
+            on_change=_sync_pick,
+            args=(f"model-select{suffix}", "model_pick"),
+            disabled=busy,
         )
+        st.markdown(model_status_html(picked, names, status["up"]), unsafe_allow_html=True)
+        modes = modes_for(picked)
+        st.radio(
+            "Mode",
+            modes,
+            index=modes.index(mode),
+            format_func=mode_name,
+            key=f"mode-pick{suffix}",
+            horizontal=True,
+            on_change=_sync_pick,
+            args=(f"mode-pick{suffix}", "mode"),
+            disabled=busy,
+        )
+        st.markdown(f'<p class="side-note mode-hint">{escape(mode_hint(mode))}</p>', unsafe_allow_html=True)
+    if busy:
+        st.toggle("Compare two configs", value=compare_on, key="compare-busy", disabled=True)
+    else:
+        st.toggle("Compare two configs", key="compare")
 
-    def refresh():
-        _session_panel(session)
-        _system_panel(system, model, index_dir, frozen, up, online)
 
-    refresh()
-    return refresh
+def _compare_pickers(options, names, left, right, suffix, busy):
+    """One picker per side over every model and config the machine can offer, written back to cmp_*_pick."""
+    picks = {p.id: p for p in compare_picks(options)}
+
+    def label(pick_id):
+        pick = picks[pick_id]
+        missing = is_installed(pick.option.name, names) is False
+        return f"{pick.option.name} · {mode_name(pick.mode)}" + (" · not installed" if missing else "")
+
+    # Pass index rather than seeding the key through session state: the browser shows a seeded value once, then
+    # falls back to the widget's default, so the default has to be the current pick.
+    ids = list(picks)
+    st.selectbox("Left", ids, index=ids.index(left.id), format_func=label, key=f"cmp-left-config{suffix}",
+                 on_change=_sync_pick, args=(f"cmp-left-config{suffix}", "cmp_left_pick"), disabled=busy)
+    right_ids = [i for i in ids if i != left.id]
+    st.selectbox("Right", right_ids, index=right_ids.index(right.id), format_func=label,
+                 key=f"cmp-right-config{suffix}", on_change=_sync_pick,
+                 args=(f"cmp-right-config{suffix}", "cmp_right_pick"), disabled=busy)
 
 
-def _session_panel(slot):
+@st.dialog("Settings", width="large")
+def _settings_dialog(status):
     records = st.session_state.get("run_records") or []
     avg = avg_latency(records)
-    with slot.container():
-        st.markdown('<p class="side-h">Session</p>', unsafe_allow_html=True)
-        st.markdown(
-            sidebar_kv_html(
-                [
-                    ("Answers", str(len(records))),
-                    ("Average time", "—" if avg is None else f"{avg:.1f} s"),
-                ]
-            ),
-            unsafe_allow_html=True,
-        )
-        if not records:
-            return
-        # Keyed by the record count: an answer fills this slot a second time in the same run, and widget keys
-        # must be unique per run.
-        n = len(records)
-        csv_col, json_col = st.columns(2, gap="small")
-        csv_col.download_button(
-            "CSV",
-            data=records_to_csv(records),
-            file_name="polaris-runs.csv",
-            mime="text/csv",
-            key=f"export-csv-{n}",
-            icon=":material/download:",
-            use_container_width=True,
-        )
-        json_col.download_button(
-            "JSON",
-            data=records_to_json(records),
-            file_name="polaris-runs.json",
-            mime="application/json",
-            key=f"export-json-{n}",
-            icon=":material/download:",
-            use_container_width=True,
-        )
-
-
-def _system_panel(slot, model, index_dir, frozen, up, online):
+    model = status["picked"].name
     info = _model_info(model)
+    index_dir = status["index_dir"]
     loaded = index_ok(index_dir)
     chunks = _chunk_count(index_dir) if loaded else 0
     sha = st.session_state.get("git_sha", "")
-    with slot.container():
-        st.markdown('<p class="side-h">System</p>', unsafe_allow_html=True)
+    session_col, system_col = st.columns(2, gap="large")
+    with session_col:
+        st.markdown('<p class="dlg-h">Session</p>', unsafe_allow_html=True)
+        st.markdown(
+            sidebar_kv_html(
+                [("Answers", str(len(records))), ("Average time", "—" if avg is None else f"{avg:.1f} s")]
+            ),
+            unsafe_allow_html=True,
+        )
+        if records:
+            n = len(records)
+            csv_col, json_col = st.columns(2, gap="small")
+            csv_col.download_button("CSV", data=records_to_csv(records), file_name="polaris-runs.csv",
+                                    mime="text/csv", key=f"export-csv-{n}", icon=":material/download:",
+                                    use_container_width=True)
+            json_col.download_button("JSON", data=records_to_json(records), file_name="polaris-runs.json",
+                                     mime="application/json", key=f"export-json-{n}", icon=":material/download:",
+                                     use_container_width=True)
+        st.markdown('<p class="dlg-h">Models</p>', unsafe_allow_html=True)
+        st.markdown(models_table_html(status["options"], status["names"], status["up"]), unsafe_allow_html=True)
+    with system_col:
+        st.markdown('<p class="dlg-h">System</p>', unsafe_allow_html=True)
         st.markdown(
             sidebar_kv_html(
                 [
                     ("Model", model),
                     ("Digest", info.model_digest or "—"),
+                    ("Ollama", f"running {info.version}".strip() if status["up"] else "stopped"),
+                    ("Keep alive", keep_alive_setting()),
+                    ("Context", f"{NUM_CTX:,} tokens"),
                     ("Index", Path(index_dir).name),
                     ("Chunks", f"{chunks:,}" if loaded else "not loaded"),
-                    ("IDK threshold", f"cos {format_threshold(frozen['threshold'])}"),
-                    ("Top-k", str(frozen["k"])),
-                    ("Ollama", "running" if up else "stopped"),
-                    ("Network", "connected" if online else "offline"),
+                    ("IDK threshold", f"cos {format_threshold(status['frozen']['threshold'])}"),
+                    ("Top-k", str(status["frozen"]["k"])),
+                    ("Network", "connected" if status["online"] else "offline"),
                     ("Warm-up", warm_label(st.session_state.get("warmed"))),
                     ("Commit", sha[:7] if sha else "—"),
                 ]
             ),
             unsafe_allow_html=True,
         )
+        st.markdown('<p class="dlg-h">About the numbers</p>', unsafe_allow_html=True)
+        st.markdown(
+            "".join(f'<p class="dlg-note">{escape(note)}</p>' for note in (RATE_NOTE, SCORES_NOTE, RAM_TITLE + "."))
+            + '<p class="dlg-note">Ubuntu Sans, Ubuntu Font Licence 1.0 · JetBrains Mono, SIL OFL 1.1</p>',
+            unsafe_allow_html=True,
+        )
 
 
-def _sync_mode(key):
-    picked = st.session_state.get(key)
-    if picked:
-        st.session_state.mode = picked
-
-
-def _render_composer(where, compare_on, compare_line, conn, generating=False):
+def _render_composer(where, summary, conn, generating=False):
     with st.container(key=f"composer-{where}"):
         typed = st.chat_input("Ask about Linux or the lab", key=f"chat-{where}")
         conn_col, ctl_col = st.columns([1, 1], gap="small", vertical_alignment="center")
         conn_col.markdown(composer_note_html(conn), unsafe_allow_html=True)
-        if compare_on:
-            ctl_col.markdown(compare_line, unsafe_allow_html=True)
-        else:
-            key = f"mode-{where}"
-            modes = mode_choices()
-            mode = st.session_state.get("mode", "full")
-            if key in st.session_state and st.session_state[key] is None:
-                del st.session_state[key]
-            with ctl_col, st.container(key=f"mode-{where}-box"):
-                st.selectbox(
-                    "Mode",
-                    modes,
-                    index=modes.index(mode) if mode in modes else len(modes) - 1,
-                    format_func=mode_name,
-                    key=key,
-                    label_visibility="collapsed",
-                    on_change=_sync_mode,
-                    args=(key,),
-                )
+        ctl_col.markdown(summary, unsafe_allow_html=True)
         stop_slot = st.empty()
         if generating:
             stop_slot.button("Stop", key="stop-gen", help="Stop generating")
@@ -813,121 +926,213 @@ def _check_for_stop():
     st.session_state.get("stop-gen")
 
 
-def _run_stoppable(work, heartbeat=_check_for_stop, tick=0.2):
-    """Run work(chat) on a worker thread and wait for it.
-
-    The heartbeat is where a Stop click or a new question interrupts this script; the finally then
-    cancels the request so Ollama stops generating.
-    """
-    chat = CancellableChat()
-    box = {}
-
-    def run():
-        try:
-            box["value"] = work(chat)
-        except BaseException as e:
-            box["error"] = e
-
-    worker = threading.Thread(target=run, daemon=True)
-    worker.start()
+def _pump(answer, events):
+    """Drive the streaming answer on a worker thread, so the script thread is free to see a Stop click even while
+    Ollama is still evaluating the prompt and has sent nothing."""
     try:
-        while worker.is_alive():
-            worker.join(tick)
-            if worker.is_alive():
-                heartbeat()
+        for delta in answer:
+            events.put(("text", delta))
+        events.put(("done", None))
+    except BaseException as e:
+        events.put(("error", e))
     finally:
-        if worker.is_alive():
-            chat.cancel()
-    if "error" in box:
-        raise box["error"]
-    return box["value"]
+        answer.close()
+
+
+def _stream_text(events, on_event, heartbeat=_check_for_stop, tick=0.2, every=0.1):
+    """Text for st.write_stream, batched to at most one redraw per `every` seconds so the browser doesn't re-render
+    the growing answer for every chunk while Ollama holds the CPU. Retrieval and progress go to on_event; waiting
+    runs the heartbeat, where a Stop click or a new question interrupts this script."""
+    pending = []
+    flushed = time.monotonic()
+    while True:
+        wait = max(0.0, every - (time.monotonic() - flushed)) if pending else tick
+        try:
+            kind, value = events.get(timeout=wait)
+        except queue.Empty:
+            kind, value = None, None
+        if kind == "error":
+            raise value
+        if kind == "text":
+            pending.append(value)
+        elif kind in ("retrieval", "progress"):
+            on_event(kind, value)
+        if pending and (kind in (None, "done") or time.monotonic() - flushed >= every):
+            yield "".join(pending)
+            pending.clear()
+            flushed = time.monotonic()
+        if kind == "done":
+            return
+        if kind is None:
+            heartbeat()
+
+
+class _Monitor:
+    """The rail's live view of the current turn: each side's character trace and retrieval scores while it streams,
+    then the last finished answer. Redrawn at most every `every` seconds."""
+
+    def __init__(self, slot, every=0.5):
+        self.slot = slot
+        self.every = every
+        self.runs = []
+        self._drawn = None
+
+    def show_last(self):
+        self.runs = []
+        runs = last_runs(st.session_state.get("messages") or [], st.session_state.get("live_traces") or {})
+        self.slot.markdown(monitor_html(runs), unsafe_allow_html=True)
+
+    def plan(self, sides):
+        self.runs = [
+            {"side": side, "model": model, "mode": mode, "state": "waiting", "trace": RateTrace(self.every)}
+            for side, model, mode in sides
+        ]
+        self.draw(force=True)
+
+    def begin(self, side):
+        run = next(r for r in self.runs if r["side"] == side)
+        run["state"] = "streaming"
+        self.draw(force=True)
+        return run
+
+    def retrieval(self, run, chart):
+        run.update(hits=hits_from_chart(chart), threshold=chart.dense_threshold)
+        self.draw(force=True)
+
+    def progress(self, run, live):
+        run["trace"].add(live)
+        self.draw()
+
+    def end(self, run, state, record=None):
+        run["trace"].finish()
+        run.update(state=state, record=record)
+        self.draw(force=True)
+
+    def draw(self, force=False):
+        now = time.monotonic()
+        if not force and self._drawn is not None and now - self._drawn < self.every:
+            return
+        self._drawn = now
+        views = []
+        for run in self.runs:
+            trace = run["trace"]
+            views.append({**run, "samples": tuple(trace.samples), "first_s": trace.first_s, "live": trace.last})
+        streaming = any(r["state"] in ("streaming", "waiting") for r in self.runs)
+        self.slot.markdown(monitor_html(views, streaming=streaming), unsafe_allow_html=True)
+
+
+def _ollama_error_text(error):
+    if isinstance(error, requests.ConnectionError):
+        return f"Could not reach Ollama at {OLLAMA_HOST}. Start it with `ollama serve`.\n\n{error}"
+    return f"Ollama stopped this answer with an error.\n\n{error}"
 
 
 def _answer_record(
     question,
     mode,
-    model,
+    option,
     retriever,
     index_dir,
-    panel=False,
-    slot=None,
+    slot,
     *,
-    model_key="base",
+    key,
+    monitor,
+    names=None,
+    side="",
     context=None,
     tag="",
+    show_error=True,
 ):
-    keep = slot is not None
-    slot = slot if keep else st.empty()
-    label = thinking_label(mode)
-    loader = running_card_html(mode, label, tag) if panel else thinking_html(label)
-    keep_alive = keep_alive_setting()
-    git_sha = _session_git_commit()
-    model_info = _model_info(model)
-    slot.markdown(loader, unsafe_allow_html=True)
+    """Stream one answer into slot. Returns its run record and the view it streamed into, or (None, None) if it was
+    stopped or failed. The caller stores the record, then calls view.finish, so the card that streamed is the card
+    that stays; `key` is its key."""
+    run = monitor.begin(side)
+    missing = _still_missing(option, names)
+    if missing:
+        st.session_state.last_error = missing
+        monitor.end(run, "error")
+        if show_error:
+            slot.error(missing)
+        else:
+            slot.empty()
+        return None, None
+    events = queue.Queue()
+    answer = stream_answer_question(
+        question,
+        mode,
+        option.name,
+        retriever=retriever,
+        model_key=option.key,
+        keep_alive=keep_alive_setting(),
+        git_sha=_session_git_commit(),
+        model_info=_model_info(option.name),
+        context=context,
+        messages_fn=partial(app_messages, step_note=context.note_for(side) if context is not None else ""),
+        on_retrieval=lambda chart: events.put(("retrieval", chart)),
+        on_progress=lambda live: events.put(("progress", live)),
+    )
+    worker = threading.Thread(target=_pump, args=(answer, events), daemon=True)
+    done = False
     try:
-        result = _run_stoppable(
-            lambda chat: answer_question(
-                question,
-                mode,
-                model,
-                retriever=retriever,
-                chat_fn=chat,
-                model_key=model_key,
-                log_commit=chat.commit,
-                keep_alive=keep_alive,
-                git_sha=git_sha,
-                model_info=model_info,
-                context=context,
-            ),
-        )
+        with slot.container(key=f"live-{key}"):
+            view = _AnswerView(mode, tag)
+        view.loading(live_phase_label(mode))
+        weak = False
+
+        def on_event(kind, value):
+            nonlocal weak
+            if kind == "retrieval":
+                monitor.retrieval(run, value)
+                weak = value.weak
+                if weak:
+                    # No generation: the abstain card is drawn when the turn finishes, so the cube stops here.
+                    view.stop_loading()
+                else:
+                    view.loading(live_phase_label(mode, retrieved=True))
+                return
+            monitor.progress(run, value)
+
+        worker.start()
+        text = ""
+        for piece in _stream_text(events, on_event):
+            if weak:
+                continue
+            text += piece
+            view.show(parse_answer(text, mode, n_hits=len(run.get("hits") or ()), streaming=True))
+        result = answer.result
+        done = True
     except ChatCancelled:
         st.session_state.last_cancelled = True
+        monitor.end(run, "stopped")
         slot.empty()
-        return None
+        return None, None
     except requests.RequestException as e:
-        message = f"Could not reach Ollama at {OLLAMA_HOST}. Start it with `ollama serve`.\n\n{e}"
+        message = _ollama_error_text(e)
         st.session_state.last_error = message
-        if keep:
+        monitor.end(run, "error")
+        if show_error:
             slot.error(message)
         else:
             slot.empty()
-        return None
-    if not keep:
-        slot.empty()
+        return None, None
+    finally:
+        if not done:
+            answer.cancel()
+        if worker.is_alive():
+            worker.join(timeout=1.0)
+        if not worker.is_alive():
+            answer.close()
     rec = build_run_record(result, index_path=index_dir)
+    monitor.end(run, "done", rec)
+    st.session_state.setdefault("live_traces", {})[key] = run["trace"].frozen()
     st.session_state.run_records.append(rec)
     st.session_state.warmed = True
-    return rec
+    return rec, view
 
 
-def _run_compare(
-    question,
-    left_mode,
-    right_mode,
-    model,
-    retriever,
-    index_dir,
-    *,
-    left_model_key="base",
-    right_model_key="base",
-    context=None,
-):
-    left_model_key, left_mode, right_model_key, right_mode = _compare_sides(
-        left_model_key,
-        left_mode,
-        right_model_key,
-        right_mode,
-    )
-    left_model = model_name_for(
-        left_model_key,
-        base_model=model,
-        distilled_model=DISTILLED_MODEL,
-    )
-    right_model = model_name_for(
-        right_model_key,
-        base_model=model,
-        distilled_model=DISTILLED_MODEL,
-    )
+def _run_compare(question, left, right, retriever, index_dir, *, monitor, names=None, context=None):
+    left_model, right_model = left.option.name, right.option.name
+    left_mode, right_mode = left.mode, right.mode
     left_tag, right_tag = (left_model, right_model) if left_model != right_model else ("", "")
     messages = st.session_state.messages
     message_index = len(messages)
@@ -939,6 +1144,7 @@ def _run_compare(
         {"mode": left_mode, "model": left_model, "state": "cancelled"},
         {"mode": right_mode, "model": right_model, "state": "cancelled"},
     ]
+    monitor.plan([("L", left_model, left_mode), ("R", right_model, right_mode)])
     try:
         with st.container(key="cmp"):
             col_l, col_r = st.columns(2, gap="medium")
@@ -948,21 +1154,26 @@ def _run_compare(
                 unsafe_allow_html=True,
             )
             with col_l:
-                recs[0] = _answer_record(
+                left_slot = st.empty()
+                recs[0], view = _answer_record(
                     question,
                     left_mode,
-                    left_model,
+                    left.option,
                     retriever,
                     index_dir,
-                    panel=True,
-                    model_key=left_model_key,
+                    left_slot,
+                    key=f"answer-h{message_index}-l",
+                    monitor=monitor,
+                    names=names,
+                    side="L",
                     context=context,
                     tag=left_tag,
+                    show_error=False,
                 )
                 if recs[0] is not None:
                     unanswered[0] = None
                     _keep_compare(messages, message, recs, unanswered)
-                    _render_card(recs[0], key=f"answer-h{message_index}-l", align_slots=True, model=left_tag)
+                    view.finish(recs[0], align_slots=True)
                 else:
                     unanswered[0] = _side_outcome(left_mode, left_model)
                     _render_unanswered_side(unanswered[0], key=f"answer-h{message_index}-l", model=left_tag)
@@ -972,21 +1183,26 @@ def _run_compare(
                     _render_unanswered_side(unanswered[1], key=f"answer-h{message_index}-r", model=right_tag)
                 return tuple(recs), tuple(unanswered)
             with col_r:
-                recs[1] = _answer_record(
+                right_slot = st.empty()
+                recs[1], view = _answer_record(
                     question,
                     right_mode,
-                    right_model,
+                    right.option,
                     retriever,
                     index_dir,
-                    panel=True,
-                    model_key=right_model_key,
+                    right_slot,
+                    key=f"answer-h{message_index}-r",
+                    monitor=monitor,
+                    names=names,
+                    side="R",
                     context=context,
                     tag=right_tag,
+                    show_error=False,
                 )
                 if recs[1] is not None:
                     unanswered[1] = None
                     _keep_compare(messages, message, recs, unanswered)
-                    _render_card(recs[1], key=f"answer-h{message_index}-r", align_slots=True, model=right_tag)
+                    view.finish(recs[1], align_slots=True)
                 else:
                     unanswered[1] = _side_outcome(right_mode, right_model)
                     _render_unanswered_side(unanswered[1], key=f"answer-h{message_index}-r", model=right_tag)
@@ -1066,57 +1282,138 @@ def _replay_message(msg, index, compact_compare=False):
     st.markdown(msg.get("content") or "")
 
 
-def _render_card(record, key, align_slots=False, slot=None, model=""):
-    mode = record.get("mode") or ""
-    rag = uses_rag(mode)
-    abstained = bool(record.get("abstained"))
-    with (slot.container(key=key) if slot is not None else st.container(key=key)):
-        st.markdown(card_head_html(mode, model), unsafe_allow_html=True)
-        if abstained:
-            st.markdown(idk_card_html(record), unsafe_allow_html=True)
-        elif mode in ("cot", "full"):
-            reason, answer = split_reasoning(record.get("answer") or "")
-            if reason:
-                with st.expander("Steps", expanded=False):
-                    st.markdown(reason)
-                _render_answer_body(answer)
-            else:
-                _render_answer_body(record.get("answer") or "")
+def _render_card(record, key, align_slots=False, model=""):
+    with st.container(key=key):
+        view = _AnswerView(record.get("mode") or "", model)
+    view.finish(record, align_slots=align_slots)
+
+
+def _answer_parts(parsed):
+    """The answer's blocks as the values its slots show, in order: ("md", text), ("code", text, lang) or
+    ("html", html) for the app's own note. Step numbers are the parser's, so a code box between two steps
+    can't restart the list at 1."""
+    parts, noted = [], False
+    for block in parsed.blocks:
+        # mid-stream, a command box whose first line hasn't arrived has no text yet; it waits with the loader
+        if not block.text.strip():
+            continue
+        if block.loose and not noted:
+            noted = True
+            parts.append(("html", loose_commands_html(len(parsed.loose))))
+        if block.kind == "code":
+            parts.append(("code", block.text, block.lang or "bash"))
         else:
-            _render_answer_body(record.get("answer") or "")
-        if rag:
-            st.markdown(evidence_block_html(record, collapsed=True), unsafe_allow_html=True)
-        elif align_slots:
-            st.markdown(
-                empty_slot_html("ev", f"No sources in {mode_name(mode)}"),
-                unsafe_allow_html=True,
-            )
-        st.markdown(
-            retrieval_bar_html(
-                record.get("retrieval_max_dense"),
-                record.get("threshold"),
-                retrieval_off=not rag,
-                mode=mode,
-            ),
-            unsafe_allow_html=True,
-        )
+            parts.append(("md", block.text))
+    return parts
+
+
+def _draw_part(slot, part):
+    kind = part[0]
+    if kind == "code":
+        slot.code(part[1], language=part[2])
+    elif kind == "md":
+        slot.markdown(safe_markdown(part[1]))
+    else:
+        slot.markdown(part[1], unsafe_allow_html=True)
+
+
+class _AnswerView:
+    """One answer, streaming or replayed, in a container built once: head, reasoning, blocks, footer.
+
+    Streamlit keeps the children of a container that is sent again, so redrawing a whole container per chunk
+    leaves rows of an earlier, longer draft under the new text until the run ends. Here every block has its own
+    slot, rewritten only when its content changes, and slots the answer no longer needs are emptied. A replay
+    builds the same slots and draws the finished answer once, so streamed, finished and replayed cards match.
+
+    The loader stays through the search, the wait and any reasoning, in the first block's slot: the answer's first
+    block replaces it in one redraw, so there is no frame with neither. A new label keeps the cube's place."""
+
+    def __init__(self, mode, model=""):
+        self.mode = mode
+        st.markdown(card_head_html(mode, model), unsafe_allow_html=True)
+        self._reasoning = st.empty()
+        self._reasoning_body = None
+        self._reasoning_shown = None
+        self._blocks = st.container()
+        self._status = self._blocks.empty()
+        self._slots, self._shown = [self._status], [None]
+        self._loading = None
+        self._loading_since = None
+        self._foot = st.container()
+
+    def loading(self, label, note=None):
+        if self._loading == (label, note):
+            return
+        now = time.monotonic()
+        self._loading_since = self._loading_since or now
+        self._loading = (label, note)
+        self._status.markdown(thinking_html(label, elapsed=now - self._loading_since, note=note),
+                              unsafe_allow_html=True)
+
+    def stop_loading(self):
+        if self._loading is not None:
+            self._status.empty()
+            self._loading = None
+
+    def show(self, parsed):
+        parts = _answer_parts(parsed)
+        self._show_reasoning(parsed.reasoning)
+        if not parts and parsed.reasoning_open and self._loading is not None:
+            self.loading(REASONING_LABEL, REASONING_NOTE)
+        self._show_parts(parts)
+
+    def _show_reasoning(self, text):
+        if not text:
+            if self._reasoning_body is not None:
+                self._reasoning.empty()
+                self._reasoning_body = self._reasoning_shown = None
+            return
+        if self._reasoning_body is None:
+            with self._reasoning.container():
+                self._reasoning_body = st.expander("Show reasoning", expanded=False).empty()
+        if text != self._reasoning_shown:
+            self._reasoning_body.markdown(safe_markdown(text))
+            self._reasoning_shown = text
+
+    def _show_parts(self, parts):
+        if parts:
+            self._loading = None
+        for i, part in enumerate(parts):
+            if i == len(self._slots):
+                self._slots.append(self._blocks.empty())
+                self._shown.append(None)
+            if self._shown[i] != part:
+                _draw_part(self._slots[i], part)
+                self._shown[i] = part
+        for i in range(len(parts), len(self._slots)):
+            if self._shown[i] is not None:
+                self._slots[i].empty()
+                self._shown[i] = None
+
+    def finish(self, record, align_slots=False):
+        """The finished answer from its record: the final parse (or the abstain card), then sources and metrics."""
+        mode = self.mode
+        hits = record.get("hits") or []
+        abstained = bool(record.get("abstained"))
         if abstained:
-            st.markdown(best_match_html(record), unsafe_allow_html=True)
-        elif align_slots:
-            st.markdown(empty_slot_html("best"), unsafe_allow_html=True)
-        st.markdown(metrics_html(record), unsafe_allow_html=True)
-
-
-def _render_answer_body(text):
-    chunks = list(split_code_blocks(text))
-    if not chunks:
-        st.markdown(text or "")
-        return
-    for kind, chunk in chunks:
-        if kind == "code":
-            st.code(chunk, language="bash")
-        elif chunk.strip():
-            st.markdown(chunk)
+            self._show_reasoning("")
+            self._show_parts([("html", idk_card_html(record))])
+        else:
+            parsed = parse_answer(record.get("answer") or "", mode, n_hits=len(hits))
+            self.show(parsed)
+        self.stop_loading()
+        with self._foot:
+            if not abstained:
+                st.markdown(source_line_html(parsed, mode, hits), unsafe_allow_html=True)
+            if uses_rag(mode):
+                st.markdown(evidence_block_html(record, collapsed=True), unsafe_allow_html=True)
+            elif align_slots:
+                st.markdown(empty_slot_html("ev", f"No sources in {mode_name(mode)}"), unsafe_allow_html=True)
+            if abstained:
+                st.markdown(best_match_html(record), unsafe_allow_html=True)
+            elif align_slots:
+                st.markdown(empty_slot_html("best"), unsafe_allow_html=True)
+            st.markdown(metrics_html(record), unsafe_allow_html=True)
 
 
 if __name__ == "__main__":

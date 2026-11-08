@@ -8,10 +8,12 @@ from __future__ import annotations
 import csv
 import io
 import json
+import math
 import os
 import random
 import re
 from html import escape
+from itertools import groupby
 from pathlib import Path
 from typing import TypedDict
 
@@ -21,11 +23,11 @@ from app.engine import (
     MODE_LABELS,
     MODE_SUBS,
     MODE_SUFFIX,
-    THESIS_CONFIGS,
-    config_id,
     mode_choices,
     uses_rag,
 )
+from app.answer_format import parse_answer, split_reasoning
+from app.models import is_installed
 from app.streaming import CancellableChat, ChatCancelled
 from shared.frozen import format_threshold
 
@@ -88,6 +90,7 @@ EXPORT_FIELDS = (
     "gen_s",
     "prompt_s",
     "load_s",
+    "done_reason",
     "ollama_version",
     "model_digest",
     "app_rss_mb",
@@ -184,6 +187,48 @@ def sky_html():
     return _SKY_HTML
 
 
+RAIL_ART_COLS, RAIL_ART_ROWS = 44, 9
+_BAYER4 = ((0, 8, 2, 10), (12, 4, 14, 6), (3, 11, 1, 9), (15, 7, 13, 5))
+_DITHER_RAMP = " ˙·:░▒▓"
+# The Little Dipper in (col, row) cells: Polaris, the handle (delta, epsilon, zeta), then the bowl (Kochab, gamma, eta).
+_RAIL_DIPPER = ((37, 1), (31, 1), (26, 2), (22, 3), (15, 3), (14, 5), (21, 5))
+
+
+def _rail_ridge(c, cols, rows):
+    return rows - 2.2 - 1.1 * math.sin(c / cols * math.pi * 1.25 + 0.2) - 0.45 * math.sin(c / 3.1 + 1)
+
+
+def _rail_field(c, r, cols, rows):
+    """Brightness 0-1: a glow around the pole star, haze along the horizon, and the ridge below it."""
+    px, py = _RAIL_DIPPER[0]
+    dx, dy = (c - px) / 6.5, (r - py) / 2.0
+    ridge = _rail_ridge(c, cols, rows)
+    if r >= ridge:
+        return min(1.0, 0.62 + 0.12 * (r - ridge))
+    return max(0.62 * math.exp(-(dx * dx + dy * dy)), 0.34 * math.exp(-(ridge - r) / 1.3))
+
+
+def rail_art_html(cols=RAIL_ART_COLS, rows=RAIL_ART_ROWS):
+    """The rail's header art: an ordered (Bayer) dither in text, toned in three bands by row the way a terminal
+    banner is. Static and decorative, so it's hidden from screen readers."""
+    levels = len(_DITHER_RAMP) - 1
+    stars = {cell: i for i, cell in enumerate(_RAIL_DIPPER)}
+    lines = []
+    for r in range(rows):
+        cells = []
+        for c in range(cols):
+            if (c, r) in stars:
+                star = stars[(c, r)]
+                glyph = "*" if star == 0 else ("•" if star == 4 else "∙")
+                cells.append(f'<b class="{"pole" if star == 0 else "dip"}">{glyph}</b>')
+                continue
+            v = _rail_field(c, r, cols, rows) * levels + (_BAYER4[r % 4][c % 4] / 16.0 - 0.5)
+            cells.append(escape(_DITHER_RAMP[max(0, min(levels, int(round(v))))], quote=False))
+        band = "hi" if r < rows // 3 else ("mid" if r < 2 * rows // 3 else "lo")
+        lines.append(f'<span class="{band}">{"".join(cells)}</span>')
+    return '<div class="rail-art" aria-hidden="true">' + "".join(lines) + "</div>"
+
+
 def sky_level(turns):
     """0 on an empty chat, one step fainter per question asked, gone after the fourth."""
     return max(0, min(int(turns), len(SKY_LEVELS) - 1))
@@ -226,6 +271,7 @@ class RunRecord(TypedDict):
     gen_s: float | None
     prompt_s: float | None
     load_s: float | None
+    done_reason: str | None
     ollama_version: str
     model_digest: str
     app_rss_mb: float
@@ -315,6 +361,7 @@ def build_run_record(result, index_path=""):
         "gen_s": _opt_float(result.get("gen_s")),
         "prompt_s": _opt_float(result.get("prompt_s")),
         "load_s": _opt_float(result.get("load_s")),
+        "done_reason": str(result["done_reason"]) if result.get("done_reason") else None,
         "ollama_version": str(result.get("ollama_version") or ""),
         "model_digest": str(result.get("model_digest") or ""),
         "app_rss_mb": float(result.get("app_rss_mb") or 0.0),
@@ -356,15 +403,6 @@ def records_to_json(records):
     return json.dumps(list(records), indent=2, ensure_ascii=False)
 
 
-def default_compare_modes():
-    modes = mode_choices()
-    if "base" in modes and "full" in modes:
-        return "base", "full"
-    if len(modes) < 2:
-        raise ValueError("need two modes to compare")
-    return modes[0], modes[-1]
-
-
 def pair_compare_modes(left, right):
     modes = mode_choices()
     if not modes:
@@ -373,61 +411,6 @@ def pair_compare_modes(left, right):
         left = modes[0]
     if right not in modes or right == left:
         right = next(m for m in modes if m != left)
-    return left, right
-
-
-def model_key_choices(distilled_model):
-    if (distilled_model or "").strip():
-        return ("base", "distilled")
-    return ("base",)
-
-
-def model_mode_choices(model_key):
-    modes = tuple(
-        mode
-        for config_model_key, mode in THESIS_CONFIGS
-        if config_model_key == model_key and mode in MODE_LABELS
-    )
-    if not modes:
-        raise ValueError(f"unknown model key: {model_key}")
-    return modes
-
-
-def default_compare_model_keys(distilled_model):
-    choices = model_key_choices(distilled_model)
-    if "distilled" in choices:
-        return "base", "distilled"
-    return "base", "base"
-
-
-def pair_compare_model_keys(left, right, distilled_model):
-    choices = model_key_choices(distilled_model)
-    default_left, default_right = default_compare_model_keys(distilled_model)
-    if left not in choices:
-        left = default_left
-    if right not in choices:
-        right = default_right
-    return left, right
-
-
-def compare_configs(distilled_model):
-    """Thesis config id -> (model_key, mode), for every config the compare pickers can offer."""
-    return {
-        config_id(model_key, mode): (model_key, mode)
-        for model_key in model_key_choices(distilled_model)
-        for mode in model_mode_choices(model_key)
-    }
-
-
-def pair_compare_config_modes(left, right, left_model_key, right_model_key):
-    left_modes = model_mode_choices(left_model_key)
-    right_modes = model_mode_choices(right_model_key)
-    if left not in left_modes:
-        left = left_modes[0]
-    if right not in right_modes:
-        right = right_modes[0]
-    if left_model_key == right_model_key and right == left and len(right_modes) > 1:
-        right = next(mode for mode in right_modes if mode != left)
     return left, right
 
 
@@ -523,15 +506,6 @@ def source_count_label(n):
 
 def format_total_ram(mb):
     return f"{float(mb or 0.0) / 1024.0:.1f} GB"
-
-
-def split_reasoning(text):
-    body = text or ""
-    for sep in ("\n\nAnswer:", "\nAnswer:", "\n\n**Answer:**"):
-        if sep in body:
-            head, tail = body.split(sep, 1)
-            return head.strip(), tail.strip()
-    return "", body
 
 
 def first_line(text, limit=88):
@@ -714,29 +688,310 @@ def card_head_html(mode, model=""):
     )
 
 
-def retrieval_bar_html(score, threshold, retrieval_off=False, mode=""):
-    if retrieval_off:
-        text = f"No retrieval in {mode_name(mode)}" if mode else "No retrieval"
-        return f'<div class="retr off">{escape(text)}</div>'
-    n = 0.0 if score is None else max(0.0, min(1.0, float(score)))
-    t = 0.30 if threshold is None else float(threshold)
-    t = max(0.0, min(1.0, t))
-    ok = score is not None and float(score) >= t
-    klass = "retr ok" if ok else "retr low"
-    width = f"{n * 100:.1f}%"
-    tick = f"{t * 100:.1f}%"
-    verdict = "clears" if ok else "below"
+SCORES_NOTE = "cos is the MiniLM score the threshold (tick) gates. rrf is a rank score and bm25 is raw; neither is a confidence."
+RATE_NOTE = "chars/s is counted in the app per 0.5 s, not tokens. tok/s is Ollama's eval_count / eval_duration."
+
+
+def hits_from_chart(chart):
+    """The streaming backend's RetrievalChart rows as hit dicts, so the live view and a saved record draw alike."""
+    return [
+        {
+            "rank": row.rank,
+            "source": row.path,
+            "title": row.label,
+            "path": row.path,
+            "dense": row.dense_cosine,
+            "rrf": row.rrf_rank_score,
+            "bm25": row.bm25_raw,
+        }
+        for row in chart.rows
+    ]
+
+
+class RateTrace:
+    """Characters per second while an answer streams, from the backend's live transport counts.
+
+    Ollama picks its NDJSON chunk sizes, so these are characters, never tokens. Windows start at the first text, so
+    the wait before it (model load, prompt evaluation) is reported once as the first-text time, not as a slow start.
+    """
+
+    def __init__(self, every=0.5):
+        self.every = every
+        self.samples = []
+        self.first_s = None
+        self.last = None
+        self._mark = None
+
+    def add(self, live):
+        self.last = live
+        if self._mark is None:
+            self.first_s = live.elapsed_s
+            self._mark = (live.elapsed_s, live.character_count)
+            return
+        t0, c0 = self._mark
+        if live.elapsed_s - t0 >= self.every:
+            self.samples.append((live.elapsed_s, (live.character_count - c0) / (live.elapsed_s - t0)))
+            self._mark = (live.elapsed_s, live.character_count)
+
+    def finish(self):
+        if self.last is None or self._mark is None:
+            return
+        t0, c0 = self._mark
+        if self.last.elapsed_s - t0 > 0.05 and self.last.character_count > c0:
+            self.samples.append((self.last.elapsed_s, (self.last.character_count - c0) / (self.last.elapsed_s - t0)))
+            self._mark = (self.last.elapsed_s, self.last.character_count)
+
+    def frozen(self):
+        """What the session keeps once the answer is done: the samples and the first-text time."""
+        return {"samples": tuple(self.samples), "first_s": self.first_s}
+
+
+def _trace_peak(samples):
+    return max((rate for _, rate in samples), default=None)
+
+
+def rate_svg(traces, width=240, height=48):
+    """One or two traces (left solid with its area, right dashed) on shared axes: seconds since each answer's first
+    text across, chars/s up."""
+    drawn = [(cls, samples) for cls, samples in traces if len(samples) >= 2]
+    if not drawn:
+        return ""
+    span = max(max(t for t, _ in samples) - samples[0][0] for _, samples in drawn) or 1e-9
+    top = max(max(rate for _, rate in samples) for _, samples in drawn) * 1.15 or 1.0
+    parts = []
+    for cls, samples in drawn:
+        t0 = samples[0][0]
+        pts = [
+            (round((t - t0) / span * width, 1), round(height - rate / top * (height - 2), 1)) for t, rate in samples
+        ]
+        line = " ".join(f"{x},{y}" for x, y in pts)
+        if cls == "l":
+            area = f"M0,{height} L" + " L".join(f"{x},{y}" for x, y in pts) + f" L{pts[-1][0]},{height} Z"
+            parts.append(f'<path class="area" d="{area}"/>')
+        parts.append(f'<polyline class="line {cls}" points="{line}" vector-effect="non-scaling-stroke"/>')
+    peak = max(_trace_peak(samples) for _, samples in drawn)
     return (
-        f'<div class="{klass}">'
-        '<span class="lbl">Retrieval</span>'
-        f'<span class="bar" role="meter" aria-valuemin="0" aria-valuemax="1" aria-valuenow="{n:.2f}"'
-        f' aria-label="Best match {_fmt_score(score)}, threshold {format_threshold(t)}">'
-        f'<span class="fill" style="width:{width}"></span>'
-        f'<span class="tick" style="left:{tick}"></span>'
-        "</span>"
-        f'<span class="val"><b>{_fmt_score(score)}</b> {verdict} {format_threshold(t)}</span>'
+        f'<svg class="spark" viewBox="0 0 {width} {height}" preserveAspectRatio="none" role="img" '
+        f'aria-label="Characters per second while streaming, peak {peak:.0f}">' + "".join(parts) + "</svg>"
+    )
+
+
+def _run_label(run):
+    side = run.get("side") or ""
+    tag = f'<span class="side {side.lower()}">{escape(side)}</span>' if side else ""
+    return (
+        f'<p class="mon-cfg">{tag}<span class="m">{escape(run.get("model") or "")}</span>'
+        f'<span class="md">{escape(mode_name(run.get("mode") or ""))}</span></p>'
+    )
+
+
+def _run_cells(run):
+    """A run's numbers. Streaming: what the app can count (seconds, characters, chunks, chars/s), never tok/s.
+    Finished: the response time and Ollama's own tok/s, or why there is none."""
+    state = run.get("state")
+    if state == "streaming":
+        live = run.get("live")
+        if live is None:
+            return '<p class="mon-cells pending">waiting for the first text</p>'
+        samples = run.get("samples") or ()
+        current = samples[-1][1] if samples else None
+        return (
+            '<p class="mon-cells">'
+            f'<span><b>{live.elapsed_s:.1f}</b> s</span>'
+            f'<span><b>{live.character_count:,}</b> chars</span>'
+            f'<span><b>{live.chunk_count:,}</b> chunks</span>'
+            f'<span><b>{"—" if current is None else f"{current:.0f}"}</b> chars/s</span>'
+            "</p>"
+            '<p class="mon-cells pending tok-later">tok/s comes from Ollama when the answer ends</p>'
+        )
+    if state == "waiting":
+        return '<p class="mon-cells pending">starts when the left answer finishes</p>'
+    if state in ("stopped", "error"):
+        return f'<p class="mon-cells pending">{"stopped" if state == "stopped" else "failed"}, no stats</p>'
+    record = run.get("record") or {}
+    extra = []
+    first_s = run.get("first_s")
+    peak = _trace_peak(run.get("samples") or ())
+    if first_s is not None:
+        extra.append(f"first text <b>{first_s:.1f}</b> s")
+    if peak is not None:
+        extra.append(f"peak <b>{peak:.0f}</b>")
+    return (
+        '<p class="mon-cells">' + answer_stats_html(record) + "</p>"
+        + (f'<p class="mon-cells dim">{" · ".join(extra)}</p>' if extra else "")
+    )
+
+
+def _rate_view(runs, streaming):
+    tag = '<span class="mon-tag live">streaming</span>' if streaming else '<span class="mon-tag">last answer</span>'
+    if not runs:
+        return (
+            '<div class="mon-view mon-rate">'
+            '<p class="mon-head"><span class="mon-tag">idle</span></p>'
+            '<div class="mon-chart empty"><span>No answer in this chat yet</span></div>'
+            f'<p class="mon-note">{escape(RATE_NOTE)}</p>'
+            "</div>"
+        )
+    traces = [((run.get("side") or "l").lower(), tuple(run.get("samples") or ())) for run in runs]
+    chart = rate_svg(traces)
+    if not chart:
+        restored = not streaming and all(not (run.get("samples") or ()) for run in runs)
+        empty = "No trace: the rate is only recorded while an answer streams in this session" if restored else "collecting samples"
+        chart_html = f'<div class="mon-chart empty"><span>{escape(empty)}</span></div>'
+    else:
+        chart_html = f'<div class="mon-chart">{chart}</div>'
+    body = "".join(_run_label(run) + _run_cells(run) for run in runs)
+    return (
+        '<div class="mon-view mon-rate">'
+        f'<p class="mon-head">{tag}<span class="unit">chars/s</span></p>'
+        + chart_html
+        + body
+        + f'<p class="mon-note">{escape(RATE_NOTE)}</p>'
         "</div>"
     )
+
+
+def _score(value, digits):
+    """Leading-dot fixed point (.742), the compact form a narrow score column needs."""
+    text = _fmt_score(value, digits)
+    return text[1:] if text.startswith("0.") else text
+
+
+def score_table_html(hits, threshold):
+    t = 0.30 if threshold is None else float(threshold)
+    tick = f"{max(0.0, min(1.0, t)) * 100:.1f}%"
+    rows = []
+    for hit in hits:
+        dense = _opt_float(hit.get("dense"))
+        width = 0.0 if dense is None else max(0.0, min(1.0, dense)) * 100
+        ok = dense is not None and dense >= t
+        rows.append(
+            f'<li class="{"ok" if ok else "low"}">'
+            f'<span class="rk">{int(hit.get("rank") or 0)}</span>'
+            f'<span class="ttl" title="{escape(str(hit.get("path") or ""))}">{escape(chip_name(hit))}</span>'
+            f'<span class="bar" aria-hidden="true"><span class="fill" style="width:{width:.1f}%"></span>'
+            f'<span class="tick" style="left:{tick}"></span></span>'
+            f'<span class="cos"><span class="sr">cosine </span>{_score(dense, 3)}</span>'
+            f'<span class="raw"><span class="sr">rrf </span>{_score(hit.get("rrf"), 4)}</span>'
+            f'<span class="raw"><span class="sr">bm25 </span>{_fmt_score(hit.get("bm25"), 2)}</span>'
+            "</li>"
+        )
+    return (
+        '<p class="sc-cols" aria-hidden="true"><span>#</span><span>doc</span><span>cos</span><span>rrf</span>'
+        '<span>bm25</span></p><ol class="sc-rows">' + "".join(rows) + "</ol>"
+    )
+
+
+def _scores_view(runs):
+    rag = [run for run in runs if uses_rag(run.get("mode") or "")]
+    plain = [run for run in runs if not uses_rag(run.get("mode") or "")]
+    if not runs:
+        body = '<div class="mon-chart empty"><span>No retrieval yet in this chat</span></div>'
+    elif not rag:
+        body = (
+            f'<div class="mon-chart empty"><span>No retrieval in {escape(mode_name(plain[0].get("mode") or ""))}, '
+            "so there are no scores</span></div>"
+        )
+    else:
+        run = next((r for r in reversed(rag) if r.get("hits") is not None), None)
+        if run is None:
+            body = '<div class="mon-chart empty"><span>Searching the lab docs</span></div>'
+        else:
+            hits = run.get("hits") or []
+            t = 0.30 if run.get("threshold") is None else float(run["threshold"])
+            best = max_dense(hits)
+            verdict = "clears" if best is not None and best >= t else "below"
+            side = run.get("side") or ""
+            who = f'<span class="side {side.lower()}">{escape(side)}</span>' if side else ""
+            shared = [r for r in rag if r is not run and [h.get("path") for h in (r.get("hits") or [])] == [h.get("path") for h in hits]]
+            note = []
+            if shared:
+                note.append("Both sides retrieved the same chunks.")
+            for p in plain:
+                if p.get("side"):
+                    note.append(f'{p["side"]} ({mode_name(p.get("mode") or "")}) retrieves nothing.')
+            body = (
+                f'<p class="mon-head mon-best"><span>{who}best cos <b>{_fmt_score(best, 3)}</b> {verdict} '
+                f"{format_threshold(t)}</span>"
+                + ("" if verdict == "clears" else '<span class="unit">model not called</span>')
+                + "</p>"
+                + (score_table_html(hits, t) if hits else '<p class="mon-cells pending">no hits</p>')
+                + (f'<p class="mon-note">{escape(" ".join(note))}</p>' if note else "")
+            )
+    return (
+        '<div class="mon-view mon-scores">'
+        + body
+        + f'<p class="mon-note">{escape(SCORES_NOTE)}</p>'
+        "</div>"
+    )
+
+
+def monitor_html(runs, streaming=False):
+    """The rail monitor: both views, one shown by the Rate/Scores switch, so flipping views never reruns the app."""
+    return '<div class="mon">' + _rate_view(runs, streaming) + _scores_view(runs) + "</div>"
+
+
+# No `checked` attribute: Streamlit renders this HTML through React, which would turn a checked radio into a
+# controlled input and undo every click. Rate is the view whenever Scores isn't picked.
+MONITOR_SWITCH = (
+    '<div class="mon-switch" role="radiogroup" aria-label="Monitor view">'
+    '<input type="radio" name="mon-view" id="mon-v-rate"><label for="mon-v-rate">Rate</label>'
+    '<input type="radio" name="mon-view" id="mon-v-scores"><label for="mon-v-scores">Scores</label>'
+    "</div>"
+)
+
+
+def finished_runs(message, index, traces):
+    """The monitor's runs for the finished assistant message at `index`, with any stream trace this session kept."""
+
+    def run(rec, side, key, missing=None):
+        trace = (traces or {}).get(key) or {}
+        if rec is None:
+            return {
+                "side": side,
+                "model": (missing or {}).get("model") or "",
+                "mode": (missing or {}).get("mode") or "",
+                "state": "stopped" if (missing or {}).get("state") == "cancelled" else "error",
+            }
+        return {
+            "side": side,
+            "model": rec.get("model") or "",
+            "mode": rec.get("mode") or "",
+            "state": "done",
+            "record": rec,
+            "samples": tuple(trace.get("samples") or ()),
+            "first_s": trace.get("first_s"),
+            "hits": list(rec.get("hits") or []),
+            "threshold": rec.get("threshold"),
+        }
+
+    if message.get("compare"):
+        left, right = message["compare"]
+        miss_l, miss_r = message.get("compare_unanswered") or (None, None)
+        return [
+            run(left, "L", f"answer-h{index}-l", miss_l),
+            run(right, "R", f"answer-h{index}-r", miss_r),
+        ]
+    if message.get("record"):
+        return [run(message["record"], "", f"answer-{index}")]
+    return []
+
+
+def last_runs(messages, traces):
+    for i in range(len(messages) - 1, -1, -1):
+        msg = messages[i]
+        if msg.get("role") == "assistant" and (msg.get("record") or msg.get("compare")):
+            return finished_runs(msg, i, traces)
+    return []
+
+
+def live_phase_label(mode, retrieved=False, weak=False):
+    """What runs before the first text: the hybrid search in a RAG config, then the wait on Ollama."""
+    if uses_rag(mode) and not retrieved:
+        return "Searching the lab docs"
+    if weak:
+        return "No doc cleared the threshold, so the model is not called"
+    return "Waiting for the model"
 
 
 def source_chips_html(hits, retrieval_off=False):
@@ -774,9 +1029,13 @@ def timing_breakdown(record):
     return ", ".join(parts)
 
 
+TOK_S_NOT_GENERATED = "Retrieval was below the threshold, so the model was not called and no tokens were generated."
+TOK_S_UNAVAILABLE = "Ollama reported no eval_count and eval_duration for this answer."
+
+
 def answer_stats_html(record):
-    """Response time and generation speed as two chips. tok/s is left out when Ollama reported no generation
-    (an abstained answer never calls the model, and records saved before the timing fields have none)."""
+    """Response time and generation speed, always both. tok/s is Ollama's terminal eval_count / eval_duration;
+    an abstained answer never calls the model, and an answer without those fields says so, never a made-up 0."""
     latency = float(record.get("latency_s") or 0.0)
     detail = timing_breakdown(record)
     title = "Question to answer" + (f": {detail}" if detail else "")
@@ -788,21 +1047,47 @@ def answer_stats_html(record):
     if tok_s is not None:
         tokens = _opt_int(record.get("eval_count"))
         gen_s = _opt_float(record.get("gen_s"))
-        speed = (
-            f"{tokens} tokens in {gen_s:.2f} s of generation"
-            if tokens is not None and gen_s is not None
-            else "Generation speed"
-        )
+        counted = tokens is not None and gen_s is not None
+        speed = f"{tokens} tokens in {gen_s:.2f} s of generation" if counted else "Generation speed"
         chips.append(
             f'<span class="stat" title="{escape(speed)}"><span class="sr">Speed </span>'
             f"<b>{tok_s:.1f}</b> tok/s</span>"
         )
+        if counted:
+            chips.append(f'<span class="stat calc">{tokens} tok / {gen_s:.2f} s</span>')
+    elif record.get("abstained"):
+        chips.append(
+            f'<span class="stat na" title="{escape(TOK_S_NOT_GENERATED)}"><span class="sr">Speed </span>'
+            "tok/s not generated</span>"
+        )
+    else:
+        chips.append(
+            f'<span class="stat na" title="{escape(TOK_S_UNAVAILABLE)}"><span class="sr">Speed </span>'
+            "tok/s unavailable</span>"
+        )
     return '<span class="stats">' + "".join(chips) + "</span>"
+
+
+RAM_TITLE = "Peak resident memory (RSS) of this app plus Ollama's processes, sampled every 0.25 s while answering"
+
+
+def ram_html(record):
+    """Peak RSS while the answer ran. Ollama's share is only counted when its processes are visible to this app."""
+    total = _opt_float(record.get("total_mb")) or 0.0
+    if total <= 0:
+        return '<span class="na" title="No memory sample was recorded for this answer.">RAM not measured</span>'
+    app_mb = _opt_float(record.get("app_rss_mb")) or 0.0
+    ollama_mb = _opt_float(record.get("ollama_rss_mb")) or 0.0
+    if ollama_mb <= 0:
+        title = f"{RAM_TITLE}. No Ollama process was visible, so this is the app alone."
+        return f'<span title="{escape(title)}"><b>{format_total_ram(total)}</b> peak RSS, app only</span>'
+    title = f"{RAM_TITLE}: app {app_mb:.0f} MB, Ollama {ollama_mb:.0f} MB."
+    return f'<span title="{escape(title)}"><b>{format_total_ram(total)}</b> peak RSS app+Ollama</span>'
 
 
 def metrics_html(record):
     n = source_count(record)
-    bits = [f'<b>{format_total_ram(record.get("total_mb"))}</b> RAM total']
+    bits = []
     if record.get("abstained"):
         unit = "candidate checked" if n == 1 else "candidates checked"
         bits.append(f"<b>{n}</b> {unit}")
@@ -813,9 +1098,22 @@ def metrics_html(record):
     return (
         '<div class="metrics">'
         + answer_stats_html(record)
+        + ram_html(record)
         + "".join(f"<span>{b}</span>" for b in bits)
+        + cut_off_html(record)
         + "</div>"
     )
+
+
+CUT_OFF_TITLE = ("Ollama ended this answer with done_reason=length: generation hit a token or context limit, so the "
+                 "text may stop mid-way. The app shows everything Ollama sent.")
+
+
+def cut_off_html(record):
+    """Only when Ollama itself says it stopped at a limit; an answer that ended on its own says nothing here."""
+    if record.get("done_reason") != "length":
+        return ""
+    return f'<span class="stat warn" title="{escape(CUT_OFF_TITLE)}">cut off at a length limit</span>'
 
 
 def ram_split_html(record):
@@ -948,76 +1246,220 @@ def evidence_block_html(record, collapsed=True):
     )
 
 
-def answer_body_html(text):
+# The loader: a small ASCII cube tumbling about two axes at once, seen from above. Each frame is drawn the way terminal
+# ASCII cubes are: rotate the corners, project them in perspective (x/z, y/z), fill every face that faces the camera
+# into a depth buffer of 4x4 samples per character cell keeping the nearest (largest 1/z), then give each cell the
+# character of the face covering most of it, picked from a brightness ramp by the face's angle to a fixed light. The
+# cube turns once about the vertical while it rolls half a turn about its own x axis; a half roll brings it back onto
+# itself, so the frames loop with no seam and no change of speed. Written from the standard rotation / perspective /
+# z-buffer technique; no third-party code.
+CUBE_COLS, CUBE_ROWS, CUBE_PITCH = 15, 11, 15  # frames sit 15 lines apart in the reel: 4 blank lines under each
+CUBE_FRAMES, CUBE_SECONDS = 48, 4.0
+CUBE_RAMP = "=+*#%@"  # dense glyphs only: at 5px a dot or a dash reads as empty
+_CUBE_SAMPLES = 4
+_CUBE_ASPECT = 4 / 3  # a cell's height over its width: 4px lines, 0.6em advance at 5px
+_CUBE_DISTANCE = 5.0  # camera to cube centre, in half-edges
+_CUBE_TILT = math.radians(-40)
+_CUBE_PHASE = 0.25  # of the loop: the first frame, also the still one, shows three faces
+_CUBE_LIGHT = (-0.35, 0.45, -0.82)  # towards the light: just above and left of the camera, so the faces that face it read
+_CUBE_AMBIENT = 0.25
+
+
+def _rot_x(a):
+    c, s = math.cos(a), math.sin(a)
+    return ((1, 0, 0), (0, c, -s), (0, s, c))
+
+
+def _rot_y(a):
+    c, s = math.cos(a), math.sin(a)
+    return ((c, 0, s), (0, 1, 0), (-s, 0, c))
+
+
+def _mat_mul(a, b):
+    return tuple(tuple(sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)) for i in range(3))
+
+
+def _mat_apply(m, v):
+    return tuple(sum(m[i][k] * v[k] for k in range(3)) for i in range(3))
+
+
+def _cube_faces():
+    """The six faces as (outward normal, four corners in order round the face), edges two half-units long."""
+    faces = []
+    for axis in range(3):
+        u, w = (axis + 1) % 3, (axis + 2) % 3
+        for sign in (1, -1):
+            normal = tuple(sign if i == axis else 0 for i in range(3))
+            corners = []
+            for a, b in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+                corner = list(normal)
+                corner[u], corner[w] = a, b
+                corners.append(tuple(corner))
+            faces.append((normal, corners))
+    return faces
+
+
+_CUBE_FACE_LIST = _cube_faces()
+
+
+def _cube_orientation(t):
+    f = t / CUBE_FRAMES + _CUBE_PHASE
+    return _mat_mul(_mat_mul(_rot_x(_CUBE_TILT), _rot_y(2 * math.pi * f)), _rot_x(math.pi * f))
+
+
+def _cube_project(m, point):
+    """Camera space (camera at the origin looking down +z) to (column units, row units, 1/z), before scaling."""
+    x, y, z = _mat_apply(m, point)
+    z += _CUBE_DISTANCE
+    return x / z * _CUBE_ASPECT, y / z, 1 / z
+
+
+def _cube_fit():
+    """One scale and centre for every frame, so the spinning cube fills the box and never leaves it."""
+    points = [_cube_project(_cube_orientation(t), corner)
+              for t in range(CUBE_FRAMES) for _, corners in _CUBE_FACE_LIST for corner in corners]
+    us, vs = [p[0] for p in points], [p[1] for p in points]
+    scale = min((CUBE_COLS - 1) / (max(us) - min(us)), (CUBE_ROWS - 0.5) / (max(vs) - min(vs)))
+    return scale, (max(us) + min(us)) / 2, (max(vs) + min(vs)) / 2
+
+
+def _cube_render(t, fit):
+    scale, mid_u, mid_v = fit
+    n = _CUBE_SAMPLES
+    width, height = CUBE_COLS * n, CUBE_ROWS * n
+    depth = [[0.0] * width for _ in range(height)]
+    owner = [[-1] * width for _ in range(height)]
+    m = _cube_orientation(t)
+    norm = math.sqrt(sum(c * c for c in _CUBE_LIGHT))
+    light = tuple(c / norm for c in _CUBE_LIGHT)
+    levels, visible = {}, []
+    for face, (normal, corners) in enumerate(_CUBE_FACE_LIST):
+        turned = _mat_apply(m, normal)
+        levels[face] = _CUBE_AMBIENT + (1 - _CUBE_AMBIENT) * max(0.0, sum(a * b for a, b in zip(turned, light)))
+        first = _mat_apply(m, corners[0])
+        if sum(a * b for a, b in zip(turned, (first[0], first[1], first[2] + _CUBE_DISTANCE))) < 0:
+            visible.append(face)  # faces the camera
+    # Brightest first, each face at least two steps down the ramp from the one before, lifted together if that runs off
+    # its foot: faces never merge into one patch, keep their order of brightness, and fall in different thirds of the
+    # ramp, which are drawn in different inks.
+    order = sorted(visible, key=lambda f: -levels[f])
+    steps, above = [], len(CUBE_RAMP) + 1
+    for face in order:
+        above = min(above - 2, int(levels[face] * len(CUBE_RAMP)))
+        steps.append(above)
+    lift = max(0, -min(steps, default=0))
+    glyphs = {face: CUBE_RAMP[step + lift] for face, step in zip(order, steps)}
+    for face in visible:
+        corners = _CUBE_FACE_LIST[face][1]
+        pts = []
+        for corner in corners:
+            u, v, w = _cube_project(m, corner)
+            pts.append(((CUBE_COLS / 2 + (u - mid_u) * scale) * n, (CUBE_ROWS / 2 - (v - mid_v) * scale) * n, w))
+        # 1/z is linear across a flat face on screen: solve its plane from three corners.
+        (x0, y0, w0), (x1, y1, w1), (x2, y2, w2) = pts[:3]
+        det = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0)
+        if abs(det) < 1e-9:
+            continue  # edge-on
+        dw_dx = ((w1 - w0) * (y2 - y0) - (w2 - w0) * (y1 - y0)) / det
+        dw_dy = ((x1 - x0) * (w2 - w0) - (x2 - x0) * (w1 - w0)) / det
+        winding = 1 if det > 0 else -1
+        edges = [(pts[k][0], pts[k][1], pts[(k + 1) % 4][0], pts[(k + 1) % 4][1]) for k in range(4)]
+        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+        for py in range(max(0, int(min(ys))), min(height, int(max(ys)) + 1)):
+            cy = py + 0.5
+            for px in range(max(0, int(min(xs))), min(width, int(max(xs)) + 1)):
+                cx = px + 0.5
+                if all(winding * ((bx - ax) * (cy - ay) - (by - ay) * (cx - ax)) >= 0 for ax, ay, bx, by in edges):
+                    w = w0 + dw_dx * (cx - x0) + dw_dy * (cy - y0)
+                    if w > depth[py][px]:
+                        depth[py][px], owner[py][px] = w, face
+    cells = {}
+    for r in range(CUBE_ROWS):
+        for c in range(CUBE_COLS):
+            counts = {}
+            for py in range(r * n, r * n + n):
+                for px in range(c * n, c * n + n):
+                    if owner[py][px] >= 0:
+                        counts[owner[py][px]] = counts.get(owner[py][px], 0) + 1
+            if sum(counts.values()) * 2 >= n * n:
+                cells[r, c] = counts
+    winners = {cell: max(counts, key=counts.get) for cell, counts in cells.items()}
+    rows = [[" "] * CUBE_COLS for _ in range(CUBE_ROWS)]
+    for (r, c), counts in cells.items():
+        # A cell touching no other cell of its face, even at a corner, is a tip caught by the sampling: one speck that
+        # blinks for a frame. It goes to the next face in it, if that still covers half of it.
+        face = winners[r, c]
+        if not any(winners.get((r + dr, c + dc)) == face for dr in (-1, 0, 1) for dc in (-1, 0, 1) if dr or dc):
+            counts = {other: k for other, k in counts.items() if other != face}
+            if sum(counts.values()) * 2 < n * n:
+                continue
+        rows[r][c] = glyphs[max(counts, key=counts.get)]
+    return ["".join(row) for row in rows]
+
+
+_CUBE_FIT = _cube_fit()
+_CUBE_TEXT = [_cube_render(t, _CUBE_FIT) for t in range(CUBE_FRAMES)]
+
+
+def cube_frame(t):
+    """Frame t of the loop as rows of text."""
+    return _CUBE_TEXT[t % CUBE_FRAMES]
+
+
+def _cube_row_html(row):
+    """The dimmest and brightest thirds of the ramp in their own ink, so faces part by tone as well as by glyph."""
     parts = []
-    for kind, chunk in split_code_blocks(text):
-        if kind == "code":
-            parts.append(f'<pre class="cmd"><code>{escape(chunk)}</code></pre>')
-        elif chunk.strip():
-            parts.append(f'<div class="prose">{escape(chunk).replace(chr(10), "<br>")}</div>')
-    if not parts:
-        return '<div class="prose"></div>'
+    for tone, run in groupby(row, key=lambda ch: None if ch == " " else CUBE_RAMP.index(ch) * 3 // len(CUBE_RAMP)):
+        text = "".join(run)
+        parts.append(text if tone in (None, 1) else f'<span class="{"d" if tone == 0 else "b"}">{text}</span>')
     return "".join(parts)
 
 
-def card_html(record, align_slots=False):
-    mode = record.get("mode") or ""
-    rag = uses_rag(mode)
-    abstained = bool(record.get("abstained"))
-    klass = "card idk-card" if abstained else "card"
-    parts = [f'<div class="{klass}">']
-    if abstained:
-        parts.append('<div class="polaris-idk-flag" hidden></div>')
-    parts.append(card_head_html(mode))
-    if abstained:
-        parts.append(idk_card_html(record))
+def _cube_frame_html(t):
+    return '<span class="cube-frame">' + "<br>".join(_cube_row_html(row) for row in cube_frame(t)) + "</span>"
+
+
+# One line of HTML: every frame in its own fixed-height block, stacked in a reel that one CSS steps() animation slides.
+_CUBE_REEL = "".join(_cube_frame_html(t) for t in range(CUBE_FRAMES))
+_CUBE_REST = _cube_frame_html(0)
+
+
+def cube_html(still=False, elapsed=0.0):
+    """The spinning cube, or its first frame when still. `elapsed` seconds into the loop: a loader drawn again with a
+    new label picks the spin up where the last one was rather than at its first frame."""
+    if still:
+        return f'<span class="cube still" aria-hidden="true"><span class="cube-reel">{_CUBE_REST}</span></span>'
+    delay = f' style="animation-delay:-{elapsed % CUBE_SECONDS:.2f}s"' if elapsed else ""
+    return f'<span class="cube" aria-hidden="true"><span class="cube-reel"{delay}>{_CUBE_REEL}</span></span>'
+
+
+def thinking_html(label, elapsed=0.0, note=None):
+    """The loader: the turning cube beside one plain label for what runs. Without a note, STILL_WORKING fades in once
+    the wait passes 15 s; a note given is shown at once."""
+    if note is None:
+        wait = f' style="animation-delay:{max(0.0, 15 - elapsed):.1f}s"' if elapsed else ""
+        note_html = f'<span class="thinking-note"{wait}>{escape(STILL_WORKING)}</span>'
     else:
-        parts.append(answer_body_html(record.get("answer") or ""))
-    if rag:
-        parts.append(evidence_block_html(record, collapsed=True))
-    elif align_slots:
-        parts.append(empty_slot_html("ev", f"No sources in {mode_name(mode)}"))
-    parts.append(
-        retrieval_bar_html(
-            record.get("retrieval_max_dense"),
-            record.get("threshold"),
-            retrieval_off=not rag,
-            mode=mode,
-        )
-    )
-    if abstained:
-        parts.append(best_match_html(record))
-    elif align_slots:
-        parts.append(empty_slot_html("best"))
-    parts.append(metrics_html(record))
-    parts.append("</div>")
-    return "".join(parts)
-
-
-def _dots_html():
-    return '<span class="dots" aria-hidden="true">' + "<i></i>" * 9 + "</span>"
-
-
-def thinking_html(label, still=STILL_WORKING):
-    """Loader for a running answer: a 3x3 constellation breathing out from its center star beside one plain
-    label. Sent once per answer; the dots are pure CSS, so they keep moving while the script waits."""
+        note_html = f'<span class="thinking-note now">{escape(note)}</span>'
     return (
         '<div class="thinking" role="status">'
-        + _dots_html()
+        + cube_html(elapsed=elapsed)
         + '<span class="thinking-text">'
         f'<span class="thinking-label">{escape(label)}…</span>'
-        f'<span class="thinking-note">{escape(still)}</span>'
-        "</span></div>"
+        + note_html
+        + "</span></div>"
     )
 
 
-def flags_html(sky, daylight=False, compare=False, generating=False):
+REASONING_LABEL = "Writing its reasoning, under Show reasoning"
+REASONING_NOTE = "The answer shows from its Answer: line, or when the reply ends."
+
+
+def flags_html(sky, daylight=False, generating=False):
     """The hidden marker the stylesheet reads through :root:has(); polaris-generating holds the ambient motion."""
     flags = ["polaris-flags", f"polaris-sky-{sky}"]
     if daylight:
         flags.append("polaris-daylight")
-    if compare:
-        flags.append("polaris-compare")
     if generating:
         flags.append("polaris-generating")
     return f'<div class="{" ".join(flags)}"></div>'
@@ -1027,29 +1469,12 @@ def composer_note_html(conn):
     return f'<div class="composer-conn">{conn}<span class="composer-note">{escape(ENGLISH_NOTE)}</span></div>'
 
 
-def _css_string(text):
-    return '"' + str(text).replace("\\", "\\\\").replace('"', '\\"').replace("\n", " ") + '"'
-
-
-def mode_menu_css(model, modes):
-    """Per-run CSS: the model name on the mode dropdown, and each mode's hint inside its open menu."""
-    open_menu = ':root:has([class*="st-key-mode-"] [aria-expanded="true"]) [data-baseweb="popover"] li[role="option"]'
-    rules = [f":root{{--polaris-model:{_css_string(model)}}}"]
-    for i, mode in enumerate(modes, 1):
-        rules.append(f"{open_menu}:nth-child({i})::after{{content:{_css_string(mode_hint(mode))}}}")
-    return "<style>" + "".join(rules) + "</style>"
-
-
 def stopped_html():
-    return '<p class="stopped">Stopped before an answer came back.</p>'
+    return '<p class="stopped">Stopped. The partial answer was not kept.</p>'
 
 
 def cancelled_side_html():
     return '<p class="stopped">Cancelled</p>'
-
-
-def running_card_html(mode, label, model=""):
-    return '<div class="card running-card">' + card_head_html(mode, model) + thinking_html(label) + "</div>"
 
 
 def thinking_label(mode, loading_index=False):
@@ -1066,7 +1491,7 @@ def waiting_html(mode, after_label, model=""):
         '<div class="card waiting-card">'
         + card_head_html(mode, model)
         + '<div class="slot-empty body"><div class="thinking queued">'
-        + _dots_html()
+        + cube_html(still=True)
         + f'<span class="thinking-text"><span class="queued-label">Starts when {escape(after_label)} finishes</span></span>'
         + "</div></div>"
         + empty_slot_html("ev", "No sources yet")
@@ -1081,10 +1506,36 @@ def user_turn_html(question):
     return f'<div class="q" role="heading" aria-level="2">{escape(question)}</div>'
 
 
-def preview_text(answer):
-    _, body = split_reasoning(answer or "")
-    prose = " ".join(chunk for kind, chunk in split_code_blocks(body) if kind == "md")
+def preview_text(answer, mode=""):
+    parsed = parse_answer(answer or "", mode=mode)
+    prose = " ".join(b.text for b in parsed.blocks if b.kind == "md")
     return first_line(prose.replace("`", ""))
+
+
+def loose_commands_html(count):
+    """Above commands the model listed after its steps without tying them to one: the app doesn't guess the step."""
+    what = "this command" if count == 1 else f"these {count} commands"
+    return (f'<p class="cmd-loose">The model listed {what} after its steps without saying which step each belongs '
+            "to.</p>")
+
+
+def source_line_html(answer, mode, hits):
+    """Under an answer: the excerpts it cites, by name, or that there were none to cite. A [n] that points at no
+    retrieved excerpt was taken out of the text and is named here, so nothing is quietly dropped."""
+    dropped = ", ".join(f"[{n}]" for n in answer.dropped)
+    if not uses_rag(mode):
+        line = f"No documents in {escape(mode_name(mode))}, so nothing to cite"
+        if dropped:
+            line += f" · removed {dropped} the model wrote"
+        return f'<p class="src-line none">{line}</p>'
+    names = []
+    for n in answer.cited:
+        hit = hits[n - 1] if n - 1 < len(hits) else {}
+        names.append(f"<b>[{n}]</b> {escape(doc_label(hit) or f'excerpt {n}')}")
+    line = ("Source " + " · ".join(names)) if names else "Source not cited by the model"
+    if dropped:
+        line += f" · removed {dropped}, not among the {len(hits)} retrieved"
+    return f'<p class="src-line">{line}</p>'
 
 
 def compare_model_tags(left, right):
@@ -1101,7 +1552,7 @@ def compare_compact_html(left, right):
 
     def block(rec, tag):
         mode = rec.get("mode") or ""
-        preview = preview_text(rec.get("answer") or "")
+        preview = preview_text(rec.get("answer") or "", mode)
         return (
             '<div class="cmp-cell">'
             + '<div class="cmp-top">'
@@ -1128,6 +1579,45 @@ def compare_summary_html(left_model, left_mode, right_model, right_mode):
             f'<span class="m">{escape(right_model)}</span> {right}'
         )
     return f'<p class="composer-cmp">{body}</p>'
+
+
+def config_summary_html(model, mode):
+    """The composer's line outside compare: the model and config the next question goes to."""
+    return f'<p class="composer-cmp"><span class="m">{escape(model)}</span> <b>{escape(mode_name(mode))}</b></p>'
+
+
+def model_choice_label(option, names):
+    return option.name + (" · not installed" if is_installed(option.name, names) is False else "")
+
+
+def model_status_html(option, names, ollama_up):
+    """One line under the model picker: what this model is, and whether Ollama has it."""
+    only = " · runs +RAG+CoT only" if option.key == "distilled" else ""
+    if not ollama_up or names is None:
+        return f'<p class="side-note model-st">{escape(option.role)}{only} · can\'t check, Ollama is not running</p>'
+    if is_installed(option.name, names):
+        return f'<p class="side-note model-st"><span class="ok">installed</span> · {escape(option.role)}{only}</p>'
+    return (
+        '<p class="side-note model-st err">not installed · '
+        f"<code>{escape(option.create)}</code></p>"
+    )
+
+
+def models_table_html(options, names, ollama_up):
+    rows = []
+    for option in options:
+        state = is_installed(option.name, names) if ollama_up else None
+        label = {True: "installed", False: "not installed", None: "unknown"}[state]
+        fix = "" if state else f"<code>{escape(option.create)}</code>"
+        rows.append(
+            f'<li class="{label.replace(" ", "-")}"><span class="n">{escape(option.name)}</span>'
+            f'<span class="r">{escape(option.role)}</span><span class="s">{label}</span>{fix}</li>'
+        )
+    return (
+        '<ul class="models">' + "".join(rows) + "</ul>"
+        '<p class="dlg-note">OLLAMA_MODEL sets the default base and OLLAMA_DISTILLED_MODEL names the student. '
+        "A missing model is never swapped for another one.</p>"
+    )
 
 
 def records_in(messages):
@@ -1170,22 +1660,6 @@ def avg_latency(records):
     if not records:
         return None
     return sum(float(r.get("latency_s") or 0.0) for r in records) / len(records)
-
-
-_FENCE_RE = re.compile(r"```(?:[a-zA-Z0-9_-]+)?\n(.*?)```", re.DOTALL)
-
-
-def split_code_blocks(text):
-    """Yield ('md'|'code', chunk) pairs so command fences can use st.code."""
-    body = text or ""
-    pos = 0
-    for m in _FENCE_RE.finditer(body):
-        if m.start() > pos:
-            yield "md", body[pos : m.start()]
-        yield "code", m.group(1).strip("\n")
-        pos = m.end()
-    if pos < len(body):
-        yield "md", body[pos:]
 
 
 def sidebar_kv_html(rows):

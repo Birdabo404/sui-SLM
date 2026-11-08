@@ -1,47 +1,55 @@
-/* Hallmark · genre: atmospheric · macrostructure: Conversational (landing → thread) · theme: custom
- * vibe: "night sky over a Linux lab" · paper oklch(0.185 0.016 264) · accent oklch(0.83 0.135 78) star amber
- * fonts: Ubuntu Sans (UI + prose) + JetBrains Mono (wordmark, commands) · motion: CSS only, transform/opacity
+/* Hallmark · redesign · genre: atmospheric · macrostructure: Conversational (landing → thread) · theme: custom
+ * pre-emit critique: P4 H4 E4 S5 R4 V4
+ * vibe: "instrument panel in a night-shift Linux lab" · paper oklch(0.17 0.034 260) navy · accent star amber
+ * fonts: JetBrains Mono (interface, questions, readouts) + Ubuntu Sans (answer prose only) · motion: CSS only
  *
  * style.css — Polaris. Inject once with star-orbit.css. Fonts also declared in .streamlit/config.toml.
- * NIGHT = :root. DAYLIGHT when the app renders <div class="polaris-flags polaris-daylight">.
+ * NIGHT = :root. LIGHT MODE when the app renders <div class="polaris-flags polaris-daylight">.
  * No JS, no images, no network fonts: this runs on 8 GB lab ThinkPads while Ollama holds the CPU, so every
- * animation is a transform/opacity keyframe the compositor can run without the main thread.
- * One accent, one meaning: star amber marks Polaris itself (star, send, focus). Everything else is the neutral ramp. */
+ * animation is a transform/opacity keyframe the compositor can run without the main thread, and the live
+ * meter is redrawn by the server at most twice a second rather than animated.
+ * Two hues with one meaning each: star amber marks Polaris itself (star, send, focus); ice blue marks measured
+ * data (retrieval scores, the stream trace). Everything else is the navy ramp. */
 
 @font-face{font-family:"Ubuntu Sans";src:url("/app/static/UbuntuSans-Variable-Latin.woff2") format("woff2");font-weight:300 700;font-style:normal;font-display:swap}
 @font-face{font-family:"JetBrains Mono";src:url("/app/static/JetBrainsMono-Regular.woff2") format("woff2");font-weight:400;font-style:normal;font-display:swap}
 @font-face{font-family:"JetBrains Mono";src:url("/app/static/JetBrainsMono-SemiBold.woff2") format("woff2");font-weight:600;font-style:normal;font-display:swap}
 
 :root{
-  /* neutral ramp, hue 264 held end to end; contrast measured on the surface each pair renders on */
-  --c-bg:oklch(0.185 0.016 264);          /* page */
-  --c-surface:oklch(0.225 0.018 264);     /* sidebar, composer, compare panels */
-  --c-raised:oklch(0.265 0.02 264);       /* chips, code, tracks, hover */
-  --c-thumb:oklch(0.34 0.02 264);         /* selected segment */
-  --c-line:oklch(0.315 0.02 264);         /* hairlines */
-  --c-line-strong:oklch(0.42 0.022 264);  /* control edges */
-  --c-text:oklch(0.945 0.006 264);        /* 14.6:1 on surface */
-  --c-text-2:oklch(0.78 0.014 264);       /* 8.6:1 on surface */
-  --c-text-3:oklch(0.655 0.016 264);      /* 4.8:1 on raised */
+  /* navy ramp, hue 260 held end to end; contrast measured on the surface each pair renders on */
+  --c-bg:oklch(0.17 0.034 260);           /* page: night navy, not a tinted black */
+  --c-surface:oklch(0.205 0.038 260);     /* sidebar, composer, compare panels */
+  --c-raised:oklch(0.25 0.042 260);       /* chips, code, tracks, hover */
+  --c-thumb:oklch(0.31 0.044 260);        /* selected segment */
+  --c-line:oklch(0.295 0.04 260);         /* hairlines */
+  --c-line-strong:oklch(0.4 0.045 260);   /* control edges */
+  --c-text:oklch(0.94 0.012 250);         /* 14.9:1 on surface */
+  --c-text-2:oklch(0.8 0.026 252);        /* 9.2:1 on surface */
+  --c-text-3:oklch(0.68 0.032 254);       /* 5.0:1 on raised */
   --c-accent:oklch(0.83 0.135 78);        /* star amber, 10:1 on surface */
-  --c-on-accent:oklch(0.185 0.016 264);
-  --c-ok:oklch(0.8 0.085 205);            /* retrieval cleared the threshold */
-  --c-idk:oklch(0.7 0.02 264);            /* abstained */
+  --c-on-accent:oklch(0.17 0.034 260);
+  --c-data:oklch(0.8 0.085 225);          /* ice blue: measured data, 8.4:1 on surface */
+  --c-data-dim:oklch(0.8 0.085 225 / 0.16);
+  --c-ok:var(--c-data);                   /* retrieval cleared the threshold */
+  --c-idk:oklch(0.7 0.03 258);            /* abstained */
   --c-danger:oklch(0.72 0.14 25);
   --c-star:#F5B942;                       /* the star's own gold, same in both themes */
   --h-text:var(--c-text); --h-text-2:var(--c-text-2); --h-accent:var(--c-star);
-  --shadow-float:0 1px 0 oklch(1 0 0 / 0.04) inset,0 10px 30px -12px oklch(0 0 0 / 0.55);
+  --shadow-float:0 1px 0 oklch(1 0 0 / 0.04) inset,0 10px 30px -12px oklch(0.08 0.04 260 / 0.7);
 
-  /* type: Ubuntu Sans is the lab desktop's own face; mono only for the wordmark and commands.
-     Four sizes on a ~1.2 step from a 16px body: caption 12, UI 14, body 16, question 20. */
-  --f-sans:"Ubuntu Sans",system-ui,sans-serif; --f-mono:"JetBrains Mono",ui-monospace,monospace;
-  --fs-cap:12px; --fs-ui:14px; --fs-body:16px; --fs-q:20px;
-  --lh-tight:1.3; --lh-ui:1.4; --lh-body:1.65;
+  /* type: JetBrains Mono carries the interface, the way a lab terminal does; Ubuntu Sans, the lab desktop's own
+     face, carries the answer's prose and its reasoning, where long lines in mono read slowly. Dense steps, one per
+     role: rail section titles 11 in capitals, readout units and notes 12, labels 12.5, controls and commands 13,
+     reasoning 13.5, the answer 14.5, the question 16. Weight and ink separate what shares a size. */
+  --f-sans:"Ubuntu Sans",system-ui,sans-serif; --f-mono:"JetBrains Mono",ui-monospace,monospace; --f-ui:var(--f-mono);
+  --fs-label:11px; --fs-meta:12px; --fs-cap:12.5px; --fs-ui:13px; --fs-reason:13.5px; --fs-body:14.5px; --fs-q:16px;
+  --lh-tight:1.35; --lh-ui:1.45; --lh-body:1.62;
 
-  --s-1:4px; --s-2:8px; --s-3:12px; --s-4:16px; --s-5:20px; --s-6:24px; --s-7:32px; --s-8:48px;
-  /* concentric: composer 20 = segment 12 + 8 padding; panel 16 = code 10 + 6 */
-  --r-xs:6px; --r-sm:10px; --r-md:12px; --r-lg:16px; --r-xl:20px; --r-pill:999px;
-  --main-max:760px; --cmp-max:1180px;
+  --s-1:4px; --s-2:8px; --s-3:12px; --s-4:16px; --s-5:20px; --s-6:24px; --s-7:32px; --s-8:40px;
+  /* tighter, instrument-like radii; concentric: composer 14 = segment 8 + 6 padding */
+  --r-xs:4px; --r-sm:6px; --r-md:8px; --r-lg:10px; --r-xl:14px; --r-pill:999px;
+  /* one chat shell for one answer or two: turning compare on, or hiding the rail, never resizes it */
+  --main-max:880px;
 
   --ease-out:cubic-bezier(0.23,1,0.32,1);
   --ease-in-out:cubic-bezier(0.77,0,0.175,1);
@@ -61,7 +69,9 @@
   --c-text-3:oklch(0.535 0.018 264);
   --c-accent:oklch(0.6 0.14 62);          /* 4.1:1, used for the ring and the send icon, never for text */
   --c-on-accent:oklch(1 0 0);
-  --c-ok:oklch(0.5 0.09 205);
+  --c-data:oklch(0.5 0.11 240);
+  --c-data-dim:oklch(0.5 0.11 240 / 0.14);
+  --c-ok:var(--c-data);
   --c-idk:oklch(0.5 0.02 264);
   --c-danger:oklch(0.55 0.17 27);
   --shadow-float:0 1px 2px oklch(0 0 0 / 0.04),0 8px 24px -12px oklch(0 0 0 / 0.12);
@@ -70,13 +80,15 @@
 /* ---------- Streamlit chrome ---------- */
 html,body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;overflow-x:clip}
 :root{scrollbar-color:var(--c-line-strong) transparent}
-.stApp,[data-testid="stAppViewContainer"]{background:var(--c-bg);color:var(--c-text);font-family:var(--f-sans)}
-[data-testid="stHeader"]{background:linear-gradient(to bottom,var(--c-bg) 55%,transparent)}
+.stApp,[data-testid="stAppViewContainer"]{background:var(--c-bg);color:var(--c-text);font-family:var(--f-ui)}
+/* The header row belongs to the tab strip (which lives in the main block, under the header's stacking layer), so the
+   header itself is see-through and click-through except for its own buttons. */
+[data-testid="stHeader"]{background:transparent;pointer-events:none}
+[data-testid="stHeader"] :is(button,a){pointer-events:auto}
 [data-testid="stDecoration"]{display:none}
 /* the composer's stop button replaces Streamlit's "Running… Stop" widget */
 [data-testid="stStatusWidget"]{display:none!important}
-[data-testid="stMainBlockContainer"]{max-width:var(--main-max);padding:calc(3.75rem + var(--s-2)) var(--s-5) 0}
-:root:has(.polaris-compare) [data-testid="stMainBlockContainer"]{max-width:var(--cmp-max)}
+[data-testid="stMainBlockContainer"]{max-width:var(--main-max);padding:calc(56px + var(--s-4)) var(--s-5) 0}
 [data-testid="stElementContainer"][data-stale="true"]{opacity:1!important;transition:none!important}
 [data-testid="stElementContainer"]:has(.polaris-flags),
 [data-testid="stElementContainer"]:has(> [data-testid="stMarkdown"] style){display:none}
@@ -167,14 +179,14 @@ html,body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;o
 
 /* connection: passive network check + Ollama, shown in the composer */
 .conn{display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px 0 8px;border-radius:var(--r-pill);background:var(--c-raised);
-  font:500 var(--fs-cap)/1 var(--f-sans);color:var(--c-text-2);white-space:nowrap;cursor:default}
+  font:500 var(--fs-cap)/1 var(--f-ui);color:var(--c-text-2);white-space:nowrap;cursor:default}
 .conn svg{width:14px;height:14px;flex:none;fill:none;stroke:currentColor;stroke-width:1.75;stroke-linecap:round;stroke-linejoin:round}
 .conn svg .d{fill:currentColor;stroke:none}
 .conn.offline svg{color:var(--c-ok)}
 .conn.online svg{color:var(--c-text-2)}
 .conn.down{color:var(--c-danger);background:color-mix(in oklch,var(--c-danger) 14%,transparent)}
 .composer-conn{display:flex;align-items:center;gap:var(--s-3);min-width:0}
-.composer-note{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:400 var(--fs-cap)/1.2 var(--f-sans);color:var(--c-text-3)}
+.composer-note{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:400 var(--fs-cap)/1.2 var(--f-ui);color:var(--c-text-3)}
 
 /* ---------- sky: an ASCII starfield behind an empty chat, one step fainter per question ---------- */
 [data-testid="stMainBlockContainer"]{position:relative;z-index:0}
@@ -186,7 +198,7 @@ html,body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;o
   mask-image:radial-gradient(ellipse 30% 36% at var(--sky-cx) 48%,transparent 20%,#000 90%);
   opacity:1;visibility:visible;animation:polaris-sky-in 1.6s var(--ease-out) backwards;
   transition:opacity 2.4s var(--ease-in-out),visibility 0s linear 0s}
-:root:has([data-testid="stSidebar"][aria-expanded="true"]) [data-testid="stMarkdownContainer"] .sky{--sky-cx:calc(50% + 124px)}
+:root:has([data-testid="stSidebar"][aria-expanded="true"]) [data-testid="stMarkdownContainer"] .sky{--sky-cx:calc(50% + 132px)}
 .sky-field{flex:none;white-space:pre}
 .sky b{font-weight:400;color:var(--c-text-2)}
 :root:has(.polaris-sky-1) [data-testid="stMarkdownContainer"] .sky{opacity:.55}
@@ -196,11 +208,11 @@ html,body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;o
 @keyframes polaris-sky-in{from{opacity:0}}
 
 /* ---------- landing: one centered column, the star is the only loud thing ---------- */
-.st-key-landing{min-height:calc(100dvh - 3.75rem - var(--s-2));justify-content:center;gap:var(--s-4);padding-bottom:12vh}
+.st-key-landing{min-height:calc(100dvh - 56px - var(--s-4));justify-content:center;gap:var(--s-4);padding-bottom:12vh}
 .hero{--k:2.5;display:flex;flex-direction:column;align-items:center;gap:var(--s-2);margin-bottom:var(--s-4)}
 .hero .band{justify-content:center;height:calc(36px * var(--k))}
 .hero .mark{padding:0 .35em;transform:translate(.4em,calc(-2px * var(--k))) scale(var(--k))}
-.hero p.tagline{margin:0;font:400 var(--fs-body)/var(--lh-ui) var(--f-sans);color:var(--c-text-2);letter-spacing:.005em}
+.hero p.tagline{margin:0;font:400 var(--fs-body)/var(--lh-ui) var(--f-ui);color:var(--c-text-2);letter-spacing:.005em}
 
 /* composer: one floating surface. Top row: the textarea. Bottom row: connection, model + mode menu, send/stop. */
 [class*="st-key-composer-"]{position:relative;background:var(--c-surface);border:1px solid var(--c-line);border-radius:var(--r-xl);
@@ -210,7 +222,7 @@ html,body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;o
   box-shadow:var(--shadow-float),0 0 0 3px color-mix(in oklch,var(--c-accent) 22%,transparent)}
 [class*="st-key-composer-"] [data-testid="stChatInput"]{background:transparent!important;border:0!important;border-radius:0!important;box-shadow:none!important}
 [class*="st-key-composer-"] [data-testid="stChatInput"] div{background:transparent!important;border-color:transparent!important;box-shadow:none!important}
-[class*="st-key-composer-"] [data-testid="stChatInputTextArea"]{font:400 var(--fs-body)/1.5 var(--f-sans)!important;color:var(--c-text);caret-color:var(--c-accent);
+[class*="st-key-composer-"] [data-testid="stChatInputTextArea"]{font:400 var(--fs-body)/1.5 var(--f-ui)!important;color:var(--c-text);caret-color:var(--c-accent);
   padding-left:var(--s-2)!important}
 [class*="st-key-composer-"] [data-testid="stChatInputTextArea"]::placeholder{color:var(--c-text-3);opacity:1}
 [class*="st-key-composer-"] [data-testid="stChatInputTextArea"]:focus-visible{outline:none}
@@ -244,31 +256,16 @@ html,body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;o
 [class*="st-key-composer-"] [data-testid="stColumn"]{min-width:0}
 [class*="st-key-composer-"] [data-testid="stColumn"]:first-child{flex:1 1 0;width:auto}
 [class*="st-key-composer-"] [data-testid="stColumn"]:last-child{display:flex;justify-content:flex-end;flex:0 1 auto;width:auto}
-p.composer-cmp{margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right;font:400 var(--fs-ui)/32px var(--f-sans);color:var(--c-text-3)}
+p.composer-cmp{margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right;font:400 var(--fs-ui)/32px var(--f-ui);color:var(--c-text-3)}
 .composer-cmp b{font-weight:600;color:var(--c-text)}
 .composer-cmp .m{font:400 var(--fs-cap)/1 var(--f-mono);color:var(--c-text-3)}
 .composer-cmp .vs{margin:0 var(--s-2);color:var(--c-text-3)}
 
-/* model + mode: a text dropdown like a chat app's model picker; the model name rides in front of the mode */
-[class*="st-key-mode-"][class*="-box"]{width:auto}
-[class*="st-key-mode-"] [data-testid="stSelectbox"]{width:fit-content;margin-left:auto}
-[class*="st-key-mode-"] [data-baseweb="select"] > div{min-height:32px;padding:0 2px 0 var(--s-3);border:0;border-radius:var(--r-sm);background:transparent;cursor:pointer;
-  transition:background-color var(--dur-micro) var(--ease-out)}
-[class*="st-key-mode-"] [data-baseweb="select"] > div:hover,[class*="st-key-mode-"] [data-baseweb="select"] > div:focus-within{background:var(--c-raised)}
-[class*="st-key-mode-"] [data-baseweb="select"] > div > div:first-child{display:flex;align-items:center;flex-wrap:nowrap;padding:0;
-  font:500 var(--fs-ui)/1.2 var(--f-sans);color:var(--c-text-2);white-space:nowrap}
-[class*="st-key-mode-"] [data-baseweb="select"] > div > div:first-child > *{align-self:center;height:auto;line-height:1.2}
-[class*="st-key-mode-"] [data-baseweb="select"] > div > div:first-child::before{content:var(--polaris-model);margin-right:var(--s-2);font-weight:600;color:var(--c-text)}
-[class*="st-key-mode-"] [data-baseweb="select"] input{caret-color:transparent;width:1px!important}
-[class*="st-key-mode-"] [data-baseweb="select"] svg{color:var(--c-text-3)}
-:root:has([class*="st-key-mode-"] [aria-expanded="true"]) [data-baseweb="popover"] > div{min-width:340px}
-:root:has([class*="st-key-mode-"] [aria-expanded="true"]) [data-baseweb="popover"] > div > div{width:100%!important}
 [data-baseweb="popover"] ul[role="listbox"]{padding:var(--s-1);border:1px solid var(--c-line);border-radius:var(--r-md);background:var(--c-surface);
   box-shadow:0 16px 40px -16px oklch(0 0 0 / 0.5)}
 [data-baseweb="popover"] li[role="option"]{display:flex;align-items:center;justify-content:space-between;gap:var(--s-4);border-radius:var(--r-xs);
-  font:500 var(--fs-ui)/1.2 var(--f-sans);color:var(--c-text)}
+  font:500 var(--fs-ui)/1.2 var(--f-ui);color:var(--c-text)}
 [data-baseweb="popover"] li[role="option"] > div{flex:1 1 auto;min-width:0}
-[data-baseweb="popover"] li[role="option"]::after{flex:none;font:400 var(--fs-cap)/1.2 var(--f-sans);color:var(--c-text-3);white-space:nowrap}
 [data-baseweb="popover"] li[role="option"][aria-selected="true"]{background:var(--c-raised)}
 
 /* examples under the composer, like quick actions */
@@ -277,7 +274,7 @@ p.composer-cmp{margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsi
 .st-key-examples button{min-height:32px;padding:0 var(--s-3);border:1px solid var(--c-line)!important;border-radius:var(--r-pill)!important;
   background:transparent!important;color:var(--c-text-2);
   transition-property:background-color,color,border-color;transition-duration:var(--dur-micro);transition-timing-function:var(--ease-out)}
-.st-key-examples button p{font:400 var(--fs-ui)/1.2 var(--f-sans)!important;white-space:nowrap}
+.st-key-examples button p{font:400 var(--fs-ui)/1.2 var(--f-ui)!important;white-space:nowrap}
 .st-key-examples button:hover{background:var(--c-raised)!important;color:var(--c-text);border-color:var(--c-line-strong)!important}
 .st-key-examples button:active{transform:scale(.96)}
 
@@ -290,45 +287,75 @@ div:has(> .st-key-composer-dock){position:sticky;bottom:0;z-index:20;padding:var
 /* the sidebar carries the wordmark; the thread repeats it only when the sidebar is closed */
 :root:has([data-testid="stSidebar"][aria-expanded="true"]) [data-testid="stElementContainer"]:has(.band.slim){display:none}
 
-/* new turns ease in instead of popping: question, loader, then the answer's parts in a short cascade */
+/* new turns ease in instead of popping */
 @keyframes polaris-rise{from{opacity:0;transform:translateY(6px)}}
+/* A finished card takes over its own stream's slot, and switching tabs redraws a whole thread, so answer cards
+   appear without an entrance. */
 .q,.thinking,p.stopped,.cmp-compact,.card{animation:polaris-rise .32s var(--ease-out) both}
-[class*="st-key-answer"] > *{animation:polaris-rise .36s var(--ease-out) both}
-[class*="st-key-answer"] > :nth-child(2){animation-delay:50ms}
-[class*="st-key-answer"] > :nth-child(3){animation-delay:100ms}
-[class*="st-key-answer"] > :nth-child(4){animation-delay:150ms}
-[class*="st-key-answer"] > :nth-child(5){animation-delay:200ms}
-[class*="st-key-answer"] > :nth-child(n+6){animation-delay:240ms}
 .st-key-composer-dock{animation:polaris-rise .32s var(--ease-out) both}
-p.stopped{margin:0;font:400 var(--fs-ui)/var(--lh-ui) var(--f-sans);color:var(--c-text-3)}
-.q{margin:var(--s-8) 0 var(--s-2);font:600 var(--fs-q)/var(--lh-tight) var(--f-sans);letter-spacing:-.01em;color:var(--c-text);text-wrap:balance;overflow-wrap:anywhere}
+p.stopped{margin:0;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
+.q{position:relative;margin:var(--s-8) 0 var(--s-1);padding-left:1.4em;font:600 var(--fs-q)/var(--lh-tight) var(--f-ui);color:var(--c-text);text-wrap:balance;overflow-wrap:anywhere}
+/* the question is the input line, so it carries the prompt mark a lab terminal would */
+.q::before{content:"›"/"";position:absolute;left:0;top:0;color:var(--c-accent);font-weight:600}
 .st-key-thread [data-testid="stElementContainer"]:first-child .q{margin-top:var(--s-4)}
 
-[class*="st-key-answer"]{gap:var(--s-3);padding:0;background:transparent;border:0}
-[class*="st-key-answer"] [data-testid="stMarkdownContainer"] p,
-[class*="st-key-answer"] [data-testid="stMarkdownContainer"] li{font:400 var(--fs-body)/var(--lh-body) var(--f-sans);color:var(--c-text);max-width:68ch}
-[class*="st-key-answer"]:has(.polaris-idk-flag){border:1px dashed var(--c-idk);border-radius:var(--r-lg);padding:var(--s-4)}
-.card-head{display:flex;align-items:center;gap:var(--s-2);min-width:0;font:400 var(--fs-cap)/1 var(--f-sans);color:var(--c-text-3)}
-.card-head .mode{flex:none;padding:5px var(--s-2);border-radius:var(--r-xs);background:var(--c-raised);color:var(--c-text);font-weight:600;letter-spacing:.01em}
+:is([class*="st-key-answer"],[class*="st-key-live-"]){gap:var(--s-3);padding:0 0 0 1.4em;background:transparent;border:0}
+:is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stMarkdownContainer"] p,
+:is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stMarkdownContainer"] li{font:400 var(--fs-body)/var(--lh-body) var(--f-sans);color:var(--c-text);max-width:68ch}
+:is([class*="st-key-answer"],[class*="st-key-live-"]):has(.polaris-idk-flag){border:1px dashed var(--c-idk);border-radius:var(--r-lg);padding:var(--s-4)}
+.card-head{display:flex;align-items:center;gap:var(--s-2);min-width:0;font:400 var(--fs-cap)/1 var(--f-ui);color:var(--c-text-3)}
+.card-head .mode{flex:none;padding:4px 7px;border:1px solid var(--c-line-strong);border-radius:var(--r-xs);background:var(--c-raised);color:var(--c-text);font-weight:600}
 .card-head .model{flex:0 1 auto;min-width:0;max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--f-mono);color:var(--c-text-2)}
 .card-head .sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
-.prose{font:400 var(--fs-body)/var(--lh-body) var(--f-sans);color:var(--c-text);margin:0 0 var(--s-3)}
-.cmd{margin:0 0 var(--s-3);padding:var(--s-3);background:var(--c-raised);border:1px solid var(--c-line);border-radius:var(--r-sm);
-  font:400 var(--fs-ui)/var(--lh-ui) var(--f-mono);color:var(--c-text);overflow:auto}
-[data-testid="stCode"] pre{background:var(--c-raised)!important;border:1px solid var(--c-line);border-radius:var(--r-sm);padding:var(--s-3) var(--s-4)!important}
-[data-testid="stCode"] code{font:400 var(--fs-ui)/1.55 var(--f-mono)!important}
-:root:has(.polaris-daylight) [data-testid="stCode"] code,:root:has(.polaris-daylight) [data-testid="stCode"] code *{color:var(--c-text)!important}
-[data-testid="stMarkdownContainer"] code{font-family:var(--f-mono);font-size:.875em;padding:.1em .35em;border-radius:5px;background:var(--c-raised);color:var(--c-text)}
+/* Command boxes stay a dark terminal in both themes: a command reads the same wherever it is pasted from.
+   Phosphor palette, one meaning per ink: command names green, strings and $variables amber, flags sand where
+   Prism marks them (its bash grammar leaves most plain), arguments and paths plain, operators, redirections and
+   the <placeholder> brackets dim. Prism only knows command names from a list, so a group named sudo is green
+   too. Streamlit's blue, extra-bold command names are replaced; contrast is measured on --term-bg. */
+[data-testid="stCode"]{--term-bg:oklch(0.15 0.03 260);--term-line:oklch(0.3 0.04 260);--term-text:oklch(0.9 0.012 250);
+  --term-cmd:oklch(0.82 0.1 152);    /* 11.7:1 */
+  --term-flag:oklch(0.8 0.045 85);   /* 10.5:1 */
+  --term-str:oklch(0.82 0.085 75);   /* 11.2:1 */
+  --term-dim:oklch(0.66 0.03 254)}   /* 6.3:1 */
+[data-testid="stCode"] pre{background:var(--term-bg)!important;border:1px solid var(--term-line);border-radius:var(--r-sm);padding:var(--s-3) calc(var(--s-4) + 32px) var(--s-3) var(--s-4)!important}
+[data-testid="stCode"] code{font:400 var(--fs-ui)/1.55 var(--f-mono)!important;color:var(--term-text)}
+[data-testid="stCode"] pre code :is(.token.function,.token.builtin,.token.class-name,.token.keyword,.token.selector){color:var(--term-cmd);font-weight:600}
+[data-testid="stCode"] pre code :is(.token.parameter,.token.attr-name,.token.property){color:var(--term-flag);font-weight:400}
+[data-testid="stCode"] pre code :is(.token.string,.token.char,.token.attr-value,.token.variable:not(.parameter),.token.environment){color:var(--term-str)}
+[data-testid="stCode"] pre code :is(.token.operator,.token.punctuation,.token.file-descriptor,.token.entity){color:var(--term-dim)}
+[data-testid="stCode"] pre code :is(.token.number,.token.boolean,.token.constant,.token.symbol,.token.regex,.token.url,.token.assign-left){color:var(--term-text)}
+[data-testid="stCode"] pre code :is(.token.comment,.token.prolog,.token.shebang){color:var(--term-dim);font-style:italic;font-weight:400}
+:root:has(.polaris-daylight) [data-testid="stCode"] pre{border-color:transparent}
+/* Streamlit's copy button only shows on hover; keep it visible so touch screens and keyboards can find it. */
+/* The control's layer covers the box; its right 40px are the box's own ink, so a long command scrolled sideways
+   passes under the button instead of showing round it. A pre's end padding doesn't scroll, so the code carries the
+   same padding itself: scrolled to the end, a command's last characters clear the button. */
+[data-testid="stCode"] pre code{display:inline-block;vertical-align:top;padding-right:calc(var(--s-4) + 32px)}
+[data-testid="stCode"] div:has(> [data-testid="stCodeCopyButton"]){opacity:1!important;border-radius:var(--r-sm);
+  background:linear-gradient(var(--term-bg),var(--term-bg)) right 1px top 1px / 40px calc(100% - 2px) no-repeat}
+[data-testid="stCodeCopyButton"]{width:28px!important;height:28px!important;display:flex!important;align-items:center;justify-content:center;
+  transform:none!important;color:var(--term-dim)!important;background:transparent!important;border-radius:var(--r-xs)}
+[data-testid="stCodeCopyButton"]:is(:hover,:focus-visible){color:var(--term-text)!important}
+/* A command under a numbered step sits on the step's text, not under its number. */
+:is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stElementContainer"]:has(ol) ~ [data-testid="stElementContainer"]:has([data-testid="stCode"]){padding-left:1.55em}
+:is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stElementContainer"]:has(.cmd-loose) ~ [data-testid="stElementContainer"]:has([data-testid="stCode"]){padding-left:0}
+:is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stMarkdownContainer"] p.cmd-loose{margin:.2em 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(--f-mono);color:var(--c-text-3)}
+:is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stMarkdownContainer"] ol{margin-bottom:0}
+:is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stMarkdownContainer"] p.src-line{margin:0;font:400 var(--fs-meta)/var(--lh-ui) var(--f-mono);color:var(--c-text-3)}
+.src-line b{font-weight:600;color:var(--c-text-2)}
+[data-testid="stMarkdownContainer"] code{font-family:var(--f-mono);font-size:.875em;padding:.1em .35em;border-radius:var(--r-xs);background:var(--c-raised);color:var(--c-text)}
 
-[class*="st-key-answer"] [data-testid="stExpander"] details{border:0;border-radius:var(--r-sm);background:transparent}
-[class*="st-key-answer"] [data-testid="stExpander"] summary{padding:var(--s-1) 0;font:500 var(--fs-ui)/1 var(--f-sans);color:var(--c-text-2)}
-[class*="st-key-answer"] [data-testid="stExpander"] summary:hover{color:var(--c-text)}
-[class*="st-key-answer"] [data-testid="stExpanderDetails"]{padding:var(--s-2) 0 var(--s-2) var(--s-4);border-left:2px solid var(--c-line);margin-left:var(--s-2)}
-[class*="st-key-answer"] [data-testid="stExpanderDetails"] p{color:var(--c-text-2)!important;font-size:var(--fs-ui)!important}
+/* "Show reasoning": a small disclosure above the answer, never styled like a step */
+:is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stExpander"] details{border:0;border-radius:var(--r-sm);background:transparent}
+:is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stExpander"] summary{width:fit-content;padding:var(--s-1) 0;font:500 var(--fs-cap)/1 var(--f-ui);color:var(--c-text-3)}
+:is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stExpander"] summary p{font:inherit!important;color:inherit!important}
+:is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stExpander"] summary:hover{color:var(--c-text)}
+:is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stExpanderDetails"]{padding:var(--s-2) 0 var(--s-2) var(--s-4);border-left:2px solid var(--c-line);margin-left:var(--s-2)}
+:is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stExpanderDetails"] :is(p,li){color:var(--c-text-2)!important;font-size:var(--fs-reason)!important;line-height:1.55!important}
 
 /* evidence disclosure */
-.ev-box{font:400 var(--fs-ui)/var(--lh-ui) var(--f-sans);color:var(--c-text-2)}
+.ev-box{font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-text-2)}
 .ev-box > summary{display:flex;align-items:center;gap:var(--s-2);min-height:28px;cursor:pointer;list-style:none;width:fit-content;max-width:100%}
 .ev-box > summary::-webkit-details-marker{display:none}
 .ev-box > summary:hover{color:var(--c-text)}
@@ -339,106 +366,173 @@ p.stopped{margin:0;font:400 var(--fs-ui)/var(--lh-ui) var(--f-sans);color:var(--
 .ev-box .count{color:var(--c-text-3)}
 .ev-box .best-src{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--f-mono);font-size:var(--fs-cap);color:var(--c-text-3)}
 .ev-box[open] > summary{margin-bottom:var(--s-2)}
-p.best-panel,p.best{margin:0;font:400 var(--fs-cap)/var(--lh-ui) var(--f-sans);color:var(--c-text-3)}
+p.best-panel,p.best{margin:0;font:400 var(--fs-cap)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
 .best-panel .src{font-family:var(--f-mono);color:var(--c-text-2)}
 .best code{font-size:var(--fs-cap)}
 .ev{list-style:none;margin:var(--s-2) 0 0;padding:0}
 .ev li{display:grid;grid-template-columns:20px auto minmax(0,1fr) auto;column-gap:var(--s-2);align-items:baseline;padding:var(--s-2) 0;border-top:1px solid var(--c-line)}
-.ev .rank{font:600 var(--fs-cap)/1 var(--f-sans);color:var(--c-text-3);font-variant-numeric:tabular-nums}
+.ev .rank{font:600 var(--fs-cap)/1 var(--f-ui);color:var(--c-text-3);font-variant-numeric:tabular-nums}
 .ev .src{font:400 var(--fs-cap)/1 var(--f-mono);color:var(--c-text-3)}
 .ev .title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--c-text)}
 .ev .sc{font-size:var(--fs-cap);color:var(--c-text-3);font-variant-numeric:tabular-nums;white-space:nowrap}
 .ev p.snip{grid-column:3 / -1;margin:var(--s-1) 0 0;font-size:var(--fs-ui);line-height:var(--lh-ui);color:var(--c-text-2)}
-p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(--f-sans);color:var(--c-text-3)}
+p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
 .ram-split b{font-weight:600;color:var(--c-text-2);font-variant-numeric:tabular-nums}
 .dbg > summary{cursor:pointer;width:fit-content}
 .dbg-ev{list-style:none;margin:var(--s-1) 0 0;padding:0}
 .dbg-ev li{padding:var(--s-1) 0;font-family:var(--f-mono)}
 .dbg-ev .path,.dbg-ev .sc{display:block;overflow-wrap:anywhere}
 
-/* retrieval meter: one line, label · bar · value, so nothing can collide */
-.retr{display:grid;grid-template-columns:auto minmax(64px,1fr) auto;align-items:center;gap:var(--s-3);min-height:24px;
-  font:400 var(--fs-cap)/1.2 var(--f-sans);color:var(--c-text-3)}
-.retr .bar{position:relative;display:block;height:6px;border-radius:var(--r-pill);background:var(--c-raised)}
-.retr .fill{position:absolute;left:0;top:0;bottom:0;border-radius:var(--r-pill);background:var(--c-ok)}
-.retr .tick{position:absolute;top:-4px;bottom:-4px;width:2px;border-radius:1px;background:var(--c-text-2);transform:translateX(-50%)}
-.retr.low .fill{background:var(--c-idk)}
-.retr .val{white-space:nowrap}
-.retr .val b{font-weight:600;color:var(--c-text);font-variant-numeric:tabular-nums}
-.retr.ok .val b{color:var(--c-ok)}
-.retr.off{display:block}
-
 .metrics{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-1) var(--s-4);padding-top:var(--s-3);margin-top:var(--s-1);border-top:1px solid var(--c-line);
-  font:400 var(--fs-cap)/var(--lh-ui) var(--f-sans);color:var(--c-text-3)}
+  font:400 var(--fs-meta)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
 .metrics b{font-weight:600;color:var(--c-text-2);font-variant-numeric:tabular-nums}
-/* response time and tok/s: the two numbers people compare, so they sit first, as chips */
-.stats{display:inline-flex;flex:none;gap:var(--s-1)}
-.stat{display:inline-flex;align-items:baseline;gap:3px;height:22px;padding:0 var(--s-2);border-radius:var(--r-pill);background:var(--c-raised);
-  font:400 var(--fs-cap)/22px var(--f-sans);color:var(--c-text-3);white-space:nowrap;cursor:default}
-.stat b{font-weight:600;color:var(--c-text);font-variant-numeric:tabular-nums}
+/* response time and tok/s: the two numbers people compare, so they sit first, as readout cells. tok/s is always
+   there: Ollama's own eval_count / eval_duration, or a dashed cell that says why there is no number. */
+.stats{display:inline-flex;flex-wrap:wrap;flex:none;gap:var(--s-1)}
+.stat{display:inline-flex;align-items:baseline;gap:4px;height:22px;padding:0 7px;border:1px solid var(--c-line);border-radius:var(--r-xs);background:var(--c-raised);
+  font:400 var(--fs-meta)/20px var(--f-ui);color:var(--c-text-3);white-space:nowrap;cursor:default}
+.stat b{font-size:var(--fs-cap);font-weight:600;color:var(--c-text);font-variant-numeric:tabular-nums}
+.stat.calc{border-color:transparent;background:transparent;padding:0 2px;font-variant-numeric:tabular-nums}
+.stat.na{border-style:dashed;border-color:var(--c-line-strong);background:transparent}
+.stat.warn{border-color:color-mix(in oklch,var(--c-danger) 55%,transparent);background:transparent;color:var(--c-danger)}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 
 .idk-body{display:grid;grid-template-columns:24px 1fr;column-gap:var(--s-3);row-gap:var(--s-1)}
 .idk-star{grid-column:1;grid-row:1;padding-top:2px}
 .idk-star svg{width:18px;height:18px;fill:none;stroke:var(--c-idk);stroke-width:1.5;animation:none}
 .idk-body h4,.idk-body p{grid-column:2;margin:0}
-.idk-body h4{font:600 var(--fs-body)/var(--lh-tight) var(--f-sans);color:var(--c-text)}
+.idk-body h4{font:600 var(--fs-body)/var(--lh-tight) var(--f-ui);color:var(--c-text)}
 .idk-body p{font:400 var(--fs-body)/var(--lh-body) var(--f-sans);color:var(--c-text-2)}
 
 .chips{display:flex;flex-wrap:wrap;gap:var(--s-2)}
 .chip{display:inline-flex;align-items:center;gap:6px;max-width:100%;height:26px;padding:0 var(--s-2);border-radius:var(--r-pill);background:var(--c-raised);
-  font:400 var(--fs-cap)/1 var(--f-sans);color:var(--c-text)}
+  font:400 var(--fs-cap)/1 var(--f-ui);color:var(--c-text)}
 .chip .k{font-family:var(--f-mono);color:var(--c-text-3)}
 .chip .n{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.no-sources,p.no-sources{margin:0;font:400 var(--fs-cap)/var(--lh-ui) var(--f-sans);color:var(--c-text-3)}
+.no-sources,p.no-sources{margin:0;font:400 var(--fs-cap)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
 
-/* ---------- compare: two peer panels on the surface ---------- */
+/* ---------- rail monitor: the live rate and the retrieval scores, one view at a time ----------
+ * The Rate/Scores switch is two plain radios in the markup, so flipping views is CSS and never reruns the app
+ * (a rerun would stop a streaming answer). Ice blue is measured data; L is drawn solid, R dashed. */
+.mon-top{display:flex;align-items:center;justify-content:space-between;gap:var(--s-2)}
+.mon-switch{position:relative;display:inline-flex;padding:2px;border-radius:var(--r-sm);background:var(--c-raised)}
+.mon-switch input{position:absolute;width:1px;height:1px;margin:0;opacity:0;pointer-events:none}
+.mon-switch label{padding:0 var(--s-2);border-radius:var(--r-xs);font:500 var(--fs-cap)/22px var(--f-ui);color:var(--c-text-3);cursor:pointer;
+  transition:background-color var(--dur-micro) var(--ease-out),color var(--dur-micro) var(--ease-out)}
+.mon-switch label:hover{color:var(--c-text)}
+.mon-switch input:checked + label,.mon-switch:not(:has(#mon-v-scores:checked)) label[for="mon-v-rate"]{background:var(--c-thumb);color:var(--c-text);
+  box-shadow:0 1px 0 oklch(1 0 0 / 0.05) inset}
+.mon-switch input:focus-visible + label{outline:2px solid var(--c-accent);outline-offset:1px}
+.st-key-rail-mon:has(#mon-v-scores:checked) .mon-rate,.st-key-rail-mon:not(:has(#mon-v-scores:checked)) .mon-scores{display:none}
+.mon{font:400 var(--fs-meta)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
+.mon p{margin:0}
+.mon-view{display:flex;flex-direction:column;gap:6px}
+.mon-head{display:flex;align-items:center;justify-content:space-between;gap:var(--s-2)}
+.mon-tag{padding:0 6px;border:1px solid var(--c-line-strong);border-radius:var(--r-xs);line-height:18px;color:var(--c-text-2)}
+.mon-tag.live{border-color:var(--c-data);color:var(--c-data)}
+.mon-chart{position:relative;height:48px;border-bottom:1px solid var(--c-line-strong);
+  background:repeating-linear-gradient(to top,transparent 0 11px,color-mix(in oklch,var(--c-line) 70%,transparent) 11px 12px)}
+.mon-chart.empty{display:flex;align-items:center;padding:0;background:none;border-bottom-style:dashed;text-wrap:pretty}
+.mon-chart.empty span{color:var(--c-text-3)}
+.spark{display:block;width:100%;height:100%;overflow:visible}
+.spark .area{fill:var(--c-data-dim);stroke:none}
+.spark .line{fill:none;stroke:var(--c-data);stroke-width:1.5;stroke-linejoin:round}
+.spark .line.r{stroke:var(--c-text-2);stroke-dasharray:3 2}
+.mon-cfg{display:flex;align-items:center;gap:6px;min-width:0;margin-top:2px!important;color:var(--c-text-2)}
+.mon-cfg .m{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--f-mono)}
+.mon-cfg .md{flex:none;margin-left:auto;font-weight:600;color:var(--c-text)}
+.mon .side{flex:none;display:inline-block;width:16px;margin-right:2px;border-radius:3px;text-align:center;font:600 11px/16px var(--f-ui)}
+.mon .side.l{background:var(--c-data);color:var(--c-on-accent)}
+.mon .side.r{box-shadow:inset 0 0 0 1px var(--c-text-2);color:var(--c-text-2)}
+.mon-cells{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px var(--s-2)}
+.mon-cells b{font-weight:600;color:var(--c-text);font-variant-numeric:tabular-nums}
+.mon-cells .stats{gap:var(--s-1)}
+.mon-cells .stat.calc{display:none}
+.mon-cells.dim b{color:var(--c-text-2)}
+.mon-note{opacity:.85;text-wrap:pretty}
+.mon-best b{font-weight:600;color:var(--c-text);font-variant-numeric:tabular-nums}
+.mon-best{min-height:20px}
+/* scores: the cosine bar runs under each title, so a 232px rail still fits rank, title and three raw numbers */
+.sc-cols,.sc-rows li{display:grid;grid-template-columns:1.5ch minmax(0,1fr) 4ch 5ch 5ch;column-gap:6px;align-items:baseline}
+.sc-cols{opacity:.8}
+.sc-cols span:nth-child(n+3),.sc-rows .cos,.sc-rows .raw{text-align:right}
+.sc-rows{list-style:none;margin:0!important;padding:0!important}
+.sc-rows li{position:relative;margin:0!important;padding:2px 0 5px;border-top:1px solid var(--c-line);font-variant-numeric:tabular-nums}
+.sc-rows li::marker{content:none}
+.sc-rows .rk{grid-column:1;grid-row:1}
+.sc-rows .ttl{grid-column:2;grid-row:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--c-text)}
+.sc-rows .bar{grid-column:2;grid-row:1;align-self:end;position:relative;height:2px;margin-bottom:-4px;background:var(--c-raised)}
+.sc-rows .fill{position:absolute;left:0;top:0;bottom:0;background:var(--c-idk);opacity:.7}
+.sc-rows li.ok .fill{background:var(--c-data);opacity:1}
+.sc-rows .tick{position:absolute;top:-2px;bottom:-2px;width:1px;background:var(--c-text-2)}
+.sc-rows .cos{grid-column:3;grid-row:1;color:var(--c-text)}
+.sc-rows li.ok .cos{color:var(--c-data)}
+.sc-rows .raw{grid-row:1;white-space:nowrap}
+.sc-rows .raw:nth-of-type(5){grid-column:4}
+.sc-rows .raw:nth-of-type(6){grid-column:5}
+
+/* ---------- compare: two peer panels on the surface ----------
+ * The two columns share the shell; under 620px of it (a narrow window, or the rail open on a small laptop) they
+ * stack, so neither side's readouts are squeezed. A size container would trap a fixed-position child; these hold none. */
+.st-key-cmp,[class*="st-key-cmp-hist"]{container-type:inline-size}
+@container (max-width:620px){
+  .st-key-cmp [data-testid="stColumn"],[class*="st-key-cmp-hist"] [data-testid="stColumn"]{min-width:100%}
+}
 .st-key-cmp [data-testid="stColumn"],[class*="st-key-cmp-hist"] [data-testid="stColumn"]{display:flex;flex-direction:column}
 .st-key-cmp [data-testid="stColumn"] > div,[class*="st-key-cmp-hist"] [data-testid="stColumn"] > div{display:flex;flex-direction:column;flex:1}
-.st-key-cmp [class*="st-key-answer"],[class*="st-key-cmp-hist"] [class*="st-key-answer"],.card{
+.st-key-cmp :is([class*="st-key-answer"],[class*="st-key-live-"]),[class*="st-key-cmp-hist"] [class*="st-key-answer"],.card{
   flex:1;background:var(--c-surface);border:1px solid var(--c-line);border-radius:var(--r-lg);padding:var(--s-4);display:flex;flex-direction:column;gap:var(--s-3)}
 .st-key-cmp [class*="st-key-answer"]:has(.polaris-idk-flag),[class*="st-key-cmp-hist"] [class*="st-key-answer"]:has(.polaris-idk-flag),.card.idk-card{border:1px dashed var(--c-idk)}
 .card.waiting-card{border:1px solid var(--c-line);color:var(--c-text-3)}
 .card.running-card{min-height:240px}
 .st-key-cmp [data-testid="stHorizontalBlock"],[class*="st-key-cmp-hist"] [data-testid="stHorizontalBlock"]{align-items:stretch}
-.st-key-cmp [data-testid="stColumn"] :is([data-testid="stVerticalBlockBorderWrapper"],[data-testid="stVerticalBlock"]):has([class*="st-key-answer"]),
+.st-key-cmp [data-testid="stColumn"] :is([data-testid="stVerticalBlockBorderWrapper"],[data-testid="stVerticalBlock"]):has(:is([class*="st-key-answer"],[class*="st-key-live-"])),
 [class*="st-key-cmp-hist"] [data-testid="stColumn"] :is([data-testid="stVerticalBlockBorderWrapper"],[data-testid="stVerticalBlock"]):has([class*="st-key-answer"]){flex:1;display:flex;flex-direction:column}
 .st-key-cmp [class*="st-key-answer"] .metrics,.card .metrics{margin-top:auto}
-.slot-empty{min-height:24px;display:flex;align-items:center;font:400 var(--fs-cap)/var(--lh-ui) var(--f-sans);color:var(--c-text-3)}
+.slot-empty{min-height:24px;display:flex;align-items:center;font:400 var(--fs-cap)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
 .slot-empty.body{min-height:96px;align-items:flex-start}
 .slot-empty.foot{border-top:1px solid var(--c-line);margin-top:auto;min-height:32px}
-.cmp-compact{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:var(--s-3)}
+.cmp-compact{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:var(--s-3)}
 .cmp-compact .cmp-cell{display:flex;flex-direction:column;gap:var(--s-2);padding:var(--s-3) var(--s-4);border-radius:var(--r-md);background:var(--c-surface);border:1px solid var(--c-line)}
 .cmp-compact p.preview{margin:0;font:400 var(--fs-ui)/var(--lh-ui) var(--f-sans);color:var(--c-text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.cmp-top{display:flex;align-items:center;justify-content:space-between;gap:var(--s-2);min-width:0}
-.cmp-top .card-head{flex:1 1 auto}
+/* the mode tag and the readouts keep their size; a short cell puts the readouts on a second line */
+.cmp-top{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--s-2);min-width:0}
+.cmp-top .card-head{flex:1 0 auto;max-width:100%}
 .cmp-top .card-head .sub{display:none}
 .cmp-top .card-head .model{max-width:none}
 
-/* ---------- loader: a 3×3 constellation breathing out from its star ---------- */
-.thinking{display:flex;align-items:center;gap:var(--s-3);min-height:40px;font:400 var(--fs-ui)/var(--lh-ui) var(--f-sans);color:var(--c-text-2)}
-.thinking .dots{display:grid;grid-template-columns:repeat(3,5px);grid-auto-rows:5px;gap:4px;flex:none}
-.thinking .dots i{width:5px;height:5px;border-radius:50%;background:var(--c-text-2);opacity:.2;transform:scale(.55);
-  animation:polaris-breathe 1.8s var(--ease-breathe) var(--d,0s) infinite both;will-change:transform,opacity}
-.thinking .dots i:nth-child(5){background:var(--c-star);--d:0s}
-.thinking .dots i:nth-child(2n){--d:.16s}
-.thinking .dots i:is(:nth-child(1),:nth-child(3),:nth-child(7),:nth-child(9)){--d:.32s}
-@keyframes polaris-breathe{0%,100%{opacity:.2;transform:scale(.55)}42%{opacity:1;transform:scale(1)}}
+/* ---------- loader: an ASCII cube tumbling until the answer's first text ----------
+ * The frames are text drawn in Python (app/polaris.py), each in a 60px block, stacked in one reel that a single
+ * steps() keyframe slides a block at a time: 48 frames in 4 s, on its own layer. 60px is a whole number of device
+ * pixels at 80, 90, 100, 110, 120, 125, 150 and 175%, so every frame lands on the same pixels; the blank 16px under
+ * each frame's 11 lines keeps the next one out of view at other scales. ASCII only, ligatures off, a fixed line
+ * height and a width in ch: any monospace font draws the same 15 by 11 grid in a box (45 x 44 px) that never changes
+ * size. At 5px a glyph is texture rather than a letter, so the faces also part by ink, in three clear steps. */
+.thinking{display:flex;align-items:center;gap:var(--s-3);min-height:40px;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-text-2)}
+.cube{flex:none;display:block;width:15ch;height:44px;overflow:hidden;contain:strict;white-space:pre;
+  font:600 5px/4px var(--f-mono);letter-spacing:0;font-variant-ligatures:none;font-feature-settings:"liga" 0,"calt" 0;
+  color:var(--c-text-3)}
+.cube .d{color:color-mix(in oklch,var(--c-text-3) 50%,transparent)}
+.cube .b{color:var(--c-text)}
+.cube-reel{display:block;animation:polaris-cube 4s steps(48) infinite;will-change:transform}
+.cube-frame{display:block;height:60px}
+@keyframes polaris-cube{to{transform:translateY(-100%)}}
+.cube.still{opacity:.55}
+.cube.still .cube-reel{animation:none;will-change:auto}
 .thinking-text{display:flex;flex-direction:column;gap:2px;min-width:0}
-/* one plain label for what is running; the dots are the only thing that moves */
+/* one plain label for what is running; the cube is the only thing that moves */
 .thinking-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--c-text)}
 .thinking-note{font-size:var(--fs-cap);color:var(--c-text-3);opacity:0;animation:polaris-fade-in .4s var(--ease-out) 15s forwards}
+.thinking-note.now{opacity:1;animation:none}
 @keyframes polaris-fade-in{to{opacity:1}}
 .queued-label{color:var(--c-text-3)}
-.thinking.queued .dots i{animation:none;opacity:.35;transform:scale(.7);will-change:auto}
-.thinking.queued .dots i:nth-child(5){opacity:.6}
 .thinking.queued{color:var(--c-text-3)}
 @media (prefers-reduced-motion:reduce){
   [data-testid="stMarkdownContainer"] .sky{animation:none;transition-duration:.15s}
-  .q,.thinking,p.stopped,.cmp-compact,.card,[class*="st-key-answer"] > *,.st-key-composer-dock,.st-key-stop-gen{animation:polaris-fade-in .15s linear both!important}
-  .thinking .dots i{transform:none;animation-name:polaris-breathe-reduced;animation-duration:2.4s}
-  @keyframes polaris-breathe-reduced{0%,100%{opacity:.3}50%{opacity:.9}}
+  .q,.thinking,p.stopped,.cmp-compact,.card,.st-key-composer-dock,.st-key-stop-gen{animation:polaris-fade-in .15s linear both!important}
+  .cube-reel{animation:none;will-change:auto}
   .thinking-note{animation-duration:1ms}
+  [class*="st-key-tab-on-"] [class*="st-key-tab-open-"] button::before{animation:none!important}
 }
 
 /* ---------- while an answer generates, ambient motion holds still so the CPU stays with Ollama ----------
@@ -447,38 +541,165 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(-
  * first, invisible frame. */
 :root:has(.polaris-generating) :is(.band *,.sky){animation-play-state:paused!important}
 
-/* ---------- sidebar ---------- */
-[data-testid="stSidebar"]{background:var(--c-surface);border-right:1px solid var(--c-line)}
-[data-testid="stSidebar"][aria-expanded="true"]{width:248px!important;min-width:248px!important;max-width:248px!important}
-[data-testid="stSidebar"] [data-testid="stSidebarUserContent"]{padding:0 var(--s-4) var(--s-6)}
-/* the wordmark rides up into the sidebar's header row, beside the collapse control */
-.st-key-side-top{margin-top:-62px;gap:var(--s-3)}
+/* ---------- rail: one viewport tall when it fits, scrolling when it doesn't ----------
+ * Top to bottom: wordmark + dither art, run controls, the monitor (takes what height is left), settings.
+ * The monitor is the only part that grows; nothing shrinks below its content, so on a short laptop screen the
+ * rail scrolls instead of clipping the monitor or the footer. Its notes are the first thing to go. */
+[data-testid="stSidebar"]{--rail-w:264px;background:var(--c-surface);border-right:1px solid var(--c-line)}
+[data-testid="stSidebar"][aria-expanded="true"]{width:var(--rail-w)!important;min-width:var(--rail-w)!important;max-width:var(--rail-w)!important}
+[data-testid="stSidebarContent"]{display:flex;flex-direction:column;overflow:hidden auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-gutter:auto}
+[data-testid="stSidebar"] [data-testid="stSidebarUserContent"]{flex:1 0 auto;display:flex;flex-direction:column;padding:0 14px var(--s-3)}
+[data-testid="stSidebarUserContent"] > div,
+[data-testid="stSidebarUserContent"] > div > [data-testid="stVerticalBlockBorderWrapper"],
+[data-testid="stSidebarUserContent"] > div > [data-testid="stVerticalBlockBorderWrapper"] > [data-testid="stVerticalBlock"]{flex:1 0 auto;display:flex;flex-direction:column}
+[data-testid="stSidebarUserContent"] > div > [data-testid="stVerticalBlockBorderWrapper"] > [data-testid="stVerticalBlock"]{gap:var(--s-4)}
+[data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(> .st-key-rail-mon){flex:1 0 auto;display:flex;flex-direction:column}
+.st-key-rail-mon{flex:1 0 auto;gap:var(--s-2)}
+/* rail ranks: section title in small capitals, field label, then the control's own value at 13 */
+[data-testid="stSidebar"] .side-h{margin:0;font:600 var(--fs-label)/22px var(--f-ui);color:var(--c-text-3);letter-spacing:.08em;text-transform:uppercase}
+[data-testid="stSidebar"] .side-note{margin:0;font:400 var(--fs-meta)/var(--lh-ui) var(--f-ui);color:var(--c-text-3);text-wrap:pretty}
+[data-testid="stSidebar"] .side-note.err{color:var(--c-danger)}
+[data-testid="stSidebar"] .side-note .ok{color:var(--c-data)}
+[data-testid="stSidebar"] .side-note code{font-size:11.5px;overflow-wrap:anywhere}
+
+/* the wordmark rides up into the sidebar's header row, beside the collapse control; the art sits under it.
+   Streamlit shows that control only on hover and the wordmark's row covers it, so it stays shown and on top. */
+.st-key-side-top{margin-top:-62px;gap:0}
+[data-testid="stSidebarCollapseButton"]{display:inline!important;position:relative;z-index:1}
+:is([data-testid="stSidebarCollapseButton"],[data-testid="stSidebarCollapsedControl"]) button{color:var(--c-text-2)}
+:is([data-testid="stSidebarCollapseButton"],[data-testid="stSidebarCollapsedControl"]) button:is(:hover,:focus-visible){color:var(--c-text)}
 .side-logo{display:flex;align-items:center;height:44px;padding-left:2px}
 .side-logo .band{min-height:44px}
 .side-logo .mark{padding:0;transform:scale(1.3);transform-origin:left center}
-.st-key-new-chat button{justify-content:flex-start;min-height:38px;padding:0 var(--s-3);border:1px solid var(--c-line);border-radius:var(--r-sm);
-  background:transparent;color:var(--c-text);transition-property:background-color,border-color;transition-duration:var(--dur-micro);transition-timing-function:var(--ease-out)}
-.st-key-new-chat button p{font:500 var(--fs-ui)/1 var(--f-sans)}
-.st-key-new-chat button:hover{background:var(--c-raised);border-color:var(--c-line-strong);color:var(--c-text)}
-.st-key-new-chat button:active{transform:scale(.98)}
+/* Dither art, after the Hermes Agent banner's technique: a text field toned in bands by row, here an ordered-dither
+   night over a ridge with the Little Dipper and its pole star. One static block of text: no images, no motion. */
+.rail-art{width:var(--rail-w);margin:4px 0 0 -14px;font:400 10px/10px var(--f-mono);letter-spacing:0;white-space:pre;overflow:hidden;user-select:none;pointer-events:none;
+  -webkit-mask-image:linear-gradient(to right,transparent,#000 14%,#000 86%,transparent);mask-image:linear-gradient(to right,transparent,#000 14%,#000 86%,transparent)}
+.rail-art span{display:block;height:10px;text-align:center}
+.rail-art .hi{color:color-mix(in oklch,var(--c-text-3) 62%,transparent)}
+.rail-art .mid{color:color-mix(in oklch,var(--c-text-3) 50%,transparent)}
+.rail-art .lo{color:var(--c-line-strong)}
+.rail-art b{font-weight:400}
+.rail-art .dip{color:var(--c-text-2)}
+.rail-art .pole{font-weight:600;color:var(--c-star);text-shadow:0 0 6px color-mix(in srgb,var(--c-star) 60%,transparent)}
 
-/* chat history: one quiet row per saved chat, the open one raised; delete sits on the row's right edge */
-[data-testid="stSidebar"] .side-note{margin:0;font:400 var(--fs-cap)/var(--lh-ui) var(--f-sans);color:var(--c-text-3)}
-[data-testid="stSidebar"] .side-note.err{color:var(--c-danger)}
-.st-key-history{gap:2px;max-height:min(42vh,344px);overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}
+/* run controls */
+[class*="st-key-rail-run"]{gap:var(--s-2)}
+[data-testid="stSidebar"] [data-testid="stWidgetLabel"]{min-height:0;margin-bottom:2px}
+[data-testid="stSidebar"] [data-testid="stWidgetLabel"] p{font:400 var(--fs-cap)/1.3 var(--f-ui);color:var(--c-text-2)}
+[data-testid="stSidebar"] [data-testid="stCheckbox"] label p{font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-text)}
+[data-testid="stSidebar"] [data-baseweb="select"] > div{min-height:34px;background:var(--c-raised);border-color:var(--c-line);border-radius:var(--r-sm);color:var(--c-text)}
+[data-testid="stSidebar"] [data-baseweb="select"] > div > div:first-child{font:500 var(--fs-ui)/1.2 var(--f-mono)}
+[data-testid="stSidebar"] [data-baseweb="select"] svg{color:var(--c-text-3)}
+[class*="st-key-model-select"] + [data-testid="stElementContainer"]{margin-top:-4px}
+/* mode: a four-way segmented control (one segment for the student, which only runs +RAG+CoT) */
+[class*="st-key-mode-pick"] [role="radiogroup"]{display:flex;flex-wrap:nowrap;gap:2px;padding:2px;border-radius:var(--r-sm);background:var(--c-raised)}
+[class*="st-key-mode-pick"] label[data-baseweb="radio"]{flex:1 1 auto;justify-content:center;margin:0;padding:0 4px;min-height:26px;border-radius:var(--r-xs);cursor:pointer;
+  transition:background-color var(--dur-micro) var(--ease-out)}
+[class*="st-key-mode-pick"] label[data-baseweb="radio"] > div:first-child{display:none}
+[class*="st-key-mode-pick"] label[data-baseweb="radio"] > div:last-child{padding:0}
+[class*="st-key-mode-pick"] label[data-baseweb="radio"] p{font:500 var(--fs-cap)/26px var(--f-ui)!important;color:var(--c-text-3);white-space:nowrap}
+[class*="st-key-mode-pick"] label[data-baseweb="radio"]:hover p{color:var(--c-text)}
+[class*="st-key-mode-pick"] label[data-baseweb="radio"]:has(input:checked){background:var(--c-thumb);box-shadow:0 1px 0 oklch(1 0 0 / 0.05) inset}
+[class*="st-key-mode-pick"] label[data-baseweb="radio"]:has(input:checked) p{font-weight:600!important;color:var(--c-text)}
+[class*="st-key-mode-pick"] label[data-baseweb="radio"]:has(input:focus-visible){outline:2px solid var(--c-accent);outline-offset:1px}
+[class*="st-key-mode-pick"] [role="radiogroup"]:has(input:disabled){opacity:.7}
+[data-testid="stCheckbox"] label[data-baseweb="checkbox"] > div:first-child{background:var(--c-line-strong)!important}
+[data-testid="stCheckbox"] label[data-baseweb="checkbox"]:has(input:checked) > div:first-child{background:var(--c-accent)!important}
+[data-testid="stCheckbox"] label[data-baseweb="checkbox"] > div:first-child > div{background:oklch(1 0 0)!important}
+
+.st-key-stop-rail button{min-height:30px;padding:0 var(--s-3);border:1px solid var(--c-line-strong);border-radius:var(--r-sm);background:transparent;color:var(--c-text)}
+.st-key-stop-rail button p{font:500 var(--fs-ui)/1 var(--f-ui)}
+.st-key-stop-rail button:hover{border-color:var(--c-danger);color:var(--c-danger)}
+
+/* footer: settings and the theme, one row on a hairline */
+[class*="st-key-rail-foot"]{flex-direction:row;align-items:center;justify-content:space-between;gap:var(--s-2);padding-top:var(--s-3);border-top:1px solid var(--c-line)}
+[class*="st-key-rail-foot"] > *{width:auto!important;flex:none}
+[class*="st-key-settings"] button{min-height:30px;padding:0 var(--s-2);border:0;border-radius:var(--r-sm);background:transparent;color:var(--c-text-2)}
+[class*="st-key-settings"] button p{font:500 var(--fs-ui)/1 var(--f-ui)}
+[class*="st-key-settings"] button:hover:not(:disabled){background:var(--c-raised);color:var(--c-text)}
+
+/* compact heights: notes go first, then the art */
+/* the monitor's notes also live in Settings, so only tall screens keep them in the rail */
+@media (max-height:899px){.mon-note{display:none}}
+@media (max-height:760px){
+  .mode-hint{display:none}
+  [data-testid="stSidebarUserContent"] > div > [data-testid="stVerticalBlockBorderWrapper"] > [data-testid="stVerticalBlock"]{gap:var(--s-3)}
+}
+@media (max-height:700px){.mon-cells:is(.dim,.tok-later){display:none}}
+@media (max-height:660px){
+  .rail-art span:is(:nth-child(1),:nth-child(5),:nth-child(6)){display:none}
+  .model-st:not(.err){display:none}
+}
+@media (max-height:600px){.rail-art{display:none}}
+
+/* ---------- tabs: one per open chat, in the header row like a browser's tab strip ---------- */
+.st-key-tabbar{position:fixed;top:0;left:56px;right:56px;z-index:999991;width:auto!important;height:48px;flex-direction:row;align-items:flex-end;gap:var(--s-1);
+  padding:0;container:tabbar / inline-size}
+:root:has([data-testid="stSidebar"][aria-expanded="true"]) .st-key-tabbar{left:calc(264px + var(--s-4))}
+.st-key-tabbar::before{content:"";position:fixed;top:0;left:0;right:0;z-index:-1;height:48px;background:var(--c-bg);border-bottom:1px solid var(--c-line);pointer-events:none}
+.st-key-tabbar > :first-child{flex:1 1 auto;min-width:0}
+/* While a run is still drawing, Streamlit keeps the last run's leftovers under reused nodes (the landing composer's
+   row once surfaced inside History). The strip only ever shows its own three parts. */
+.st-key-tabbar > :nth-child(n+4),.st-key-tab-history > :not([data-testid="stPopover"]),
+.st-key-tabs > :not(:has(> :is([class*="st-key-tab-on-"],[class*="st-key-tab-off-"]))){display:none!important}
+.st-key-tabs{flex-direction:row;flex-wrap:nowrap;align-items:flex-end;gap:2px;overflow:hidden}
+.st-key-tabs > [data-testid="stVerticalBlockBorderWrapper"]{flex:0 1 208px;min-width:96px}
+:is([class*="st-key-tab-on-"],[class*="st-key-tab-off-"]){position:relative;flex-direction:row;gap:0;height:38px;border-radius:var(--r-md) var(--r-md) 0 0}
+[class*="st-key-tab-on-"]{background:var(--c-surface);box-shadow:inset 1px 0 var(--c-line),inset -1px 0 var(--c-line),inset 0 1px var(--c-line);margin-bottom:-9px;height:47px;padding-bottom:9px}
+:is([class*="st-key-tab-on-"],[class*="st-key-tab-off-"]) [class*="st-key-tab-open-"]{flex:1 1 auto;min-width:0}
+[class*="st-key-tab-open-"] button{justify-content:flex-start;min-height:38px;height:38px;padding:0 34px 0 var(--s-3);border:0;border-radius:var(--r-md) var(--r-md) 0 0;
+  background:transparent;color:var(--c-text-3);transition-property:background-color,color;transition-duration:var(--dur-micro);transition-timing-function:var(--ease-out)}
+[class*="st-key-tab-open-"] button [data-testid="stMarkdownContainer"]{min-width:0;max-width:100%}
+[class*="st-key-tab-open-"] button p{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;font:400 var(--fs-ui)/1.2 var(--f-ui)}
+[class*="st-key-tab-on-"] [class*="st-key-tab-open-"] button:disabled{background:transparent;color:var(--c-text);cursor:default;opacity:1}
+[class*="st-key-tab-on-"] [class*="st-key-tab-open-"] button:disabled p{color:var(--c-text);font-weight:500}
+@media (hover:hover){[class*="st-key-tab-off-"] [class*="st-key-tab-open-"] button:hover{background:color-mix(in oklch,var(--c-raised) 60%,transparent);color:var(--c-text)}}
+[class*="st-key-tab-close-"]{position:absolute;top:7px;right:4px;width:auto!important;z-index:1}
+[class*="st-key-tab-close-"] button{width:24px;min-height:24px;height:24px;padding:0;border:0;border-radius:var(--r-xs);background:transparent;color:var(--c-text-3)}
+[class*="st-key-tab-close-"] button p{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+[class*="st-key-tab-close-"] button [data-testid="stIconMaterial"]{font-size:16px}
+[class*="st-key-tab-close-"] button:hover{background:var(--c-raised);color:var(--c-text)}
+[class*="st-key-tab-off-"] [class*="st-key-tab-close-"] button{opacity:0}
+[class*="st-key-tab-off-"]:is(:hover,:focus-within) [class*="st-key-tab-close-"] button{opacity:1}
+@media (hover:none){[class*="st-key-tab-off-"] [class*="st-key-tab-close-"] button{opacity:1}}
+:is([class*="st-key-tab-open-"],[class*="st-key-tab-close-"]) button:focus-visible{outline-offset:-2px}
+/* the open tab shows a gold dot while its answer streams */
+:root:has(.polaris-generating) [class*="st-key-tab-on-"] [class*="st-key-tab-open-"] button::before{content:"";flex:none;width:6px;height:6px;margin-right:var(--s-2);
+  border-radius:50%;background:var(--c-star);animation:polaris-breathe 1.8s var(--ease-breathe) infinite both}
+@keyframes polaris-breathe{0%,100%{opacity:.2;transform:scale(.55)}42%{opacity:1;transform:scale(1)}}
+/* History and New sit after the tabs, like a browser's tab-search and + buttons */
+.st-key-tabbar > :nth-child(n+2){flex:none;width:auto!important;margin-bottom:5px}
+:is(.st-key-tab-history [data-testid="stPopoverButton"],.st-key-new-chat button){min-height:30px;height:30px;padding:0 var(--s-2);border:0;border-radius:var(--r-sm);
+  background:transparent;color:var(--c-text-2);gap:6px}
+:is(.st-key-tab-history [data-testid="stPopoverButton"],.st-key-new-chat button) p{font:500 var(--fs-ui)/1 var(--f-ui)}
+:is(.st-key-tab-history [data-testid="stPopoverButton"],.st-key-new-chat button):hover{background:var(--c-raised);color:var(--c-text)}
+.st-key-new-chat button p{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+/* Overflow: the strip keeps the open tab and the most recent ones, hiding the oldest as it narrows. History
+   always lists every saved chat, so a hidden tab is one click away. */
+@container tabbar (max-width:1180px){.st-key-tabs > [data-testid="stVerticalBlockBorderWrapper"]:not(:has([class*="st-key-tab-on-"])):nth-last-child(n+5){display:none}}
+@container tabbar (max-width:760px){.st-key-tabs > [data-testid="stVerticalBlockBorderWrapper"]:not(:has([class*="st-key-tab-on-"])):nth-last-child(n+3){display:none}}
+@container tabbar (max-width:460px){
+  .st-key-tabs > [data-testid="stVerticalBlockBorderWrapper"]:not(:has([class*="st-key-tab-on-"])){display:none}
+  .st-key-tab-history [data-testid="stPopoverButton"] [data-testid="stMarkdownContainer"]{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+}
+
+/* History: every saved chat, opened from the tab strip; the list scrolls inside the popover */
+[data-testid="stPopoverBody"]{width:min(340px,calc(100vw - 32px));padding:var(--s-2);border:1px solid var(--c-line);border-radius:var(--r-md);background:var(--c-surface)}
+[data-testid="stPopoverBody"] .side-note{margin:0;padding:var(--s-2);font:400 var(--fs-cap)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
+[data-testid="stPopoverBody"] .side-note.err{color:var(--c-danger)}
+.st-key-history{gap:2px;max-height:min(60vh,420px);overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}
 :is([class*="st-key-hist-item-"],[class*="st-key-hist-current-"]){position:relative;gap:0}
-[class*="st-key-hist-open-"] button{justify-content:flex-start;min-height:36px;padding:0 40px 0 var(--s-3);border:0;border-radius:var(--r-sm);
+[class*="st-key-hist-open-"] button{justify-content:flex-start;min-height:34px;padding:0 40px 0 var(--s-3);border:0;border-radius:var(--r-sm);
   background:transparent;color:var(--c-text-2);transition-property:background-color,color;transition-duration:var(--dur-micro);transition-timing-function:var(--ease-out)}
 [class*="st-key-hist-open-"] button [data-testid="stMarkdownContainer"]{min-width:0;max-width:100%}
-[class*="st-key-hist-open-"] button p{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;font:400 var(--fs-ui)/1.3 var(--f-sans)}
-[class*="st-key-hist-open-"] button:active{transform:scale(.98)}
+[class*="st-key-hist-open-"] button p{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;font:400 var(--fs-ui)/1.3 var(--f-ui)}
 [class*="st-key-hist-current-"] [class*="st-key-hist-open-"] button:disabled{background:var(--c-raised);color:var(--c-text);cursor:default}
 [class*="st-key-hist-current-"] [class*="st-key-hist-open-"] button:disabled p{color:var(--c-text);font-weight:500}
 [class*="st-key-hist-del-"]{position:absolute;top:0;right:0;width:auto!important;z-index:1}
-[class*="st-key-hist-del-"] button{width:36px;min-height:36px;padding:0;border:0;border-radius:var(--r-sm);background:transparent;color:var(--c-text-3);opacity:.6;
+[class*="st-key-hist-del-"] button{width:34px;min-height:34px;padding:0;border:0;border-radius:var(--r-sm);background:transparent;color:var(--c-text-3);opacity:.6;
   transition-property:color,opacity;transition-duration:var(--dur-micro);transition-timing-function:var(--ease-out)}
 [class*="st-key-hist-del-"] button p{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-[class*="st-key-hist-del-"] button:active{transform:scale(.94)}
 :is([class*="st-key-hist-item-"],[class*="st-key-hist-current-"]):focus-within [class*="st-key-hist-del-"] button{opacity:1}
 @media (hover:hover){
   [class*="st-key-hist-open-"] button:hover{background:color-mix(in oklch,var(--c-raised) 55%,transparent);color:var(--c-text)}
@@ -487,41 +708,42 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(-
 }
 @media (hover:none){[class*="st-key-hist-del-"] button{opacity:1}}
 [class*="st-key-hist-"] button:focus-visible{outline-offset:-2px}
+/* Streamlit tints a focused button with its primary colour; these rows keep their ink and show the ring instead */
+:is([class*="st-key-hist-open-"],[class*="st-key-tab-open-"],[class*="st-key-tab-close-"]) button:focus:not(:hover){color:inherit}
+:is([class*="st-key-hist-open-"],[class*="st-key-tab-open-"]) button:focus p{color:inherit}
 [class*="st-key-hist-confirm-"]{flex-direction:row;flex-wrap:wrap;gap:var(--s-2);padding:var(--s-2) var(--s-3) var(--s-3);border-radius:var(--r-sm);background:var(--c-raised)}
 [class*="st-key-hist-confirm-"] > :first-child{flex:1 0 100%}
-[class*="st-key-hist-confirm-"] .side-note{color:var(--c-text)}
+[class*="st-key-hist-confirm-"] .side-note{padding:0!important;color:var(--c-text)!important}
 :is([class*="st-key-hist-yes-"],[class*="st-key-hist-no-"]){flex:1 1 0;width:auto!important}
-:is([class*="st-key-hist-yes-"],[class*="st-key-hist-no-"]) button{width:100%;min-height:32px;padding:0 var(--s-2);border-radius:var(--r-xs);background:transparent;
-  transition-property:background-color,border-color;transition-duration:var(--dur-micro);transition-timing-function:var(--ease-out)}
-:is([class*="st-key-hist-yes-"],[class*="st-key-hist-no-"]) button p{font:500 var(--fs-ui)/1 var(--f-sans)}
+:is([class*="st-key-hist-yes-"],[class*="st-key-hist-no-"]) button{width:100%;min-height:32px;padding:0 var(--s-2);border-radius:var(--r-xs);background:transparent}
+:is([class*="st-key-hist-yes-"],[class*="st-key-hist-no-"]) button p{font:500 var(--fs-ui)/1 var(--f-ui)}
 [class*="st-key-hist-yes-"] button{border:1px solid var(--c-danger);color:var(--c-danger)}
 [class*="st-key-hist-no-"] button{border:1px solid var(--c-line-strong);color:var(--c-text)}
-:is([class*="st-key-hist-yes-"],[class*="st-key-hist-no-"]) button:active{transform:scale(.97)}
 @media (hover:hover){
-  [class*="st-key-hist-yes-"] button:hover{background:color-mix(in oklch,var(--c-danger) 14%,transparent);border-color:var(--c-danger);color:var(--c-danger)}
-  [class*="st-key-hist-no-"] button:hover{background:var(--c-thumb);border-color:var(--c-line-strong);color:var(--c-text)}
+  [class*="st-key-hist-yes-"] button:hover{background:color-mix(in oklch,var(--c-danger) 14%,transparent)}
+  [class*="st-key-hist-no-"] button:hover{background:var(--c-thumb)}
 }
-/* compare pickers hang off their toggle */
-.st-key-cmp-pickers{gap:var(--s-2);padding-left:var(--s-2);border-left:2px solid var(--c-line)}
-.st-key-cmp-pickers [data-baseweb="select"] > div{font-size:13px}
-[data-testid="stSidebar"] .side-h{margin:var(--s-6) 0 0;font:600 var(--fs-cap)/1 var(--f-sans);color:var(--c-text-3);letter-spacing:.01em}
-[data-testid="stSidebar"] [data-testid="stWidgetLabel"] p,[data-testid="stSidebar"] label p{font:400 var(--fs-ui)/var(--lh-ui) var(--f-sans);color:var(--c-text)}
-[data-testid="stSidebar"] [data-baseweb="select"] > div{background:var(--c-raised);border-color:var(--c-line);border-radius:var(--r-sm);color:var(--c-text)}
-[data-testid="stSidebar"] [data-baseweb="select"] svg{color:var(--c-text-3)}
-[data-baseweb="popover"] ul{background:var(--c-surface)}
-[data-baseweb="popover"] li{color:var(--c-text)}
-[data-testid="stCheckbox"] label[data-baseweb="checkbox"] > div:first-child{background:var(--c-line-strong)!important}
-[data-testid="stCheckbox"] label[data-baseweb="checkbox"]:has(input:checked) > div:first-child{background:var(--c-accent)!important}
-[data-testid="stCheckbox"] label[data-baseweb="checkbox"] > div:first-child > div{background:oklch(1 0 0)!important}
-.kv-list{display:flex;flex-direction:column;gap:6px;font:400 var(--fs-ui)/var(--lh-ui) var(--f-sans)}
+
+/* ---------- settings: session, models and system details in one modal ---------- */
+[data-testid="stDialog"] [role="dialog"]{background:var(--c-surface);border:1px solid var(--c-line);border-radius:var(--r-xl);box-shadow:var(--shadow-float);color:var(--c-text)}
+[data-testid="stDialog"] [role="dialog"] h2,[data-testid="stDialog"] [role="dialog"] h2 *{font:600 var(--fs-q)/1.3 var(--f-ui)!important;color:var(--c-text)}
+p.dlg-h{margin:var(--s-3) 0 var(--s-1);padding-bottom:var(--s-2);border-bottom:1px solid var(--c-line);font:600 var(--fs-cap)/1 var(--f-ui);color:var(--c-text-3);letter-spacing:.02em}
+p.dlg-note{margin:0 0 var(--s-2);font:400 var(--fs-cap)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
+.kv-list{display:flex;flex-direction:column;gap:6px;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui)}
 .kv{display:flex;justify-content:space-between;align-items:baseline;gap:var(--s-3);min-width:0}
 .kv .k{flex:none;color:var(--c-text-3)}
 .kv .v{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right;color:var(--c-text);font-variant-numeric:tabular-nums}
-[data-testid="stSidebar"] [data-testid="stDownloadButton"] button{min-height:34px;border:1px solid var(--c-line);border-radius:var(--r-sm);background:transparent;color:var(--c-text-2)}
-[data-testid="stSidebar"] [data-testid="stDownloadButton"] button{padding:0 var(--s-2);gap:var(--s-1)}
-[data-testid="stSidebar"] [data-testid="stDownloadButton"] button p{white-space:nowrap;font-size:var(--fs-ui)}
-[data-testid="stSidebar"] [data-testid="stDownloadButton"] button:hover{background:var(--c-raised);color:var(--c-text);border-color:var(--c-line-strong)}
-[data-testid="stSidebar"] .footer-license{margin:var(--s-7) 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(--f-sans);color:var(--c-text-3)}
+.models{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui)}
+.models li{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-3);padding:6px 0;margin:0;border-bottom:1px solid var(--c-line)}
+.models .n{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--f-mono);color:var(--c-text)}
+.models .r{grid-row:2;font-size:var(--fs-cap);color:var(--c-text-3)}
+.models .s{grid-column:2;grid-row:1 / 3;align-self:center;font-size:var(--fs-cap);color:var(--c-text-3)}
+.models .installed .s{color:var(--c-data)}
+.models .not-installed .s{color:var(--c-danger)}
+.models code{grid-column:1 / -1;margin-top:4px;justify-self:start;font-size:11.5px;overflow-wrap:anywhere}
+[data-testid="stDialog"] [data-testid="stDownloadButton"] button{min-height:32px;border:1px solid var(--c-line);border-radius:var(--r-sm);background:transparent;color:var(--c-text-2)}
+[data-testid="stDialog"] [data-testid="stDownloadButton"] button p{white-space:nowrap;font-size:var(--fs-ui)}
+[data-testid="stDialog"] [data-testid="stDownloadButton"] button:hover{background:var(--c-raised);color:var(--c-text);border-color:var(--c-line-strong)}
 
 /* ---------- focus and small screens ---------- */
 button:focus-visible,[role="radio"]:focus-visible,summary:focus-visible,a:focus-visible{outline:2px solid var(--c-accent)!important;outline-offset:2px}
@@ -536,12 +758,6 @@ button:focus-visible,[role="radio"]:focus-visible,summary:focus-visible,a:focus-
   [class*="st-key-composer-"]{margin-bottom:var(--s-5)}
   [class*="st-key-composer-"] [data-testid="stColumn"]:first-child :is([data-testid="stVerticalBlock"],[data-testid="stElementContainer"]){position:static}
   .composer-note{position:absolute;inset:calc(100% + var(--s-1)) 0 auto;text-align:center}
-  /* the open mode menu stays inside the screen. Its rows are a fixed height, so where a hint can't fit beside its
-     config name the hint is cut short, never the name: 5em holds the longest name, +RAG+CoT */
-  :root:has([class*="st-key-mode-"] [aria-expanded="true"]) [data-baseweb="popover"] > div{min-width:min(340px,calc(100vw - 2 * var(--s-4)));margin:0 var(--s-4)}
-  :root:has([class*="st-key-mode-"] [aria-expanded="true"]) [data-baseweb="popover"] li[role="option"]{gap:var(--s-3)}
-  :root:has([class*="st-key-mode-"] [aria-expanded="true"]) [data-baseweb="popover"] li[role="option"] > div{flex:1 1 0;min-width:5em}
-  :root:has([class*="st-key-mode-"] [aria-expanded="true"]) [data-baseweb="popover"] li[role="option"]::after{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
   .st-key-examples button p{white-space:normal}
   .q{margin-top:var(--s-7)}
 }

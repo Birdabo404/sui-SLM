@@ -139,6 +139,8 @@ class CancellableChat:
         self._conn = None
         self._committed = False
         self.cancelled = False
+        # Ollama's reason for ending the last stream: "stop" (end of turn), "length" (a token or context limit).
+        self.done_reason = None
 
     def configure(self, *, temperature, seed, keep_alive):
         with self._lock:
@@ -257,6 +259,8 @@ class CancellableChat:
                         yield content
                 done = payload.get("done")
                 if done is True:
+                    reason = payload.get("done_reason")
+                    self.done_reason = reason if isinstance(reason, str) else None
                     return _terminal_result("".join(pieces), payload)
                 if done is not False and done is not None:
                     raise OllamaStreamError("Ollama stream field 'done' must be boolean")
@@ -315,6 +319,7 @@ class StreamingAnswer:
         git_sha=None,
         model_info=None,
         context=None,
+        messages_fn=None,
         on_retrieval: Callable[[RetrievalChart], None] | None = None,
         on_progress: Callable[[LiveThroughput], None] | None = None,
     ):
@@ -335,6 +340,8 @@ class StreamingAnswer:
         self.git_sha = git_sha
         self.model_info = model_info
         self.context = context
+        # (question, hits, mode) -> messages. The app passes its format overlay; the default is the thesis prompt.
+        self.messages_fn = messages_fn or build_messages
         self.on_retrieval = on_retrieval
         self.on_progress = on_progress
         self.retrieval = None
@@ -387,7 +394,7 @@ class StreamingAnswer:
                 hits = self.retriever.retrieve(query, k=self.k, tldr_lane=True)
                 weak = is_weak(hits, threshold=self.threshold)
                 self.chat.raise_if_cancelled()
-            messages = build_messages(self.question, hits, self.mode)
+            messages = self.messages_fn(self.question, hits, self.mode)
             if self.context is not None:
                 messages, context_turns = self.context.apply_with_count(messages)
             self.retrieval = retrieval_chart(hits, self.threshold, weak)
@@ -453,6 +460,7 @@ class StreamingAnswer:
                 git_sha=self.git_sha,
                 model_info=self.model_info or OllamaInfo(),
             )
+            self._result["done_reason"] = None if weak else self.chat.done_reason
             complete = True
         finally:
             if not complete:

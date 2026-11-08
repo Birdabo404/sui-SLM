@@ -5,6 +5,7 @@ import http.client
 import importlib
 import io
 import json
+import math
 import os
 import re
 import socket
@@ -23,6 +24,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from shared.prompt import ABSTAIN
+from app.streaming import LiveThroughput, OllamaStreamError, retrieval_chart
+from app.models import ComparePick, ModelOption, compare_picks, default_compare_ids, model_options, modes_for, pair_compare_ids
 from app.engine import (
     OllamaInfo,
     WEAK_DENSE,
@@ -37,14 +40,32 @@ from app.engine import (
     warm_model,
 )
 from app.polaris import (
+    MONITOR_SWITCH,
+    RAM_TITLE,
+    RateTrace,
+    config_summary_html,
+    finished_runs,
+    hits_from_chart,
+    last_runs,
+    model_choice_label,
+    model_status_html,
+    models_table_html,
+    monitor_html,
+    rail_art_html,
+    ram_html,
+    rate_svg,
+    score_table_html,
+    live_phase_label,
     EXPORT_FIELDS,
     best_match_html,
     best_match_label,
     build_run_record,
     card_head_html,
-    card_html,
+    cube_frame,
+    cube_html,
+    cut_off_html,
     debug_rows_html,
-    default_compare_modes,
+    empty_slot_html,
     doc_label,
     evidence_block_html,
     evidence_panel_html,
@@ -64,32 +85,34 @@ from app.polaris import (
     ram_split_html,
     records_to_csv,
     records_to_json,
-    retrieval_bar_html,
     source_chips_html,
     source_key,
-    split_code_blocks,
-    split_reasoning,
     style_path,
+    CUBE_COLS,
+    CUBE_FRAMES,
+    CUBE_PITCH,
+    CUBE_RAMP,
+    CUBE_ROWS,
+    CUBE_SECONDS,
+    _CUBE_DISTANCE,
+    _CUBE_FACE_LIST,
+    _CUBE_FIT,
+    _cube_orientation,
+    _cube_render,
+    _mat_apply,
     waiting_html,
     STILL_WORKING,
     CancellableChat,
     ChatCancelled,
     compare_compact_html,
-    default_compare_model_keys,
-    model_key_choices,
-    model_mode_choices,
     mode_from_name,
     mode_name,
-    pair_compare_config_modes,
-    pair_compare_model_keys,
     preview_text,
-    running_card_html,
     ENGLISH_NOTE,
     MODE_HINTS,
     composer_note_html,
     connection_html,
     flags_html,
-    mode_menu_css,
     network_online,
     SKY_LEVELS,
     side_logo_html,
@@ -102,7 +125,6 @@ from app.polaris import (
     DELETE_ASK,
     HISTORY_EMPTY,
     answer_stats_html,
-    compare_configs,
     compare_model_tags,
     compare_summary_html,
     history_error_text,
@@ -154,11 +176,14 @@ class SessionStartupTests(unittest.TestCase):
             app_mod,
             "git_commit",
             return_value="abc1234",
-        ) as commit:
+        ) as commit, patch.object(app_mod, "_recent_chat_ids", return_value=["b", "a"]) as recent:
             app_mod._init_session()
             app_mod._init_session()
             self.assertEqual(app_mod._session_git_commit(), "abc1234")
         self.assertFalse(fake_st.session_state["compare"])
+        self.assertEqual(fake_st.session_state["tabs"], ["b", "a"])
+        self.assertEqual(fake_st.session_state["model_pick"], app_mod.BASE_MODEL)
+        recent.assert_called_once_with()
         commit.assert_called_once_with()
 
     def test_failed_warmup_retries_and_success_is_cached(self):
@@ -286,9 +311,8 @@ class RunRecordTests(unittest.TestCase):
         self.assertNotIn("Steps:", html)
         self.assertIn("<code>man &lt;command&gt;</code>", html)
         self.assertIn("Please ask the lab technician", html)
-        card = card_html(rec)
-        self.assertIn("idk-card", card)
-        self.assertIn("retr low", card)
+        card = html + evidence_block_html(rec) + best_match_html(rec) + metrics_html(rec)
+        self.assertNotIn("retr", card)
         self.assertIn("Best match:", card)
         self.assertIn("<code>tldr ls</code>", card)
         self.assertNotIn("cosine 0.10 of 0.30 needed", card)
@@ -349,46 +373,58 @@ class RunRecordTests(unittest.TestCase):
 
 class CompareTests(unittest.TestCase):
     def test_defaults_base_vs_full(self):
-        self.assertEqual(default_compare_modes(), ("base", "full"))
+        options = model_options("qwen3.5:2b", "")
+        self.assertEqual(default_compare_ids(options, False), ("qwen3.5:2b|base", "qwen3.5:2b|full"))
 
     def test_pair_must_differ(self):
         self.assertEqual(pair_compare_modes("base", "base"), ("base", "cot"))
         self.assertEqual(pair_compare_modes("full", "full"), ("full", "base"))
         self.assertEqual(pair_compare_modes("base", "full"), ("base", "full"))
 
-    def test_distilled_model_choices_are_hidden_when_unset(self):
-        self.assertEqual(model_key_choices(""), ("base",))
-        self.assertEqual(default_compare_model_keys(""), ("base", "base"))
+    def test_student_side_is_the_default_only_when_configured(self):
+        options = model_options("qwen3.5:2b", "student:latest")
+        self.assertEqual(default_compare_ids(options, True), ("qwen3.5:2b|full", "student:latest|full"))
+        self.assertEqual(default_compare_ids(model_options("qwen3.5:2b", ""), False)[1], "qwen3.5:2b|full")
+
+    def test_pair_of_the_same_config_moves_the_right_side(self):
+        options = model_options("qwen3.5:2b", "")
+        left, right = pair_compare_ids("qwen3.5:2b|full", "qwen3.5:2b|full", options, False)
+        self.assertEqual(left, "qwen3.5:2b|full")
+        self.assertNotEqual(right, left)
         self.assertEqual(
-            pair_compare_model_keys("base", "distilled", ""),
-            ("base", "base"),
+            pair_compare_ids("qwen3.5:2b|full", "thesis-student|full", options, False),
+            ("qwen3.5:2b|full", "thesis-student|full"),
         )
 
-    def test_distilled_compare_allows_the_same_mode(self):
-        self.assertEqual(
-            default_compare_model_keys("student:latest"),
-            ("base", "distilled"),
-        )
-        self.assertEqual(
-            pair_compare_model_keys("base", "distilled", "student:latest"),
-            ("base", "distilled"),
-        )
-        self.assertEqual(
-            pair_compare_config_modes("full", "full", "base", "distilled"),
-            ("full", "full"),
-        )
+    def test_student_offers_only_full_mode(self):
+        options = model_options("qwen3.5:2b", "")
+        by_key = {o.key: o for o in options}
+        self.assertEqual(modes_for(by_key["base"]), ("base", "cot", "rag", "full"))
+        self.assertEqual(modes_for(by_key["distilled"]), ("full",))
+        ids = [p.id for p in compare_picks(options)]
+        self.assertIn("thesis-student|full", ids)
+        self.assertNotIn("thesis-student|base", ids)
 
-    def test_distilled_exposes_only_full_mode(self):
-        self.assertEqual(model_mode_choices("base"), ("base", "cot", "rag", "full"))
-        self.assertEqual(model_mode_choices("distilled"), ("full",))
-        self.assertEqual(
-            pair_compare_config_modes("base", "rag", "base", "distilled"),
-            ("base", "full"),
-        )
-        self.assertEqual(
-            pair_compare_config_modes("base", "cot", "distilled", "distilled"),
-            ("full", "full"),
-        )
+    def test_model_labels_say_whether_ollama_has_it(self):
+        base, q4, student = model_options("qwen3.5:2b", "")
+        names = frozenset({"qwen3.5:2b", "thesis-student:latest"})
+        self.assertEqual(model_choice_label(base, names), "qwen3.5:2b")
+        self.assertEqual(model_choice_label(student, names), "thesis-student")
+        self.assertEqual(model_choice_label(q4, names), "thesis-base-q4km · not installed")
+        # Unknown (Ollama down) is not the same as missing.
+        self.assertEqual(model_choice_label(q4, None), "thesis-base-q4km")
+
+        self.assertIn('<span class="ok">installed</span> · KD student · runs +RAG+CoT only',
+                      model_status_html(student, names, True))
+        missing = model_status_html(q4, names, True)
+        self.assertIn('class="side-note model-st err"', missing)
+        self.assertIn("<code>ollama create thesis-base-q4km -f Modelfile-base</code>", missing)
+        self.assertIn("can't check, Ollama is not running", model_status_html(q4, None, False))
+
+        table = models_table_html((base, q4, student), names, True)
+        self.assertEqual(table.count('<li class="installed">'), 2)
+        self.assertEqual(table.count('<li class="not-installed">'), 1)
+        self.assertEqual(models_table_html((base, q4, student), None, False).count('<li class="unknown">'), 3)
 
     def test_run_compare_clears_waiting_before_right_starts(self):
         st = MagicMock()
@@ -428,8 +464,16 @@ class CompareTests(unittest.TestCase):
             def __exit__(self, *a):
                 return False
 
-        def answer(question, mode, model, *a, **k):
-            events.append(("start", mode, model, k.get("model_key")))
+        class View:
+            def __init__(self, key, model):
+                self.key, self.model = key, model
+
+            def finish(self, rec, align_slots=False):
+                events.append(("render", rec["mode"], self.key, align_slots))
+                events.append(("tag", self.key, self.model))
+
+        def answer(question, mode, option, *a, **k):
+            events.append(("start", mode, option.name, option.key, k.get("side")))
             return {
                 "mode": mode,
                 "answer": "x",
@@ -442,41 +486,32 @@ class CompareTests(unittest.TestCase):
                 "total_mb": 2,
                 "retrieval_max_dense": None,
                 "threshold": 0.3,
-            }
-
-        def render(rec, key, align_slots=False, model=""):
-            events.append(("render", rec["mode"], key))
-            events.append(("tag", key, model))
+            }, View(k["key"], k.get("tag", ""))
 
         with patch.object(app_mod.st, "container", return_value=Box()), patch.object(
             app_mod.st, "columns", return_value=(Col(), Col())
-        ), patch.object(app_mod, "_answer_record", side_effect=answer), patch.object(
-            app_mod, "_render_card", side_effect=render
-        ), patch.object(app_mod, "DISTILLED_MODEL", "student:latest"):
+        ), patch.object(app_mod, "_answer_record", side_effect=answer):
+            base = ModelOption("base", "qwen3.5:2b", "default base", "ollama pull qwen3.5:2b")
+            student = ModelOption("distilled", "student:latest", "KD student", "ollama create student:latest -f Modelfile")
+            monitor = MagicMock()
             (left, right), unanswered = app_mod._run_compare(
-                "q",
-                "base",
-                "full",
-                "qwen3.5:2b",
-                None,
-                "idx",
-                left_model_key="base",
-                right_model_key="distilled",
+                "q", ComparePick(base, "base"), ComparePick(student, "full"), None, "idx", monitor=monitor
             )
 
         self.assertEqual(unanswered, (None, None))
         self.assertEqual(left["mode"], "base")
         self.assertEqual(right["mode"], "full")
-        left_start = ("start", "base", "qwen3.5:2b", "base")
-        right_start = ("start", "full", "student:latest", "distilled")
+        left_start = ("start", "base", "qwen3.5:2b", "base", "L")
+        right_start = ("start", "full", "student:latest", "distilled", "R")
+        monitor.plan.assert_called_once_with([("L", "qwen3.5:2b", "base"), ("R", "student:latest", "full")])
         self.assertLess(events.index(left_start), events.index("clear_wait"))
         self.assertLess(events.index("clear_wait"), events.index(right_start))
         self.assertEqual(
             [e for e in events if isinstance(e, tuple) and e[0] == "start"],
             [left_start, right_start],
         )
-        self.assertIn(("render", "base", "answer-h1-l"), events)
-        self.assertIn(("render", "full", "answer-h1-r"), events)
+        self.assertIn(("render", "base", "answer-h1-l", True), events)
+        self.assertIn(("render", "full", "answer-h1-r", True), events)
         # Different models on each side, so both heads name theirs.
         self.assertIn(("tag", "answer-h1-l", "qwen3.5:2b"), events)
         self.assertIn(("tag", "answer-h1-r", "student:latest"), events)
@@ -488,25 +523,6 @@ class HtmlTests(unittest.TestCase):
         self.assertIn("Plain model, no documents", card_head_html("base"))
         self.assertIn('<span class="mode">+RAG+CoT</span>', card_head_html("full"))
         self.assertNotIn("[", card_head_html("full"))
-        self.assertIn("No retrieval", retrieval_bar_html(None, 0.30, retrieval_off=True))
-        self.assertIn(
-            "No retrieval in BASE",
-            retrieval_bar_html(None, 0.30, retrieval_off=True, mode="base"),
-        )
-        self.assertNotIn("retrieval off", retrieval_bar_html(None, 0.30, retrieval_off=True))
-        html = retrieval_bar_html(0.74, 0.30)
-        self.assertIn("retr ok", html)
-        self.assertIn("width:74.0%", html)
-        self.assertIn("left:30.0%", html)
-        self.assertIn("<b>0.74</b> clears 0.30", html)
-        self.assertIn('role="meter"', html)
-        self.assertNotIn('class="scale"', html)
-        self.assertNotIn('class="knob"', html)
-        low = retrieval_bar_html(0.22, 0.30)
-        self.assertIn("retr low", low)
-        self.assertIn("width:22.0%", low)
-        self.assertIn("left:30.0%", low)
-        self.assertIn("<b>0.22</b> below 0.30", low)
 
     def test_chips_and_evidence(self):
         hits = [
@@ -575,14 +591,16 @@ class HtmlTests(unittest.TestCase):
         }
         html = metrics_html(rec)
         self.assertIn("1.8", html)
-        self.assertIn("2.5 GB", html)
-        self.assertIn("total", html)
+        self.assertIn("<b>2.5 GB</b> peak RSS app+Ollama", html)
+        self.assertIn("app 420 MB, Ollama 2100 MB", html)
         self.assertIn("<b>3</b> sources", html)
         self.assertNotIn(" · ", html)
         self.assertNotIn("app <b>420</b>", html)
-        self.assertNotIn("2100", html)
+        self.assertNotIn("2100", re.sub(r"<[^>]+>", "", html))
         self.assertNotIn("docs", html)
-        self.assertNotIn("tok", html)
+        # No timing fields: speed reads as unavailable rather than disappearing or showing a 0.
+        self.assertIn("tok/s unavailable", html)
+        self.assertNotIn("<b>0.0</b> tok/s", html)
         self.assertNotIn("copy", html)
         self.assertEqual(format_total_ram(2520), "2.5 GB")
         split = ram_split_html(rec)
@@ -597,6 +615,17 @@ class HtmlTests(unittest.TestCase):
         self.assertIn("<b>1</b> candidate checked", idk_html)
         self.assertIn("abstained", idk_html)
         self.assertNotIn("source", idk_html)
+
+    def test_ram_says_what_was_measured(self):
+        self.assertIn("RAM not measured", ram_html({"total_mb": 0}))
+        self.assertIn("RAM not measured", ram_html({}))
+        self.assertNotIn("<b>0", ram_html({"total_mb": 0}))
+        app_only = ram_html({"total_mb": 300, "app_rss_mb": 300, "ollama_rss_mb": 0})
+        self.assertIn("peak RSS, app only", app_only)
+        self.assertIn("No Ollama process was visible", app_only)
+        both = ram_html({"total_mb": 2520, "app_rss_mb": 420, "ollama_rss_mb": 2100})
+        self.assertIn("peak RSS app+Ollama", both)
+        self.assertTrue(RAM_TITLE.startswith("Peak resident memory (RSS)"))
 
     def test_source_key_and_best_match(self):
         self.assertEqual(source_key("tldr"), "TLDR")
@@ -627,7 +656,8 @@ class HtmlTests(unittest.TestCase):
         self.assertNotIn("slot-line", html)
         css = style_path().read_text(encoding="utf-8")
         self.assertIn(".card.waiting-card{border:1pxsolidvar(--c-line)", css.replace(" ", ""))
-        self.assertIn(".thinking.queued .dots i{animation:none", css)
+        self.assertIn('<span class="cube still"', html)
+        self.assertIn(".cube.still .cube-reel{animation:none", css)
         self.assertIn("1px dashed var(--c-idk)", css)
 
     def test_compare_base_vs_full_slots(self):
@@ -664,22 +694,21 @@ class HtmlTests(unittest.TestCase):
             "total_mb": 2520,
             "abstained": False,
         }
-        left = card_html(base, align_slots=True)
-        right = card_html(full, align_slots=True)
+        # The pieces a compare card is drawn from (app._AnswerView.finish with align_slots).
+        left = card_head_html("base") + empty_slot_html("ev", "No sources in BASE") + metrics_html(base)
+        right = card_head_html("full") + evidence_block_html(full) + metrics_html(full)
         self.assertIn('<span class="mode">BASE</span>', left)
         self.assertIn("Plain model, no documents", left)
         self.assertIn('<span class="mode">+RAG+CoT</span>', right)
         self.assertIn("Retrieved lab docs, step-by-step prompt", right)
         self.assertIn("slot-empty ev", left)
         self.assertIn("No sources in BASE", left)
-        self.assertIn("No retrieval in BASE", left)
-        self.assertIn("retr off", left)
         self.assertIn('<span class="count">1 source</span>', right)
-        self.assertIn("retr ok", right)
-        self.assertIn("slot-empty best", left)
-        self.assertIn("slot-empty best", right)
-        self.assertNotIn("idk-card", left)
-        self.assertNotIn("idk-card", right)
+        # Scores and the rate live in the rail's monitor now, never inside an answer card.
+        for card in (left, right):
+            self.assertNotIn("retr", card)
+            self.assertNotIn('class="spark"', card)
+        self.assertIn("slot-empty best", empty_slot_html("best"))
         wait = waiting_html("full", "BASE")
         self.assertIn("waiting-card", wait)
         self.assertIn("slot-empty ev", wait)
@@ -692,23 +721,130 @@ class HtmlTests(unittest.TestCase):
         self.assertIn(".slot-empty{min-height:24px", compact)
         self.assertNotIn(".slot-empty.ev::after", compact)
         self.assertIn(".ev-box.best-src{", compact)
-        self.assertNotIn("var(--c-accent)", compact.split(".ev-box{", 1)[1].split(".retr{", 1)[0])
+        self.assertNotIn("var(--c-accent)", compact.split(".ev-box{", 1)[1].split(".metrics{", 1)[0])
 
 
 class LoaderAndNamingTests(unittest.TestCase):
-    def test_thinking_loader_is_css_only_constellation(self):
+    def test_thinking_loader_is_a_css_only_cube_reel(self):
         html = thinking_html("Searching the lab docs")
         self.assertIn('role="status"', html)
-        self.assertEqual(html.count("<i></i>"), 9)
+        self.assertIn('<span class="cube" aria-hidden="true">', html)
+        reel = html.split('<span class="cube-reel">', 1)[1].split('</span></span><span class="thinking-text">', 1)[0]
+        blocks = reel.split('<span class="cube-frame">')[1:]
+        self.assertEqual(len(blocks), CUBE_FRAMES)
+        for t, block in enumerate(blocks):
+            # The dimmest third of the ramp is inked .d, the brightest .b, the middle third the cube's own ink.
+            for ink, run in re.findall(r'<span class="([db])">([^<]*)</span>', block):
+                thirds = {CUBE_RAMP.index(ch) * 3 // len(CUBE_RAMP) for ch in run}
+                self.assertEqual(thirds, {0 if ink == "d" else 2}, run)
+            frame = re.sub(r"</?span[^>]*>", "", block).split("<br>")
+            self.assertEqual(frame, cube_frame(t))
+            self.assertEqual(len(frame), CUBE_ROWS)
+            self.assertTrue(all(len(line) == CUBE_COLS for line in frame))
+            self.assertLessEqual(set("".join(frame)), set(CUBE_RAMP + " "))
+        self.assertNotIn("\n", html)
         self.assertIn("Searching the lab docs", html)
         self.assertIn(STILL_WORKING, html)
         self.assertNotIn("<script", html)
         css = style_path().read_text(encoding="utf-8")
-        block = css.split("/* ---------- loader", 1)[1].split("/* ---------- sidebar", 1)[0]
+        block = css.split("/* ---------- loader", 1)[1].split("/* ---------- while an answer generates", 1)[0]
         for prop in ("width:", "height:", "top:", "left:", "margin"):
-            for frames in block.split("@keyframes")[1:]:
-                body = frames.split("}}", 1)[0]
+            for keyframes in block.split("@keyframes")[1:]:
+                body = keyframes.split("}}", 1)[0]
                 self.assertNotIn(prop, body, f"loader keyframes animate {prop}")
+        # A fixed grid in any monospace font: whole-pixel lines, a width in ch, no ligatures merging runs of a glyph.
+        self.assertIn(f"width:{CUBE_COLS}ch;height:{CUBE_ROWS * 4}px", block)
+        self.assertIn("font:600 5px/4px var(--f-mono)", block)
+        self.assertIn('font-variant-ligatures:none;font-feature-settings:"liga" 0,"calt" 0', block)
+        self.assertIn(f".cube-frame{{display:block;height:{CUBE_PITCH * 4}px}}", block)
+        self.assertIn("color:var(--c-text-3)}\n.cube .d{color:color-mix(in oklch,var(--c-text-3) 50%,transparent)}", block)
+        self.assertIn(".cube .b{color:var(--c-text)}", block)
+        # An inline indicator: no side over 48px (a 0.6em advance at 5px is 3px).
+        self.assertLessEqual(CUBE_ROWS * 4, 48)
+        self.assertLessEqual(CUBE_COLS * 3, 48)
+        self.assertNotIn("\u2588", "".join(cube_frame(t)[r] for t in range(CUBE_FRAMES) for r in range(CUBE_ROWS)))
+
+    def test_cube_is_projected_and_loops_with_no_seam(self):
+        frames = [cube_frame(t) for t in range(CUBE_FRAMES)]
+        # One step past either end of the loop draws the frame at the other end: the wrap is just another step.
+        self.assertEqual(_cube_render(CUBE_FRAMES, _CUBE_FIT), frames[0])
+        self.assertEqual(_cube_render(-1, _CUBE_FIT), frames[-1])
+        self.assertGreaterEqual(len({tuple(frame) for frame in frames}), CUBE_FRAMES - 2)
+
+        def cells(frame):
+            return {(r, c): ch for r, line in enumerate(frame) for c, ch in enumerate(line) if ch != " "}
+
+        sizes = [len(cells(frame)) for frame in frames]
+        for t, frame in enumerate(frames):
+            drawn = cells(frame)
+            # Two or three faces, each its own character and its own ink, and the cube fills most of the box.
+            glyphs = set(drawn.values())
+            self.assertIn(len(glyphs), (2, 3), frame)
+            self.assertEqual(len({CUBE_RAMP.index(ch) * 3 // len(CUBE_RAMP) for ch in glyphs}), len(glyphs), frame)
+            # No specks: every cell touches another of its face, at least at a corner.
+            for (r, c), ch in drawn.items():
+                self.assertTrue(any(drawn.get((r + dr, c + dc)) == ch for dr in (-1, 0, 1) for dc in (-1, 0, 1)
+                                    if dr or dc), (t, r, c))
+            rows = {r for r, _ in drawn}
+            cols = {c for _, c in drawn}
+            self.assertGreaterEqual(max(rows) - min(rows) + 1, CUBE_ROWS - 3, frame)
+            self.assertGreaterEqual(max(cols) - min(cols) + 1, CUBE_COLS // 2, frame)
+            # Smooth: the outline barely changes from one frame to the next and the cube doesn't drift.
+            after = cells(frames[(t + 1) % CUBE_FRAMES])
+            self.assertLessEqual(len(set(drawn) ^ set(after)), len(drawn) // 6, (frame, frames[(t + 1) % CUBE_FRAMES]))
+            centre = sum(c for _, c in drawn) / len(drawn), sum(r for r, _ in drawn) / len(drawn)
+            moved = sum(c for _, c in after) / len(after), sum(r for r, _ in after) / len(after)
+            self.assertLess(abs(centre[0] - moved[0]) + abs(centre[1] - moved[1]), 1.0)
+        self.assertLess(max(sizes) - min(sizes), min(sizes) // 4)
+
+    def test_cube_tumbles_about_more_than_one_axis(self):
+        def transpose(m):
+            return tuple(tuple(m[j][i] for j in range(3)) for i in range(3))
+
+        def step_axis(t):
+            a, b = _cube_orientation(t), _cube_orientation(t + 1)
+            r = tuple(tuple(sum(b[i][k] * a[j][k] for k in range(3)) for j in range(3)) for i in range(3))
+            axis = (r[2][1] - r[1][2], r[0][2] - r[2][0], r[1][0] - r[0][1])
+            norm = math.sqrt(sum(x * x for x in axis))
+            return tuple(x / norm for x in axis)
+
+        axes = [step_axis(t) for t in range(CUBE_FRAMES)]
+        spread = max(math.degrees(math.acos(max(-1.0, min(1.0, sum(p * q for p, q in zip(a, b))))))
+                     for a in axes for b in axes)
+        # Spinning about one fixed axis would keep every step's axis the same; this one swings through 50 degrees.
+        self.assertGreater(spread, 45)
+        seen, hidden, tops = set(), set(), set()
+        for t in range(CUBE_FRAMES):
+            m = _cube_orientation(t)
+            for face, (normal, corners) in enumerate(_CUBE_FACE_LIST):
+                turned, first = _mat_apply(m, normal), _mat_apply(m, corners[0])
+                facing = sum(a * b for a, b in zip(turned, (first[0], first[1], first[2] + _CUBE_DISTANCE))) < 0
+                (seen if facing else hidden).add(face)
+            tops.add(max(range(6), key=lambda f: _mat_apply(m, _CUBE_FACE_LIST[f][0])[1]))
+            # Never face-on: the view always meets a second face at a real angle, so it reads as a solid.
+            view = sorted((abs(c) for c in _mat_apply(transpose(m), (0, 0, -1))), reverse=True)
+            self.assertGreater(view[1], 0.5 * view[0], t)
+        self.assertEqual(seen, set(range(6)))
+        self.assertEqual(hidden, set(range(6)))
+        self.assertGreaterEqual(len(tops), 4)
+
+    def test_cube_rests_under_reduced_motion_and_keeps_its_place_when_relabelled(self):
+        css = style_path().read_text(encoding="utf-8")
+        self.assertIn(f"animation:polaris-cube {CUBE_SECONDS:g}s steps({CUBE_FRAMES}) infinite", css)
+        reduced = [block.split("\n}", 1)[0] for block in css.split("@media (prefers-reduced-motion:reduce){")[1:]]
+        self.assertTrue(any(".cube-reel{animation:none" in block for block in reduced))
+        still = cube_html(still=True)
+        self.assertIn('class="cube still"', still)
+        self.assertEqual(still.count("<br>"), CUBE_ROWS - 1)
+        self.assertIn("<br>".join(cube_frame(0)), re.sub(r'</?span(?: class="[db]")?>', "", still))
+        self.assertNotIn("animation-delay", thinking_html("Waiting for the model"))
+        later = thinking_html("Waiting for the model", elapsed=5.0)
+        self.assertIn('<span class="cube-reel" style="animation-delay:-1.00s">', later)
+        self.assertIn('class="thinking-note" style="animation-delay:10.0s"', later)
+        noted = thinking_html("Writing its reasoning", elapsed=20.0, note="The answer shows from its Answer: line.")
+        self.assertIn('<span class="thinking-note now">The answer shows from its Answer: line.</span>', noted)
+        self.assertNotIn(STILL_WORKING, noted)
+        self.assertIn(".thinking-note.now{opacity:1;animation:none}", css)
 
     def test_thinking_label_follows_mode(self):
         self.assertEqual(thinking_label("full"), "Generating an answer from the lab docs")
@@ -717,9 +853,6 @@ class LoaderAndNamingTests(unittest.TestCase):
         self.assertEqual(thinking_label("base"), "Generating an answer")
         self.assertEqual(thinking_label("full", loading_index=True), "Loading the lab docs index")
         self.assertIn("Stopped", stopped_html())
-        card = running_card_html("cot", thinking_label("cot"))
-        self.assertIn("running-card", card)
-        self.assertIn('<span class="mode">+CoT</span>', card)
 
     def test_loader_text_is_neutral(self):
         banned = (
@@ -756,24 +889,32 @@ class LoaderAndNamingTests(unittest.TestCase):
             self.assertIn("Retrieved lab docs", MODE_HINTS[mode])
         for hint in MODE_HINTS.values():
             self.assertNotRegex(hint.lower(), "think|reason")
-        menu = mode_menu_css("qwen3.5:2b", ["base", "cot", "rag", "full"])
-        self.assertIn('nth-child(1)::after{content:"Plain model, no documents"}', menu)
 
     def test_ambient_motion_pauses_while_generating(self):
         self.assertIn("polaris-generating", flags_html(1, generating=True))
         self.assertNotIn("polaris-generating", flags_html(1))
         self.assertEqual(
-            flags_html(2, daylight=True, compare=True, generating=True),
-            '<div class="polaris-flags polaris-sky-2 polaris-daylight polaris-compare polaris-generating"></div>',
+            flags_html(2, daylight=True, generating=True),
+            '<div class="polaris-flags polaris-sky-2 polaris-daylight polaris-generating"></div>',
         )
         css = style_path().read_text(encoding="utf-8")
-        rules = [r for r in css.split("}") if ":root:has(.polaris-generating)" in r]
+        rules = [r for r in css.split("}") if ":root:has(.polaris-generating)" in r and "play-state" in r]
         self.assertEqual(len(rules), 1)
         selector, body = rules[0].rsplit("{", 1)
         selector = selector.rsplit("*/", 1)[-1].strip()
         self.assertEqual(body, "animation-play-state:paused!important")
         # Only the star and the sky: the loader and the one-shot entrances must keep running.
         self.assertEqual(selector, ":root:has(.polaris-generating) :is(.band *,.sky)")
+
+    def test_compare_answers_in_the_same_chat_shell(self):
+        css = style_path().read_text(encoding="utf-8")
+        rules = [r.rsplit("{", 1) for r in css.split("}") if "{" in r]
+        widths = [body for sel, body in rules if "stMainBlockContainer" in sel and "max-width" in body]
+        self.assertEqual(widths, ["max-width:var(--main-max);padding:calc(56px + var(--s-4)) var(--s-5) 0"])
+        self.assertEqual(re.findall(r"--main-max:([^;]+);", css), ["880px"])
+        # two columns stack before either is squeezed, and a code box scrolls inside its column
+        self.assertIn('.st-key-cmp,[class*="st-key-cmp-hist"]{container-type:inline-size}', css)
+        self.assertIn("@container (max-width:620px)", css)
 
     def test_english_only_note_sits_in_the_composer(self):
         self.assertEqual(ENGLISH_NOTE, "English questions only")
@@ -782,20 +923,6 @@ class LoaderAndNamingTests(unittest.TestCase):
         self.assertIn('<span class="composer-note">English questions only</span>', html)
         css = style_path().read_text(encoding="utf-8")
         self.assertIn(".composer-note{", css)
-
-    def test_mode_menu_fits_a_narrow_screen(self):
-        css = style_path().read_text(encoding="utf-8")
-        wide, narrow = css.split("@media (max-width:640px){", 1)
-        narrow = narrow.split("\n}", 1)[0]
-        menu = ':root:has([class*="st-key-mode-"] [aria-expanded="true"]) [data-baseweb="popover"]'
-        self.assertIn(menu + " > div{min-width:340px}", wide)
-        self.assertIn(menu + " > div{min-width:min(340px,calc(100vw - 2 * var(--s-4)));margin:0 var(--s-4)}", narrow)
-        # The rows are a fixed height, so the hint gives way and the config name keeps its room.
-        self.assertIn(menu + ' li[role="option"] > div{flex:1 1 0;min-width:5em}', narrow)
-        self.assertIn(
-            menu + ' li[role="option"]::after{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}',
-            narrow,
-        )
 
     def test_mode_names_round_trip(self):
         for mode in ("base", "cot", "rag", "full"):
@@ -824,12 +951,6 @@ class LoaderAndNamingTests(unittest.TestCase):
                 "fe800000000000000000000000000001 00000400 00000001 00000000 00000003 wlan0\n"
             )
             self.assertTrue(network_online(td))
-
-    def test_mode_menu_css_names_model_and_hints(self):
-        css = mode_menu_css('qwen"3.5:2b', ["base", "cot", "rag", "full"])
-        self.assertIn('--polaris-model:"qwen\\"3.5:2b"', css)
-        self.assertIn('nth-child(4)::after{content:"Retrieved lab docs, step-by-step prompt"}', css)
-        self.assertTrue(css.startswith("<style>") and css.endswith("</style>"))
 
     def test_sidebar_logo_and_star_ids(self):
         idle = side_logo_html()
@@ -867,7 +988,7 @@ class LoaderAndNamingTests(unittest.TestCase):
 
     def test_compare_preview_skips_reasoning_and_fences(self):
         text = "Think first.\n\nAnswer: Run this:\n```bash\ntar -xzf a.tar.gz\n```\nThen `ls` it."
-        self.assertEqual(preview_text(text), "Run this: Then ls it.")
+        self.assertEqual(preview_text(text, "cot"), "Run this: Then ls it.")
         html = compare_compact_html({"mode": "base", "answer": "Use `tar`."}, {"mode": "cot", "answer": text})
         self.assertNotIn("```", html)
         self.assertNotIn("Think first", html)
@@ -901,22 +1022,190 @@ class AnswerStatsTests(unittest.TestCase):
             '<span class="sr">Speed </span><b>18.4</b> tok/s</span>',
             html,
         )
-        self.assertLess(html.index("tok/s"), html.index("RAM total"))
+        self.assertLess(html.index("tok/s"), html.index("peak RSS"))
 
-    def test_speed_chip_needs_generation_timing(self):
+    def test_speed_chip_says_unavailable_without_generation_timing(self):
         for missing in ({"tok_s": None}, {"tok_s": ""}):
             html = metrics_html({**self.TIMED, **missing, "gen_s": None, "prompt_s": None, "load_s": None})
             self.assertIn("<b>3.2</b> s", html)
-            self.assertNotIn("tok/s", html)
+            self.assertIn('<span class="sr">Speed </span>tok/s unavailable</span>', html)
+            self.assertNotRegex(html, r"<b>[\d.]+</b> tok/s")
             self.assertIn('title="Question to answer"', html)
-        # An abstained answer never reaches the model, so only its time shows.
-        self.assertEqual(answer_stats_html({"latency_s": 0.4}).count('class="stat"'), 1)
+        # An abstained answer never reaches the model: its time shows, and its speed says nothing was generated.
+        idk = answer_stats_html({"latency_s": 0.4, "abstained": True})
+        self.assertEqual(idk.count('class="stat"'), 1)
+        self.assertIn("tok/s not generated", idk)
+        self.assertNotIn("unavailable", idk)
+
+    def test_speed_shows_ollamas_own_counts_beside_tok_s(self):
+        html = answer_stats_html(self.TIMED)
+        self.assertIn('<span class="stat calc">45 tok / 2.46 s</span>', html)
+        self.assertNotIn("calc", answer_stats_html({**self.TIMED, "eval_count": None}))
 
     def test_stat_numbers_keep_their_width(self):
         css = style_path().read_text(encoding="utf-8")
         rule = css.split(".stat b{", 1)[1].split("}", 1)[0]
         self.assertIn("font-variant-numeric:tabular-nums", rule)
         self.assertIn(".sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)", css)
+
+
+class LiveStreamHtmlTests(unittest.TestCase):
+    HITS = [
+        {"rank": 1, "source": "tldr", "title": "tar", "path": "tldr/common/tar.md", "dense": 0.7412, "rrf": 0.0328,
+         "bm25": 7.013},
+        {"rank": 2, "source": "man-pages", "title": "tar(1)", "path": "man/tar.1", "dense": 0.21, "rrf": 0.0161,
+         "bm25": None},
+    ]
+
+    DONE = {"mode": "full", "model": "qwen3.5:2b", "answer": "Use tar.", "latency_s": 6.7, "tok_s": 15.2,
+            "gen_s": 5.45, "eval_count": 83, "total_mb": 512, "docs": ["tar"], "abstained": False}
+
+    def test_score_table_prints_raw_scores_and_bars_only_cosine(self):
+        html = score_table_html(self.HITS, 0.30)
+        self.assertEqual(html.count('class="bar"'), 2)
+        self.assertIn('style="width:74.1%"', html)
+        self.assertEqual(html.count('style="left:30.0%"'), 2)
+        self.assertIn('<li class="ok">', html)
+        self.assertIn('<li class="low">', html)
+        self.assertIn('<span class="sr">cosine </span>.741', html)
+        self.assertIn('<span class="sr">rrf </span>.0328', html)
+        self.assertIn('<span class="sr">bm25 </span>7.01', html)
+        self.assertIn('<span class="sr">bm25 </span>—', html)
+        self.assertNotRegex(html.lower(), "confidence|probab|%</")
+
+    def test_live_chart_rows_map_from_the_backend_contract(self):
+        chart = retrieval_chart(self.HITS, 0.30)
+        hits = hits_from_chart(chart)
+        self.assertEqual([(h["rank"], h["dense"], h["rrf"], h["bm25"]) for h in hits],
+                         [(1, 0.7412, 0.0328, 7.013), (2, 0.21, 0.0161, None)])
+        self.assertIn('title="tldr/common/tar.md"', score_table_html(hits, chart.dense_threshold))
+
+    def test_rate_trace_counts_characters_from_the_first_text(self):
+        trace = RateTrace(every=0.5)
+        trace.add(LiveThroughput(2.0, 1, 10, 0.5, 5.0))
+        trace.add(LiveThroughput(2.3, 4, 40, 1.7, 17.4))
+        self.assertEqual(trace.samples, [])
+        trace.add(LiveThroughput(2.5, 6, 70, 2.4, 28.0))
+        trace.add(LiveThroughput(3.0, 9, 100, 3.0, 33.3))
+        trace.finish()
+        self.assertEqual(trace.first_s, 2.0)
+        self.assertEqual([round(r, 1) for _, r in trace.samples], [120.0, 60.0])
+        self.assertEqual(trace.frozen(), {"samples": tuple(trace.samples), "first_s": 2.0})
+
+    def test_rate_chart_draws_left_solid_and_right_dashed_on_shared_axes(self):
+        left = ((1.0, 10.0), (1.5, 40.0))
+        right = ((3.0, 20.0), (3.5, 20.0), (4.0, 80.0))
+        svg = rate_svg([("l", left), ("r", right)])
+        self.assertEqual(svg.count('class="line l"'), 1)
+        self.assertEqual(svg.count('class="line r"'), 1)
+        self.assertEqual(svg.count('class="area"'), 1)
+        self.assertIn("peak 80", svg)
+        self.assertEqual(rate_svg([("l", ((1.0, 5.0),))]), "")
+
+    def test_streaming_monitor_never_shows_a_token_rate(self):
+        trace = RateTrace(every=0.5)
+        trace.add(LiveThroughput(1.0, 1, 12, 1.0, 12.0))
+        run = {"side": "", "model": "qwen3.5:2b", "mode": "base", "state": "streaming", "live": trace.last,
+               "samples": (), "first_s": 1.0}
+        html = monitor_html([run], streaming=True)
+        self.assertIn('<span class="mon-tag live">streaming</span>', html)
+        self.assertIn("<b>12</b> chars", html)
+        self.assertIn("<b>1</b> chunks", html)
+        self.assertIn("<b>—</b> chars/s", html)
+        self.assertIn("tok/s comes from Ollama when the answer ends", html)
+        self.assertNotRegex(html, r"<b>[\d.,]+</b> tok")
+        self.assertIn("not tokens", html)
+        waiting = monitor_html([{**run, "live": None}], streaming=True)
+        self.assertIn("waiting for the first text", waiting)
+
+    def test_finished_monitor_keeps_ollamas_tok_s_and_the_trace(self):
+        run = {"side": "", "model": "qwen3.5:2b", "mode": "full", "state": "done", "record": self.DONE,
+               "samples": ((1.2, 30.0), (1.7, 68.0)), "first_s": 1.2, "hits": self.HITS, "threshold": 0.30}
+        html = monitor_html([run])
+        self.assertIn('<span class="mon-tag">last answer</span>', html)
+        self.assertIn("<b>6.7</b> s", html)
+        self.assertIn("<b>15.2</b> tok/s", html)
+        self.assertIn("first text <b>1.2</b> s · peak <b>68</b>", html)
+        self.assertIn('class="spark"', html)
+        self.assertIn("best cos <b>0.741</b> clears 0.30", html)
+
+    def test_restored_answer_says_why_it_has_no_trace(self):
+        html = monitor_html([{"side": "", "model": "m", "mode": "full", "state": "done", "record": self.DONE,
+                              "samples": (), "first_s": None, "hits": [], "threshold": 0.3}])
+        self.assertIn("only recorded while an answer streams in this session", html)
+        self.assertIn("<b>15.2</b> tok/s", html)
+        self.assertNotIn('class="spark"', html)
+        self.assertIn("No answer in this chat yet", monitor_html([]))
+
+    def test_monitor_tells_compare_sides_apart(self):
+        left = {"side": "L", "model": "qwen3.5:2b", "mode": "base", "state": "done",
+                "record": {**self.DONE, "mode": "base"}, "samples": ((0.5, 10.0), (1.0, 20.0)), "first_s": 0.5}
+        right = {"side": "R", "model": "thesis-student", "mode": "full", "state": "waiting", "samples": ()}
+        html = monitor_html([left, right], streaming=True)
+        self.assertIn('<span class="side l">L</span><span class="m">qwen3.5:2b</span><span class="md">BASE</span>', html)
+        self.assertIn('<span class="side r">R</span><span class="m">thesis-student</span><span class="md">+RAG+CoT</span>', html)
+        self.assertIn("starts when the left answer finishes", html)
+        self.assertIn("No retrieval in BASE", monitor_html([left]))
+        stopped = monitor_html([{**right, "state": "stopped"}])
+        self.assertIn("stopped, no stats", stopped)
+        self.assertNotRegex(stopped, r"<b>0(\.0)?</b> tok/s")
+
+    def test_scores_view_names_below_threshold_and_shared_hits(self):
+        low = [dict(self.HITS[1], rank=1)]
+        run = {"side": "", "mode": "rag", "state": "done", "record": {"abstained": True, "latency_s": 0.3},
+               "samples": (), "hits": low, "threshold": 0.30}
+        self.assertIn("below 0.30</span><span class=\"unit\">model not called</span>", monitor_html([run]))
+        left = {"side": "L", "mode": "rag", "model": "a", "state": "done", "record": self.DONE, "samples": (),
+                "hits": self.HITS, "threshold": 0.3}
+        right = {**left, "side": "R", "mode": "full"}
+        self.assertIn("Both sides retrieved the same chunks.", monitor_html([left, right]))
+        plain = {**left, "side": "R", "mode": "base", "hits": []}
+        self.assertIn("R (BASE) retrieves nothing.", monitor_html([left, plain]))
+
+    def test_monitor_switch_is_uncontrolled_and_both_views_ship(self):
+        # React would turn a checked radio into a controlled input that ignores clicks.
+        self.assertNotIn("checked", MONITOR_SWITCH)
+        self.assertIn('role="radiogroup"', MONITOR_SWITCH)
+        self.assertIn('<label for="mon-v-scores">Scores</label>', MONITOR_SWITCH)
+        html = monitor_html([])
+        self.assertIn("mon-view mon-rate", html)
+        self.assertIn("mon-view mon-scores", html)
+
+    def test_runs_come_from_the_last_answer_with_its_session_trace(self):
+        messages = [
+            {"role": "user", "content": "q1"},
+            {"role": "assistant", "record": self.DONE},
+            {"role": "user", "content": "q2"},
+            {"role": "assistant", "compare": ({**self.DONE, "mode": "base"}, None),
+             "compare_unanswered": (None, {"mode": "full", "model": "thesis-student", "state": "cancelled"})},
+        ]
+        traces = {"answer-h3-l": {"samples": ((0.1, 5.0), (0.6, 9.0)), "first_s": 0.1}}
+        left, right = last_runs(messages, traces)
+        self.assertEqual((left["side"], left["state"], left["samples"]), ("L", "done", ((0.1, 5.0), (0.6, 9.0))))
+        self.assertEqual((right["side"], right["state"], right["model"]), ("R", "stopped", "thesis-student"))
+        (single,) = finished_runs(messages[1], 1, {})
+        self.assertEqual((single["side"], single["samples"], single["first_s"]), ("", (), None))
+        self.assertEqual(last_runs(messages[:1], {}), [])
+
+    def test_rail_art_is_static_text_hidden_from_readers(self):
+        html = rail_art_html()
+        self.assertTrue(html.startswith('<div class="rail-art" aria-hidden="true">'))
+        self.assertEqual(html.count("<span"), 9)
+        self.assertEqual(html.count('class="pole"'), 1)
+        self.assertEqual(html.count('class="dip"'), 6)
+        self.assertNotRegex(html, "<(img|svg|script|style)")
+        self.assertNotIn("style=", html)
+        rows = re.findall(r'<span class="(?:hi|mid|lo)">(.*?)</span>(?=<span class="(?:hi|mid|lo)">|</div>)', html)
+        self.assertEqual([len(re.sub(r"<[^>]+>", "", r)) for r in rows], [44] * 9)
+        self.assertIs(type(html), str)
+        self.assertEqual(rail_art_html(), html)
+
+    def test_phase_labels_name_only_work_that_runs(self):
+        self.assertEqual(live_phase_label("full"), "Searching the lab docs")
+        self.assertEqual(live_phase_label("full", retrieved=True), "Waiting for the model")
+        self.assertIn("not called", live_phase_label("rag", retrieved=True, weak=True))
+        for mode in ("base", "cot"):
+            self.assertEqual(live_phase_label(mode), "Waiting for the model")
 
 
 class CompareLabelTests(unittest.TestCase):
@@ -928,7 +1217,6 @@ class CompareLabelTests(unittest.TestCase):
         )
         tagged = card_head_html("full", "student<1>")
         self.assertIn('<span class="mode">+RAG+CoT</span><span class="model">student&lt;1&gt;</span>', tagged)
-        self.assertIn('<span class="model">qwen3.5:2b</span>', running_card_html("full", "x", "qwen3.5:2b"))
         self.assertIn('<span class="model">student:latest</span>', waiting_html("full", "the left answer", "student:latest"))
         self.assertIn("Starts when the left answer finishes", waiting_html("full", "the left answer"))
 
@@ -962,17 +1250,11 @@ class CompareLabelTests(unittest.TestCase):
             '<span class="m">student:latest</span> <b>+RAG+CoT</b></p>',
         )
 
-    def test_compare_pickers_offer_the_thesis_configs(self):
+    def test_composer_line_outside_compare_names_the_picked_model(self):
         self.assertEqual(
-            compare_configs(""),
-            {"base": ("base", "base"), "base+CoT": ("base", "cot"), "base+RAG": ("base", "rag"),
-             "base+RAG+CoT": ("base", "full")},
+            config_summary_html("thesis-student", "full"),
+            '<p class="composer-cmp"><span class="m">thesis-student</span> <b>+RAG+CoT</b></p>',
         )
-        with_student = compare_configs("student:latest")
-        self.assertEqual(list(with_student)[-1], "distilled+RAG+CoT")
-        self.assertEqual(with_student["distilled+RAG+CoT"], ("distilled", "full"))
-        for cid, (model_key, mode) in with_student.items():
-            self.assertEqual(config_id(model_key, mode), cid)
 
 
 class HistoryHelperTests(unittest.TestCase):
@@ -1336,92 +1618,193 @@ class StopTests(unittest.TestCase):
         with self.assertRaises(requests.RequestException):
             CancellableChat(dead, timeout=2)([{"role": "user", "content": "hi"}], "m")
 
-    def test_interrupt_while_waiting_cancels_the_request(self):
-        st = MagicMock()
-        st.cache_resource = _cache_stub
-        st.cache_data = _cache_stub
-        sys.modules["streamlit"] = st
-
-        if "app.app" in sys.modules:
-            del sys.modules["app.app"]
-        app_mod = importlib.import_module("app.app")
-        seen = {}
-
-        def work(chat):
-            seen["chat"] = chat
-            while not chat.cancelled:
-                time.sleep(0.05)
-            raise ChatCancelled()
-
-        beats = {"n": 0}
-
-        def heartbeat():
-            beats["n"] += 1
-            if beats["n"] == 2:
-                raise _Interrupted("rerun requested")
-
-        with self.assertRaises(_Interrupted):
-            app_mod._run_stoppable(work, heartbeat, tick=0.05)
-        self.assertTrue(seen["chat"].cancelled)
-        self.assertEqual(app_mod._run_stoppable(lambda chat: 42, heartbeat), 42)
-
-    def test_answer_record_catches_chat_cancelled(self):
-        st = MagicMock()
-        st.cache_resource = _cache_stub
-        st.cache_data = _cache_stub
-        sys.modules["streamlit"] = st
-
-        if "app.app" in sys.modules:
-            del sys.modules["app.app"]
-        app_mod = importlib.import_module("app.app")
-        slot = MagicMock()
-        with patch.object(app_mod, "_run_stoppable", side_effect=ChatCancelled):
-            rec = app_mod._answer_record(
-                "q",
-                "base",
-                "m",
-                None,
-                "idx",
-                slot=slot,
-            )
-        self.assertIsNone(rec)
-        self.assertIs(st.session_state.last_cancelled, True)
-        slot.empty.assert_called_once()
-
-    def test_loader_is_sent_once_while_the_answer_runs(self):
+    def _app_with_mock_st(self):
         st = MagicMock()
         st.cache_resource = _cache_stub
         st.cache_data = _cache_stub
         st.session_state = MagicMock()
         st.session_state.run_records = []
+        st.write_stream.side_effect = lambda gen: "".join(gen)
         sys.modules["streamlit"] = st
         if "app.app" in sys.modules:
             del sys.modules["app.app"]
         app_mod = importlib.import_module("app.app")
+        return st, app_mod
+
+    def _answer(self, app_mod, slot):
+        """_answer_record for one plain answer, with a real monitor on a mock slot; returns (record, monitor run)."""
+        self.monitor = app_mod._Monitor(MagicMock())
+        self.monitor.plan([("", "m", "base")])
+        option = ModelOption("base", "m", "default base", "ollama pull m")
+        rec, _ = app_mod._answer_record("q", "base", option, None, "idx", slot, key="answer-1", monitor=self.monitor)
+        return rec, self.monitor.runs[0]
+
+    def test_interrupt_before_the_first_chunk_cancels_and_closes_the_stream(self):
+        st, app_mod = self._app_with_mock_st()
+        answer = _BlockingAnswer()
+        beats = {"n": 0}
+
+        def get(key, *default):
+            if key == "stop-gen":
+                beats["n"] += 1
+                if beats["n"] == 2:
+                    raise _Interrupted("rerun requested")
+            return None
+
+        st.session_state.get.side_effect = get
         slot = MagicMock()
+        with patch.object(app_mod, "stream_answer_question", return_value=answer), \
+                patch.object(app_mod, "_model_info", return_value=None):
+            with self.assertRaises(_Interrupted):
+                self._answer(app_mod, slot)
+        self.assertTrue(answer.cancelled.is_set())
+        self.assertTrue(answer.closed)
+        self.assertFalse(answer.worker_alive_after(1.0))
+        slot.error.assert_not_called()
 
-        def slow_answer(question, mode, model, **kw):
-            time.sleep(0.7)
-            return {"mode": mode, "text": "use tar", "hits": [], "weak": False, "latency_s": 0.7}
+    def test_answer_record_catches_chat_cancelled(self):
+        st, app_mod = self._app_with_mock_st()
+        slot = MagicMock()
+        answer = _BlockingAnswer(raise_now=True)
+        with patch.object(app_mod, "stream_answer_question", return_value=answer), \
+                patch.object(app_mod, "_model_info", return_value=None):
+            rec, run = self._answer(app_mod, slot)
+        self.assertIsNone(rec)
+        self.assertEqual(run["state"], "stopped")
+        self.assertIs(st.session_state.last_cancelled, True)
+        slot.empty.assert_called_once()
+        self.assertTrue(answer.closed)
 
-        with patch.object(app_mod, "answer_question", side_effect=slow_answer):
-            rec = app_mod._answer_record("q", "base", "m", None, "idx", slot=slot)
+    def test_a_stream_error_is_shown_as_ollama_error_not_a_connection_failure(self):
+        st, app_mod = self._app_with_mock_st()
+        slot = MagicMock()
+        answer = _BlockingAnswer(error=OllamaStreamError("model 'm' not found"))
+        with patch.object(app_mod, "stream_answer_question", return_value=answer), \
+                patch.object(app_mod, "_model_info", return_value=None):
+            rec, run = self._answer(app_mod, slot)
+        self.assertIsNone(rec)
+        self.assertEqual(run["state"], "error")
+        message = slot.error.call_args.args[0]
+        self.assertIn("model 'm' not found", message)
+        self.assertNotIn("Could not reach", message)
+        self.assertTrue(answer.closed)
+
+    def test_loader_is_sent_once_while_waiting_for_the_first_chunk(self):
+        st, app_mod = self._app_with_mock_st()
+        slot = MagicMock()
+        answer = _BlockingAnswer(text="use tar", delay=0.7, result={"mode": "base", "text": "use tar", "hits": [],
+                                                                      "weak": False, "latency_s": 0.7})
+        with patch.object(app_mod, "stream_answer_question", return_value=answer), \
+                patch.object(app_mod, "_model_info", return_value=None):
+            rec, run = self._answer(app_mod, slot)
         self.assertEqual(rec["answer"], "use tar")
-        self.assertEqual(slot.markdown.call_count, 1)
-        self.assertIn("Generating an answer…", slot.markdown.call_args.args[0])
+        self.assertEqual((run["state"], run["record"]), ("done", rec))
+        drawn = self.monitor.slot.markdown.call_args.args[0]
+        self.assertIn('<span class="mon-tag">last answer</span>', drawn)
+        # the loader is the first block's slot, which the answer's first block then takes
+        first_block = st.container.return_value.empty.return_value
+        loaders = [c.args[0] for c in first_block.markdown.call_args_list if 'class="thinking"' in c.args[0]]
+        self.assertEqual(len(loaders), 1)
+        self.assertIn("Waiting for the model…", loaders[0])
         stop_checks = [c for c in st.session_state.get.call_args_list if c.args == ("stop-gen",)]
         self.assertGreaterEqual(len(stop_checks), 2)
+        self.assertTrue(answer.closed)
+
+    def test_text_reaches_write_stream_before_the_answer_finishes(self):
+        st, app_mod = self._app_with_mock_st()
+        release = threading.Event()
+        events = __import__("queue").Queue()
+
+        def produce():
+            events.put(("text", "Use "))
+            release.wait(3)
+            events.put(("text", "`tar`."))
+            events.put(("done", None))
+
+        worker = threading.Thread(target=produce, daemon=True)
+        worker.start()
+        gen = app_mod._stream_text(events, lambda *a: None, heartbeat=lambda: None, tick=0.05, every=0.05)
+        self.assertEqual(next(gen), "Use ")
+        self.assertFalse(release.is_set())
+        self.assertTrue(worker.is_alive())
+        release.set()
+        self.assertEqual("".join(gen), "`tar`.")
+
+    def test_chunks_that_arrive_together_are_drawn_once(self):
+        st, app_mod = self._app_with_mock_st()
+        events = __import__("queue").Queue()
+        seen = []
+        for piece in ("a", "b", "c"):
+            events.put(("progress", piece))
+            events.put(("text", piece))
+        events.put(("done", None))
+        out = list(app_mod._stream_text(events, lambda kind, value: seen.append(kind), heartbeat=lambda: None, every=10))
+        self.assertEqual(out, ["abc"])
+        self.assertEqual(seen, ["progress"] * 3)
+
+
+class _BlockingAnswer:
+    """A StreamingAnswer stand-in: blocks until cancelled, raises, or yields `text` after `delay`."""
+
+    def __init__(self, text=None, delay=0.0, result=None, raise_now=False, error=None):
+        self.text, self.delay, self._result = text, delay, result
+        self.raise_now, self.error = raise_now, error
+        self.cancelled = threading.Event()
+        self.closed = False
+        self._done = threading.Event()
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        try:
+            if self.error is not None:
+                raise self.error
+            if self.raise_now:
+                raise ChatCancelled()
+            if self.text is not None:
+                time.sleep(self.delay)
+                text, self.text = self.text, None
+                return text
+            if self._result is not None:
+                raise StopIteration
+            self.cancelled.wait(5)
+            raise ChatCancelled()
+        except BaseException:
+            self._done.set()
+            raise
+
+    @property
+    def result(self):
+        if self._result is None:
+            raise RuntimeError("streaming answer has not completed")
+        return self._result
+
+    def worker_alive_after(self, seconds):
+        return not self._done.wait(seconds)
+
+    def cancel(self):
+        self.cancelled.set()
+
+    def close(self):
+        self.closed = True
+        self.cancelled.set()
 
 
 class HelperTests(unittest.TestCase):
-    def test_split_reasoning_and_code(self):
-        reason, answer = split_reasoning("Steps:\n1. x\n\nAnswer: use tar")
-        self.assertIn("Steps:", reason)
-        self.assertEqual(answer, "use tar")
-        parts = list(split_code_blocks("do this\n```bash\ntar -xzf a.tar.gz\n```\ndone"))
-        kinds = [k for k, _ in parts]
-        self.assertIn("code", kinds)
-        self.assertEqual(parts[1][1], "tar -xzf a.tar.gz")
+    def test_abstain_card_reads_the_answer_with_the_one_parser(self):
+        html = idk_card_html({"answer": ABSTAIN})
+        self.assertNotIn("I checked the excerpts", html)
+        self.assertIn("I don&#x27;t know.", html)
+
+    def test_cut_off_only_when_ollama_says_length(self):
+        self.assertIn("cut off at a length limit", cut_off_html({"done_reason": "length"}))
+        for reason in ("stop", None, ""):
+            self.assertEqual(cut_off_html({"done_reason": reason}), "")
+        self.assertIn("cut off", metrics_html({"done_reason": "length", "mode": "base"}))
+        self.assertEqual(build_run_record({"done_reason": "length", "mode": "base"})["done_reason"], "length")
+        self.assertIsNone(build_run_record({"mode": "base"})["done_reason"])
+        self.assertIn("done_reason", EXPORT_FIELDS)
 
     def test_max_dense(self):
         self.assertIsNone(max_dense([]))
@@ -1433,6 +1816,21 @@ class HelperTests(unittest.TestCase):
             (Path(td) / "chunks.jsonl").write_text('{"id":1}\n\n{"id":2}\n', encoding="utf-8")
             self.assertEqual(index_chunk_count(td), 2)
 
+    def test_every_static_url_is_served_from_the_entry_scripts_static_dir(self):
+        # Streamlit serves /app/static/ from <main script dir>/static, and the launcher runs streamlit_app.py.
+        try:
+            from streamlit.file_util import get_app_static_dir
+        except ImportError:
+            self.skipTest("streamlit not installed")
+        static = Path(get_app_static_dir(str(ROOT / "streamlit_app.py")))
+        css = style_path().read_text(encoding="utf-8") + orbit_style_path().read_text(encoding="utf-8")
+        config = (ROOT / ".streamlit" / "config.toml").read_text(encoding="utf-8")
+        names = set(re.findall(r"/app/static/([\w.-]+)", css)) | set(re.findall(r'"app/static/([\w.-]+)"', config))
+        self.assertGreaterEqual(len(names), 3)
+        for name in sorted(names):
+            self.assertTrue((static / name).is_file(), f"{name} is not served from {static}")
+            self.assertEqual(os.path.commonpath([os.path.abspath(static / name), str(static)]), str(static))
+
     def test_style_ships_offline(self):
         css = style_path().read_text(encoding="utf-8")
         self.assertIn("/app/static/UbuntuSans-Variable-Latin.woff2", css)
@@ -1441,12 +1839,13 @@ class HelperTests(unittest.TestCase):
         self.assertNotIn("Inter", css)
         self.assertNotIn("fonts.googleapis.com", css)
         self.assertNotIn("cdn", css.lower())
-        self.assertIn("--fs-body:16px", css)
+        self.assertIn("--fs-body:14.5px", css)
         self.assertIn("1px dashed var(--c-idk)", css)
         self.assertNotIn('content:"▸', css)
         self.assertNotIn("transition:all", css.replace(" ", ""))
         self.assertIn("@keyframes star-breathe", css)
         self.assertIn("@keyframes polaris-breathe", css)
+        self.assertIn("@keyframes polaris-cube", css)
         self.assertIn("prefers-reduced-motion", css)
         self.assertIn(".idk-star svg{width:18px;height:18px;fill:none;stroke:var(--c-idk);stroke-width:1.5;animation:none}", css.replace("\n", ""))
         self.assertNotIn(".waiting{border:1px dashed", css.replace(" ", ""))

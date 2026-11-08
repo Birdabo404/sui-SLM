@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.answer_format import compare_step_note, memory_text, side_label, step_note, step_query
 from app.engine import NUM_CTX
 
 ANSWER_RESERVE = 1024
@@ -28,6 +29,16 @@ class ChatContext:
     retrieval_query: str
     turns: tuple[Turn, ...]
     retrieval_turns: int = 0
+    # For a follow-up like "explain step 2": that step of the previous answer, for the app's prompt. After a
+    # compare, step_note holds both sides' step, labelled, and side_notes each column's own.
+    step_note: str = ""
+    side_notes: tuple[str, str] = ("", "")
+
+    def note_for(self, side=""):
+        """The step note for one answer: a compare side ("L" or "R") gets its own column's step when the previous
+        turn was a compare, and the shared note otherwise."""
+        own = {"L": self.side_notes[0], "R": self.side_notes[1]}.get(side, "")
+        return own or self.step_note
 
     def apply(self, messages):
         applied, _count = self.apply_with_count(messages)
@@ -253,15 +264,49 @@ class ChatStore:
 
 def build_chat_context(messages, question):
     previous = _previous_completed_question(messages)
-    query = f"{previous} {question}" if previous else question
+    answers = _previous_answers(messages) if previous else ()
+    extra = dict.fromkeys(q for _label, raw, mode in answers if raw and (q := step_query(question, raw, mode)))
+    query = " ".join(part for part in (previous, *extra, question) if part)
     turns = _completed_turns(messages)
     if not previous and not turns:
         return None
+    note, side_notes = "", ("", "")
+    if len(answers) == 1:
+        _label, raw, mode = answers[0]
+        note = step_note(question, raw, mode)
+    elif len(answers) == 2:
+        note = compare_step_note(question, answers)
+        side_notes = tuple(step_note(question, raw, mode) if raw is not None else note
+                           for _label, raw, mode in answers)
     return ChatContext(
         retrieval_query=query,
         turns=turns,
         retrieval_turns=int(bool(previous)),
+        step_note=note,
+        side_notes=side_notes,
     )
+
+
+def _previous_answers(messages):
+    """The last turn's answers as the model wrote them: ((label, raw, mode),) for a single answer, or both compare
+    sides labelled Left and Right, raw None for a side that never answered. () after an error."""
+    assistant = next((m for m in reversed(messages) if m.get("role") == "assistant"), None)
+    if assistant is None or assistant.get("error"):
+        return ()
+    record = assistant.get("record")
+    if record:
+        return (("", str(record.get("answer") or ""), str(record.get("mode") or "")),)
+    if assistant.get("compare"):
+        missing = assistant.get("compare_unanswered") or (None, None)
+        sides = []
+        for name, rec, miss in zip(("Left", "Right"), assistant["compare"], missing):
+            info = rec or miss or {}
+            label = side_label(name, str(info.get("mode") or ""), str(info.get("model") or ""))
+            sides.append((label, str(rec.get("answer") or "") if rec else None, str(info.get("mode") or "")))
+        return tuple(sides)
+    if "content" in assistant:
+        return (("", str(assistant.get("content") or ""), ""),)
+    return ()
 
 
 def _previous_completed_question(messages):
@@ -296,9 +341,10 @@ def _completed_turns(messages):
             continue
         record = message.get("record")
         if record:
-            turns.append(Turn(question=question, answer=str(record.get("answer") or "")))
+            turns.append(Turn(question=question, answer=memory_text(str(record.get("answer") or ""),
+                                                                    str(record.get("mode") or ""))))
         elif "content" in message and not message.get("error"):
-            turns.append(Turn(question=question, answer=str(message.get("content") or "")))
+            turns.append(Turn(question=question, answer=memory_text(str(message.get("content") or ""))))
         question = None
     return tuple(turns)
 
