@@ -1375,13 +1375,11 @@ REASONING_LABEL = "Writing its reasoning, under Show reasoning"
 REASONING_NOTE = "The answer shows from its Answer: line, or when the reply ends."
 
 
-def flags_html(sky, daylight=False, compare=False, generating=False):
+def flags_html(sky, daylight=False, generating=False):
     """The hidden marker the stylesheet reads through :root:has(); polaris-generating holds the ambient motion."""
     flags = ["polaris-flags", f"polaris-sky-{sky}"]
     if daylight:
         flags.append("polaris-daylight")
-    if compare:
-        flags.append("polaris-compare")
     if generating:
         flags.append("polaris-generating")
     return f'<div class="{" ".join(flags)}"></div>'

@@ -845,8 +845,8 @@ class LoaderAndNamingTests(unittest.TestCase):
         self.assertIn("polaris-generating", flags_html(1, generating=True))
         self.assertNotIn("polaris-generating", flags_html(1))
         self.assertEqual(
-            flags_html(2, daylight=True, compare=True, generating=True),
-            '<div class="polaris-flags polaris-sky-2 polaris-daylight polaris-compare polaris-generating"></div>',
+            flags_html(2, daylight=True, generating=True),
+            '<div class="polaris-flags polaris-sky-2 polaris-daylight polaris-generating"></div>',
         )
         css = style_path().read_text(encoding="utf-8")
         rules = [r for r in css.split("}") if ":root:has(.polaris-generating)" in r and "play-state" in r]
@@ -856,6 +856,16 @@ class LoaderAndNamingTests(unittest.TestCase):
         self.assertEqual(body, "animation-play-state:paused!important")
         # Only the star and the sky: the loader and the one-shot entrances must keep running.
         self.assertEqual(selector, ":root:has(.polaris-generating) :is(.band *,.sky)")
+
+    def test_compare_answers_in_the_same_chat_shell(self):
+        css = style_path().read_text(encoding="utf-8")
+        rules = [r.rsplit("{", 1) for r in css.split("}") if "{" in r]
+        widths = [body for sel, body in rules if "stMainBlockContainer" in sel and "max-width" in body]
+        self.assertEqual(widths, ["max-width:var(--main-max);padding:calc(56px + var(--s-4)) var(--s-5) 0"])
+        self.assertEqual(re.findall(r"--main-max:([^;]+);", css), ["880px"])
+        # two columns stack before either is squeezed, and a code box scrolls inside its column
+        self.assertIn('.st-key-cmp,[class*="st-key-cmp-hist"]{container-type:inline-size}', css)
+        self.assertIn("@container (max-width:620px)", css)
 
     def test_english_only_note_sits_in_the_composer(self):
         self.assertEqual(ENGLISH_NOTE, "English questions only")

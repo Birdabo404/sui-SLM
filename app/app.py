@@ -382,7 +382,6 @@ def run_polaris():
             flags_html(
                 sky_level(asked),
                 daylight=bool(st.session_state.get("daylight")),
-                compare=compare_on,
                 generating=generating,
             ),
             unsafe_allow_html=True,
