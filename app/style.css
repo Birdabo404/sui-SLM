@@ -328,10 +328,14 @@ p.stopped{margin:0;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-
 [data-testid="stCode"] pre code :is(.token.comment,.token.prolog,.token.shebang){color:var(--term-dim);font-style:italic;font-weight:400}
 :root:has(.polaris-daylight) [data-testid="stCode"] pre{border-color:transparent}
 /* Streamlit's copy button only shows on hover; keep it visible so touch screens and keyboards can find it. */
-[data-testid="stCode"] div:has(> [data-testid="stCodeCopyButton"]){opacity:1!important}
-/* it sits on the box's own ink, so a long command scrolled under it never shows through */
+/* The control's layer covers the box; its right 40px are the box's own ink, so a long command scrolled sideways
+   passes under the button instead of showing round it. A pre's end padding doesn't scroll, so the code carries the
+   same padding itself: scrolled to the end, a command's last characters clear the button. */
+[data-testid="stCode"] pre code{display:inline-block;vertical-align:top;padding-right:calc(var(--s-4) + 32px)}
+[data-testid="stCode"] div:has(> [data-testid="stCodeCopyButton"]){opacity:1!important;border-radius:var(--r-sm);
+  background:linear-gradient(var(--term-bg),var(--term-bg)) right 1px top 1px / 40px calc(100% - 2px) no-repeat}
 [data-testid="stCodeCopyButton"]{width:28px!important;height:28px!important;display:flex!important;align-items:center;justify-content:center;
-  transform:none!important;color:var(--term-dim)!important;background:var(--term-bg)!important;border-radius:var(--r-xs)}
+  transform:none!important;color:var(--term-dim)!important;background:transparent!important;border-radius:var(--r-xs)}
 [data-testid="stCodeCopyButton"]:is(:hover,:focus-visible){color:var(--term-text)!important}
 /* A command under a numbered step sits on the step's text, not under its number. */
 :is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stElementContainer"]:has(ol) ~ [data-testid="stElementContainer"]:has([data-testid="stCode"]){padding-left:1.55em}
