@@ -89,8 +89,12 @@ from app.polaris import (
     style_path,
     CUBE_COLS,
     CUBE_FRAMES,
-    CUBE_MOVES,
+    CUBE_PITCH,
+    CUBE_RAMP,
     CUBE_ROWS,
+    CUBE_SECONDS,
+    _CUBE_FIT,
+    _cube_render,
     waiting_html,
     STILL_WORKING,
     CancellableChat,
@@ -720,12 +724,13 @@ class LoaderAndNamingTests(unittest.TestCase):
         html = thinking_html("Searching the lab docs")
         self.assertIn('role="status"', html)
         self.assertIn('<span class="cube" aria-hidden="true">', html)
-        reel = html.split('<span class="cube-reel">', 1)[1].split("</span>", 1)[0]
-        lines = [re.sub(r"<[^>]+>", "", line) for line in reel.split("<br>")]
-        self.assertEqual(lines, [line for t in range(CUBE_FRAMES) for line in cube_frame(t)])
-        self.assertTrue(all(len(line) == CUBE_COLS for line in lines))
-        classes = set(re.findall(r'<i class="([^"]+)">', reel))
-        self.assertTrue(classes <= {f"{color} {face}" for color in "wyrobg" for face in "fts"}, classes)
+        reel = html.split('<span class="cube-reel">', 1)[1].split('</span></span><span class="thinking-text">', 1)[0]
+        frames = [block.split("<br>") for block in re.findall(r'<span class="cube-frame">(.*?)</span>', reel)]
+        self.assertEqual(frames, [cube_frame(t) for t in range(CUBE_FRAMES)])
+        for frame in frames:
+            self.assertEqual(len(frame), CUBE_ROWS)
+            self.assertTrue(all(len(line) == CUBE_COLS for line in frame))
+            self.assertLessEqual(set("".join(frame)), set(CUBE_RAMP + " "))
         self.assertNotIn("\n", html)
         self.assertIn("Searching the lab docs", html)
         self.assertIn(STILL_WORKING, html)
@@ -733,64 +738,54 @@ class LoaderAndNamingTests(unittest.TestCase):
         css = style_path().read_text(encoding="utf-8")
         block = css.split("/* ---------- loader", 1)[1].split("/* ---------- while an answer generates", 1)[0]
         for prop in ("width:", "height:", "top:", "left:", "margin"):
-            for frames in block.split("@keyframes")[1:]:
-                body = frames.split("}}", 1)[0]
+            for keyframes in block.split("@keyframes")[1:]:
+                body = keyframes.split("}}", 1)[0]
                 self.assertNotIn(prop, body, f"loader keyframes animate {prop}")
-        # The box is exactly six whole-pixel lines, so each steps() jump lands on the same pixel rows.
-        self.assertIn("height:66px", block)
-        self.assertIn("/11px var(--f-mono)", block)
+        # A fixed grid in any monospace font: whole-pixel lines, a width in ch, no ligatures merging runs of a glyph.
+        self.assertIn(f"width:{CUBE_COLS}ch;height:{CUBE_ROWS * 8}px", block)
+        self.assertIn("font:400 8px/8px var(--f-mono)", block)
+        self.assertIn('font-variant-ligatures:none;font-feature-settings:"liga" 0,"calt" 0', block)
+        self.assertIn(f".cube-frame{{display:block;height:{CUBE_PITCH * 8}px}}", block)
+        self.assertNotIn("\u2588", "".join(cube_frame(t)[r] for t in range(CUBE_FRAMES) for r in range(CUBE_ROWS)))
 
-    @staticmethod
-    def _cube_colors(t):
-        """Frame t as rows of sticker colours (one letter per cell, "." for none), read from the reel's markup."""
-        reel = cube_html().split('<span class="cube-reel">', 1)[1].split("</span>", 1)[0]
-        rows = reel.split("<br>")[t * CUBE_ROWS:(t + 1) * CUBE_ROWS]
-        out = []
-        for row in rows:
-            cells = ""
-            for color, run, plain in re.findall(r'<i class="(\w) \w">([^<]*)</i>|([^<]+)', row):
-                cells += color * len(run) if run else "." * len(plain)
-            out.append(cells)
-        return out
-
-    def test_cube_turns_its_top_and_right_faces_and_loops_back_to_solved(self):
-        self.assertEqual(CUBE_MOVES, ("U", "R", "U'", "R'", "R", "U", "R'", "U'"))
-        self.assertEqual(CUBE_FRAMES, 3 * len(CUBE_MOVES))
+    def test_cube_is_projected_and_spins_a_quarter_turn_per_loop(self):
         frames = [cube_frame(t) for t in range(CUBE_FRAMES)]
-        self.assertEqual(cube_frame(CUBE_FRAMES), frames[0])
-        solved = "".join(self._cube_colors(0))
-        # Solved: nine white top stickers and nine green front ones two cells wide, nine red side ones one cell wide.
-        self.assertEqual({c: solved.count(c) for c in set(solved) - {"."}}, {"w": 18, "g": 18, "r": 9})
-        for move in range(len(CUBE_MOVES)):
-            rest, mid = 3 * move, 3 * move + 2
-            self.assertEqual(frames[rest], frames[rest + 1])
-            changed = [r for r in range(CUBE_ROWS) if frames[mid][r] != frames[rest][r]]
-            self.assertTrue(changed, f"move {CUBE_MOVES[move]} has no mid-turn frame")
-            # Mid-turn, stickers squash inside their own cells: nothing is drawn where the rest frame had a space.
-            for r in changed:
-                for a, b in zip(frames[rest][r], frames[mid][r]):
-                    self.assertFalse(a == " " and b != " ", (CUBE_MOVES[move], r, frames[mid]))
-        # U: the right side's top row comes round to the front. R: the bottom's yellow climbs the front's right column.
-        after_u = self._cube_colors(3)
-        self.assertEqual(after_u[3][:8].replace(".", ""), "rrrrrr")
-        self.assertEqual(after_u[4][:8].replace(".", ""), "gggggg")
-        after_r = self._cube_colors(6)
-        self.assertEqual([row[6:8] for row in after_r[3:]], ["yy", "yy", "yy"])
-        # The mid-turn frame of U squashes only the front's top row; of R, the front's right column tilts up.
-        self.assertEqual(frames[2][3].rstrip()[:8], "█  █  █ ")
-        self.assertEqual([row[6:8] for row in frames[5][3:]], ["▀▀", "▀▀", "▀▀"])
+        # A quarter turn brings the cube onto itself: drawing one step past the last frame gives the first again.
+        self.assertEqual(_cube_render(CUBE_FRAMES, _CUBE_FIT), frames[0])
+        self.assertEqual(len({tuple(frame) for frame in frames}), CUBE_FRAMES)
+
+        def cells(frame):
+            return {(r, c): ch for r, line in enumerate(frame) for c, ch in enumerate(line) if ch != " "}
+
+        sizes = [len(cells(frame)) for frame in frames]
+        for t, frame in enumerate(frames):
+            drawn = cells(frame)
+            # Two or three faces, each its own character, and the cube fills most of the box without leaving it.
+            self.assertIn(len(set(drawn.values())), (2, 3), frame)
+            rows = {r for r, _ in drawn}
+            cols = {c for _, c in drawn}
+            self.assertGreaterEqual(max(rows) - min(rows) + 1, CUBE_ROWS - 2, frame)
+            self.assertGreaterEqual(max(cols) - min(cols) + 1, CUBE_COLS // 2, frame)
+            # Smooth: the outline barely changes from one frame to the next and the cube doesn't drift.
+            after = cells(frames[(t + 1) % CUBE_FRAMES])
+            self.assertLessEqual(len(set(drawn) ^ set(after)), len(drawn) // 8, (frame, frames[(t + 1) % CUBE_FRAMES]))
+            centre = sum(c for _, c in drawn) / len(drawn), sum(r for r, _ in drawn) / len(drawn)
+            moved = sum(c for _, c in after) / len(after), sum(r for r, _ in after) / len(after)
+            self.assertLess(abs(centre[0] - moved[0]) + abs(centre[1] - moved[1]), 1.0)
+        self.assertLess(max(sizes) - min(sizes), min(sizes) // 4)
 
     def test_cube_rests_under_reduced_motion_and_keeps_its_place_when_relabelled(self):
         css = style_path().read_text(encoding="utf-8")
-        self.assertIn(f"animation:polaris-cube 3.6s steps({CUBE_FRAMES}) infinite", css)
+        self.assertIn(f"animation:polaris-cube {CUBE_SECONDS:g}s steps({CUBE_FRAMES}) infinite", css)
         reduced = [block.split("\n}", 1)[0] for block in css.split("@media (prefers-reduced-motion:reduce){")[1:]]
         self.assertTrue(any(".cube-reel{animation:none" in block for block in reduced))
         still = cube_html(still=True)
         self.assertIn('class="cube still"', still)
         self.assertEqual(still.count("<br>"), CUBE_ROWS - 1)
+        self.assertIn("<br>".join(cube_frame(0)), still)
         self.assertNotIn("animation-delay", thinking_html("Waiting for the model"))
         later = thinking_html("Waiting for the model", elapsed=5.0)
-        self.assertIn('<span class="cube-reel" style="animation-delay:-1.40s">', later)
+        self.assertIn('<span class="cube-reel" style="animation-delay:-1.00s">', later)
         self.assertIn('class="thinking-note" style="animation-delay:10.0s"', later)
         noted = thinking_html("Writing its reasoning", elapsed=20.0, note="The answer shows from its Answer: line.")
         self.assertIn('<span class="thinking-note now">The answer shows from its Answer: line.</span>', noted)

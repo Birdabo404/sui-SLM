@@ -1245,108 +1245,167 @@ def evidence_block_html(record, collapsed=True):
     )
 
 
-# The loader: a 3x3 cube in oblique text projection (front face, the top above it, the right side beside it) turning
-# its top and right faces. Each move is two frames at rest and one mid-turn frame in which the turning row or column
-# squashes toward the way it travels, so every sticker keeps its own cells and the frame never changes size.
-CUBE_COLS, CUBE_ROWS = 12, 6
-CUBE_MOVES = ("U", "R", "U'", "R'", "R", "U", "R'", "U'")  # a commutator, then its inverse: back to solved
-CUBE_FRAMES = 3 * len(CUBE_MOVES)
-CUBE_SECONDS = 3.6
-_CUBE_FACES = {(0, 1, 0): "w", (0, -1, 0): "y", (0, 0, 1): "g", (0, 0, -1): "b", (1, 0, 0): "r", (-1, 0, 0): "o"}
-# A quarter turn of the U (top) or R (right) layer, clockwise as seen from that side, on positions and normals alike.
-_CUBE_TURNS = {"U": (1, lambda x, y, z: (-z, y, x)), "R": (0, lambda x, y, z: (x, z, -y))}
-_CUBE_GLYPHS = {"f": "██", "t": "▄▄", "s": "▌"}
-_CUBE_MID = {"U": {"f": "█ "}, "U'": {"f": " █"}, "R": {"f": "▀▀", "t": "▀▀"}, "R'": {"f": "▄▄", "t": "██"}}
+# The loader: an ASCII cube spinning on its vertical axis, seen from a little above and to the side. Each frame is
+# drawn the way terminal ASCII cubes are: rotate the corners, project them in perspective (x/z, y/z), fill every face
+# that faces the camera into a depth buffer of 4x4 samples per character cell keeping the nearest (largest 1/z), then
+# give each cell the character of the face covering most of it, picked from a brightness ramp by the face's angle to
+# a fixed light. A quarter turn brings the cube back onto itself, so the frames loop with no seam. Written from the
+# standard rotation / perspective / z-buffer technique; no third-party code.
+CUBE_COLS, CUBE_ROWS, CUBE_PITCH = 20, 12, 15  # frames sit 15 lines apart in the reel: 3 blank lines under each
+CUBE_FRAMES, CUBE_SECONDS = 24, 2.0
+CUBE_RAMP = ".:-=+*#%@"
+_CUBE_SAMPLES = 4
+_CUBE_ASPECT = 8 / 4.8  # a cell's height over its width: 8px lines, 0.6em advance at 8px
+_CUBE_DISTANCE = 5.0  # camera to cube centre, in half-edges
+_CUBE_TILT, _CUBE_ROLL = math.radians(-28), math.radians(10)
+_CUBE_LIGHT = (-0.5, 0.5, -0.7)  # towards the light: upper left, in front
+_CUBE_AMBIENT = 0.14
 
 
-def _cube_solved():
-    cube = {}
-    for normal, color in _CUBE_FACES.items():
-        axis = next(i for i, n in enumerate(normal) if n)
-        for a in (-1, 0, 1):
-            for b in (-1, 0, 1):
-                pos = [a, b]
-                pos.insert(axis, normal[axis])
-                cube[tuple(pos), normal] = color
-    return cube
+def _rot_x(a):
+    c, s = math.cos(a), math.sin(a)
+    return ((1, 0, 0), (0, c, -s), (0, s, c))
 
 
-def _cube_turn(cube, move):
-    axis, quarter = _CUBE_TURNS[move[0]]
-    turns = 3 if move.endswith("'") else 1
-    out = {}
-    for (pos, normal), color in cube.items():
-        if pos[axis] == 1:
-            for _ in range(turns):
-                pos, normal = quarter(*pos), quarter(*normal)
-        out[pos, normal] = color
-    return out
+def _rot_y(a):
+    c, s = math.cos(a), math.sin(a)
+    return ((c, 0, s), (0, 1, 0), (-s, 0, c))
 
 
-def _cube_cells(cube, move=None):
-    """Rows of (glyph, classes) cells: front stickers two columns wide, the top's rows stepping one column right per
-    row of depth, the right side one column wide stepping up."""
-    grid = [[(" ", "")] * CUBE_COLS for _ in range(CUBE_ROWS)]
-    for ((x, y, z), normal), color in cube.items():
-        depth = 1 - z
-        if normal == (0, 0, 1):
-            row, col, face = 4 - y, 3 * x + 3, "f"
-        elif normal == (0, 1, 0):
-            row, col, face = 2 - depth, 3 * x + 4 + depth, "t"
-        elif normal == (1, 0, 0):
-            row, col, face = 4 - y - depth, 9 + depth, "s"
-        else:
-            continue
-        glyphs = _CUBE_GLYPHS[face]
-        if move and (x, y, z)[_CUBE_TURNS[move[0]][0]] == 1:
-            glyphs = _CUBE_MID[move].get(face, glyphs)
-        for i, glyph in enumerate(glyphs):
-            if glyph != " ":
-                grid[row][col + i] = (glyph, f"{color} {face}")
-    return grid
+def _rot_z(a):
+    c, s = math.cos(a), math.sin(a)
+    return ((c, -s, 0), (s, c, 0), (0, 0, 1))
 
 
-def _cube_frames():
-    frames, cube = [], _cube_solved()
-    for move in CUBE_MOVES:
-        rest = _cube_cells(cube)
-        frames += [rest, rest, _cube_cells(cube, move)]
-        cube = _cube_turn(cube, move)
-    return frames
+def _mat_mul(a, b):
+    return tuple(tuple(sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)) for i in range(3))
 
 
-_CUBE_CELLS = _cube_frames()
+def _mat_apply(m, v):
+    return tuple(sum(m[i][k] * v[k] for k in range(3)) for i in range(3))
+
+
+def _cube_faces():
+    """The six faces as (outward normal, four corners in order round the face), edges two half-units long."""
+    faces = []
+    for axis in range(3):
+        u, w = (axis + 1) % 3, (axis + 2) % 3
+        for sign in (1, -1):
+            normal = tuple(sign if i == axis else 0 for i in range(3))
+            corners = []
+            for a, b in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+                corner = list(normal)
+                corner[u], corner[w] = a, b
+                corners.append(tuple(corner))
+            faces.append((normal, corners))
+    return faces
+
+
+_CUBE_FACE_LIST = _cube_faces()
+
+
+def _cube_orientation(t):
+    return _mat_mul(_mat_mul(_rot_x(_CUBE_TILT), _rot_z(_CUBE_ROLL)), _rot_y(math.pi / 2 * t / CUBE_FRAMES))
+
+
+def _cube_project(m, point):
+    """Camera space (camera at the origin looking down +z) to (column units, row units, 1/z), before scaling."""
+    x, y, z = _mat_apply(m, point)
+    z += _CUBE_DISTANCE
+    return x / z * _CUBE_ASPECT, y / z, 1 / z
+
+
+def _cube_fit():
+    """One scale and centre for every frame, so the spinning cube fills the box and never leaves it."""
+    points = [_cube_project(_cube_orientation(t), corner)
+              for t in range(CUBE_FRAMES) for _, corners in _CUBE_FACE_LIST for corner in corners]
+    us, vs = [p[0] for p in points], [p[1] for p in points]
+    scale = min((CUBE_COLS - 1) / (max(us) - min(us)), (CUBE_ROWS - 0.5) / (max(vs) - min(vs)))
+    return scale, (max(us) + min(us)) / 2, (max(vs) + min(vs)) / 2
+
+
+def _cube_render(t, fit):
+    scale, mid_u, mid_v = fit
+    n = _CUBE_SAMPLES
+    width, height = CUBE_COLS * n, CUBE_ROWS * n
+    depth = [[0.0] * width for _ in range(height)]
+    owner = [[-1] * width for _ in range(height)]
+    m = _cube_orientation(t)
+    norm = math.sqrt(sum(c * c for c in _CUBE_LIGHT))
+    light = tuple(c / norm for c in _CUBE_LIGHT)
+    levels, visible = {}, []
+    for face, (normal, corners) in enumerate(_CUBE_FACE_LIST):
+        turned = _mat_apply(m, normal)
+        levels[face] = _CUBE_AMBIENT + (1 - _CUBE_AMBIENT) * max(0.0, sum(a * b for a, b in zip(turned, light)))
+        first = _mat_apply(m, corners[0])
+        if sum(a * b for a, b in zip(turned, (first[0], first[1], first[2] + _CUBE_DISTANCE))) < 0:
+            visible.append(face)  # faces the camera
+    # Brightest first; a face that would share the next brighter face's character steps one down the ramp, so two
+    # faces never merge into one patch and the order of brightness is kept.
+    glyphs, above = {}, len(CUBE_RAMP)
+    for face in sorted(visible, key=lambda f: -levels[f]):
+        above = max(0, min(above - 1, int(levels[face] * len(CUBE_RAMP))))
+        glyphs[face] = CUBE_RAMP[above]
+    for face in visible:
+        corners = _CUBE_FACE_LIST[face][1]
+        pts = []
+        for corner in corners:
+            u, v, w = _cube_project(m, corner)
+            pts.append(((CUBE_COLS / 2 + (u - mid_u) * scale) * n, (CUBE_ROWS / 2 - (v - mid_v) * scale) * n, w))
+        # 1/z is linear across a flat face on screen: solve its plane from three corners.
+        (x0, y0, w0), (x1, y1, w1), (x2, y2, w2) = pts[:3]
+        det = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0)
+        if abs(det) < 1e-9:
+            continue  # edge-on
+        dw_dx = ((w1 - w0) * (y2 - y0) - (w2 - w0) * (y1 - y0)) / det
+        dw_dy = ((x1 - x0) * (w2 - w0) - (x2 - x0) * (w1 - w0)) / det
+        winding = 1 if det > 0 else -1
+        edges = [(pts[k][0], pts[k][1], pts[(k + 1) % 4][0], pts[(k + 1) % 4][1]) for k in range(4)]
+        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+        for py in range(max(0, int(min(ys))), min(height, int(max(ys)) + 1)):
+            cy = py + 0.5
+            for px in range(max(0, int(min(xs))), min(width, int(max(xs)) + 1)):
+                cx = px + 0.5
+                if all(winding * ((bx - ax) * (cy - ay) - (by - ay) * (cx - ax)) >= 0 for ax, ay, bx, by in edges):
+                    w = w0 + dw_dx * (cx - x0) + dw_dy * (cy - y0)
+                    if w > depth[py][px]:
+                        depth[py][px], owner[py][px] = w, face
+    rows = []
+    for r in range(CUBE_ROWS):
+        line = ""
+        for c in range(CUBE_COLS):
+            counts = {}
+            for py in range(r * n, r * n + n):
+                for px in range(c * n, c * n + n):
+                    if owner[py][px] >= 0:
+                        counts[owner[py][px]] = counts.get(owner[py][px], 0) + 1
+            covered = sum(counts.values())
+            line += glyphs[max(counts, key=counts.get)] if covered * 2 >= n * n else " "
+        rows.append(line)
+    return rows
+
+
+_CUBE_FIT = _cube_fit()
+_CUBE_TEXT = [_cube_render(t, _CUBE_FIT) for t in range(CUBE_FRAMES)]
 
 
 def cube_frame(t):
-    """Frame t of the loop as plain rows of text."""
-    return ["".join(glyph for glyph, _ in row) for row in _CUBE_CELLS[t % CUBE_FRAMES]]
+    """Frame t of the loop as rows of text."""
+    return _CUBE_TEXT[t % CUBE_FRAMES]
 
 
-def _cube_lines(frame):
-    lines = []
-    for row in frame:
-        line, i = "", 0
-        while i < len(row):
-            classes = row[i][1]
-            j = i
-            while j < len(row) and row[j][1] == classes:
-                j += 1
-            run = "".join(g for g, _ in row[i:j])
-            line += f'<i class="{classes}">{run}</i>' if classes else run
-            i = j
-        lines.append(line)
-    return lines
+def _cube_frame_html(t):
+    return '<span class="cube-frame">' + "<br>".join(cube_frame(t)) + "</span>"
 
 
-# One line of HTML, every frame stacked in a reel that one CSS steps() animation slides through.
-_CUBE_REEL = "<br>".join(line for frame in _CUBE_CELLS for line in _cube_lines(frame))
-_CUBE_REST = "<br>".join(_cube_lines(_CUBE_CELLS[0]))
+# One line of HTML: every frame in its own fixed-height block, stacked in a reel that one CSS steps() animation slides.
+_CUBE_REEL = "".join(_cube_frame_html(t) for t in range(CUBE_FRAMES))
+_CUBE_REST = _cube_frame_html(0)
 
 
 def cube_html(still=False, elapsed=0.0):
-    """The turning cube, or its first (solved) frame when still. `elapsed` seconds into the loop: a loader drawn again
-    with a new label picks the turn up where the last one was rather than at its first frame."""
+    """The spinning cube, or its first frame when still. `elapsed` seconds into the loop: a loader drawn again with a
+    new label picks the spin up where the last one was rather than at its first frame."""
     if still:
         return f'<span class="cube still" aria-hidden="true"><span class="cube-reel">{_CUBE_REST}</span></span>'
     delay = f' style="animation-delay:-{elapsed % CUBE_SECONDS:.2f}s"' if elapsed else ""
