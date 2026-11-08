@@ -551,8 +551,10 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(-
 [data-testid="stSidebar"] .side-note .ok{color:var(--c-data)}
 [data-testid="stSidebar"] .side-note code{font-size:11.5px;overflow-wrap:anywhere}
 
-/* the wordmark rides up into the sidebar's header row, beside the collapse control; the art sits under it */
+/* the wordmark rides up into the sidebar's header row, beside the collapse control; the art sits under it.
+   Streamlit shows that control only on hover and the wordmark's row covers it, so it stays shown and on top. */
 .st-key-side-top{margin-top:-62px;gap:0}
+[data-testid="stSidebarCollapseButton"]{display:inline!important;position:relative;z-index:1}
 .side-logo{display:flex;align-items:center;height:44px;padding-left:2px}
 .side-logo .band{min-height:44px}
 .side-logo .mark{padding:0;transform:scale(1.3);transform-origin:left center}
