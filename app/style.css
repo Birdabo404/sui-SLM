@@ -469,7 +469,7 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 
 /* ---------- compare: two peer panels on the surface ----------
  * The two columns share the shell; under 620px of it (a narrow window, or the rail open on a small laptop) they
- * stack, so neither side's readouts are squeezed. A size container holds no fixed-position children here. */
+ * stack, so neither side's readouts are squeezed. A size container would trap a fixed-position child; these hold none. */
 .st-key-cmp,[class*="st-key-cmp-hist"]{container-type:inline-size}
 @container (max-width:620px){
   .st-key-cmp [data-testid="stColumn"],[class*="st-key-cmp-hist"] [data-testid="stColumn"]{min-width:100%}

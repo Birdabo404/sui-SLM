@@ -10,6 +10,7 @@ import threading
 import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from itertools import pairwise
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -522,7 +523,7 @@ class PolarisRunLoopTests(unittest.TestCase):
         _NdjsonOllama.pause = pause
         self.addCleanup(setattr, _NdjsonOllama, "pause", 0.0)
         bounds = (0, *cuts, len(text))
-        return _ndjson([text[a:b] for a, b in zip(bounds, bounds[1:])])
+        return _ndjson([text[a:b] for a, b in pairwise(bounds)])
 
     def test_the_cube_stays_through_the_reasoning_and_goes_when_the_answer_starts(self):
         deltas = self._record_deltas()

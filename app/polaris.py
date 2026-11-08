@@ -1328,7 +1328,7 @@ def _cube_lines(frame):
     for row in frame:
         line, i = "", 0
         while i < len(row):
-            glyph, classes = row[i]
+            classes = row[i][1]
             j = i
             while j < len(row) and row[j][1] == classes:
                 j += 1
