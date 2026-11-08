@@ -502,10 +502,10 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 .cmp-top .card-head .model{max-width:none}
 
 /* ---------- loader: an ASCII cube spinning until the answer's first text ----------
- * The frames are text drawn in Python (app/polaris.py), each in a 120px block stacked in one reel; one steps()
- * keyframe slides the reel a block at a time, 24 frames in 2 s, on its own layer. A block is a whole number of device
- * pixels at 80, 90, 110, 120, 125, 150 and 175% as well as 100%, so every frame lands on the same pixels, and the blank 24px
- * under each frame's 12 lines keeps its neighbour out of view if one isn't. ASCII only, ligatures off, a fixed line
+ * The frames are text drawn in Python (app/polaris.py), each in a 120px block, stacked in one reel that a single
+ * steps() keyframe slides a block at a time: 24 frames in 2 s, on its own layer. 120px is a whole number of device
+ * pixels at 80, 90, 100, 110, 120, 125, 150 and 175%, so every frame lands on the same pixels; the blank 24px under
+ * each frame's 12 lines keeps the next one out of view at other scales. ASCII only, ligatures off, a fixed line
  * height and a width in ch: any monospace font draws the same 20 by 12 grid in a box that never changes size. */
 .thinking{display:flex;align-items:center;gap:var(--s-3);min-height:40px;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-text-2)}
 .cube{flex:none;display:block;width:20ch;height:96px;overflow:hidden;contain:strict;white-space:pre;
