@@ -56,6 +56,8 @@ from app.polaris import (
     MONITOR_SWITCH,
     RAM_TITLE,
     RATE_NOTE,
+    REASONING_LABEL,
+    REASONING_NOTE,
     SCORES_NOTE,
     RateTrace,
     avg_latency,
@@ -101,7 +103,6 @@ from app.polaris import (
     sky_level,
     sidebar_kv_html,
     loose_commands_html,
-    reasoning_first_html,
     source_line_html,
     stopped_html,
     thinking_html,
@@ -1076,7 +1077,7 @@ def _answer_record(
     try:
         with slot.container(key=f"live-{key}"):
             view = _AnswerView(mode, tag)
-        view.status.markdown(thinking_html(live_phase_label(mode)), unsafe_allow_html=True)
+        view.loading(live_phase_label(mode))
         weak = False
 
         def on_event(kind, value):
@@ -1086,28 +1087,19 @@ def _answer_record(
                 weak = value.weak
                 if weak:
                     # No generation: the abstain card is drawn when the turn finishes, so the cube stops here.
-                    view.status.empty()
+                    view.stop_loading()
                 else:
-                    view.status.markdown(thinking_html(live_phase_label(mode, retrieved=True)),
-                                         unsafe_allow_html=True)
+                    view.loading(live_phase_label(mode, retrieved=True))
                 return
             monitor.progress(run, value)
 
         worker.start()
-        text, status = "", "loader"
+        text = ""
         for piece in _stream_text(events, on_event):
             if weak:
                 continue
             text += piece
-            parsed = parse_answer(text, mode, n_hits=len(run.get("hits") or ()), streaming=True)
-            view.show(parsed)
-            now = "reasoning" if parsed.reasoning_open else None
-            if now != status:
-                status = now
-                if now:
-                    view.status.markdown(reasoning_first_html(), unsafe_allow_html=True)
-                else:
-                    view.status.empty()
+            view.show(parse_answer(text, mode, n_hits=len(run.get("hits") or ()), streaming=True))
         result = answer.result
         done = True
     except ChatCancelled:
@@ -1329,7 +1321,10 @@ class _AnswerView:
     Streamlit keeps the children of a container that is sent again, so redrawing a whole container per chunk
     leaves rows of an earlier, longer draft under the new text until the run ends. Here every block has its own
     slot, rewritten only when its content changes, and slots the answer no longer needs are emptied. A replay
-    builds the same slots and draws the finished answer once, so streamed, finished and replayed cards match."""
+    builds the same slots and draws the finished answer once, so streamed, finished and replayed cards match.
+
+    The loader stays through the search, the wait and any reasoning, and goes when the first answer block is drawn
+    (or the turn ends). A new label keeps the cube's place in its turn."""
 
     def __init__(self, mode, model=""):
         self.mode = mode
@@ -1339,12 +1334,33 @@ class _AnswerView:
         self._reasoning_shown = None
         self._blocks = st.container()
         self._slots, self._shown = [], []
-        self.status = st.empty()
+        self._status = st.empty()
+        self._loading = None
+        self._loading_since = None
         self._foot = st.container()
 
+    def loading(self, label, note=None):
+        if self._loading == (label, note):
+            return
+        now = time.monotonic()
+        self._loading_since = self._loading_since or now
+        self._loading = (label, note)
+        self._status.markdown(thinking_html(label, elapsed=now - self._loading_since, note=note),
+                              unsafe_allow_html=True)
+
+    def stop_loading(self):
+        if self._loading is not None:
+            self._status.empty()
+            self._loading = None
+
     def show(self, parsed):
+        parts = _answer_parts(parsed)
         self._show_reasoning(parsed.reasoning)
-        self._show_parts(_answer_parts(parsed))
+        if parts:
+            self.stop_loading()
+        elif parsed.reasoning_open and self._loading is not None:
+            self.loading(REASONING_LABEL, REASONING_NOTE)
+        self._show_parts(parts)
 
     def _show_reasoning(self, text):
         if not text:
@@ -1377,13 +1393,13 @@ class _AnswerView:
         mode = self.mode
         hits = record.get("hits") or []
         abstained = bool(record.get("abstained"))
-        self.status.empty()
         if abstained:
             self._show_reasoning("")
             self._show_parts([("html", idk_card_html(record))])
         else:
             parsed = parse_answer(record.get("answer") or "", mode, n_hits=len(hits))
             self.show(parsed)
+        self.stop_loading()
         with self._foot:
             if not abstained:
                 st.markdown(source_line_html(parsed, mode, hits), unsafe_allow_html=True)

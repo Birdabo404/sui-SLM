@@ -488,23 +488,35 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(-
 .cmp-top .card-head .sub{display:none}
 .cmp-top .card-head .model{max-width:none}
 
-/* ---------- loader: an ASCII cube turning until the first text ----------
- * Every frame is in one reel of text; a single steps() keyframe slides the reel one frame (8 lines) at a time,
- * 12 frames per quarter turn at 10 fps. It is a transform on one small layer, gone once the first text lands. */
+/* ---------- loader: an ASCII Rubik's cube turning its faces until the answer's first text ----------
+ * Every frame is in one reel of text; a single steps() keyframe slides the reel one frame (6 lines) at a time,
+ * 24 frames in 3.6 s. The line height is a whole pixel, so every step lands on the same pixel rows and the box
+ * (12ch by 6 lines, 48 x 66 px) never changes size. It is a transform on one small layer, gone once the answer starts. */
 .thinking{display:flex;align-items:center;gap:var(--s-3);min-height:40px;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-text-2)}
-.cube{--cube-lh:7px;flex:none;display:block;height:calc(var(--cube-lh) * 8 - 1px);overflow:hidden;contain:strict;width:calc(16 * 0.6 * 8.5px)}
-.cube-reel{display:block;white-space:pre;font:400 8.5px/var(--cube-lh) var(--f-mono);letter-spacing:0;color:var(--c-text-2);
-  animation:polaris-cube 1.2s steps(12) infinite;will-change:transform}
+.cube{--cube-w:oklch(0.9 0.01 250);--cube-y:oklch(0.86 0.12 92);--cube-r:oklch(0.68 0.15 28);--cube-o:oklch(0.77 0.13 58);
+  --cube-b:oklch(0.7 0.1 240);--cube-g:oklch(0.78 0.12 152);
+  flex:none;display:block;width:12ch;height:66px;overflow:hidden;contain:strict;letter-spacing:0;
+  /* 20/3 px puts the 0.6em advance on exactly 4 px, so a sticker's two blocks meet without a seam */
+  font:400 calc(20px / 3)/11px var(--f-mono)}
+:root:has(.polaris-daylight) .cube{--cube-w:oklch(0.84 0.008 264);--cube-y:oklch(0.8 0.13 88);--cube-r:oklch(0.6 0.16 28);
+  --cube-o:oklch(0.7 0.14 55);--cube-b:oklch(0.56 0.12 245);--cube-g:oklch(0.64 0.13 152)}
+.cube-reel{display:block;white-space:pre;animation:polaris-cube 3.6s steps(24) infinite;will-change:transform}
 @keyframes polaris-cube{to{transform:translateY(-100%)}}
-.cube.still .cube-reel{animation:none;will-change:auto;color:var(--c-text-3)}
+.cube i{font-style:normal}
+.cube .w{color:var(--cube-w)}.cube .y{color:var(--cube-y)}.cube .r{color:var(--cube-r)}
+.cube .o{color:var(--cube-o)}.cube .b{color:var(--cube-b)}.cube .g{color:var(--cube-g)}
+/* faces lit from above: top full, front a step down, the right side in shade */
+.cube .f{opacity:.88}.cube .s{opacity:.6}
+.cube.still{opacity:.55}
+.cube.still .cube-reel{animation:none;will-change:auto}
 .thinking-text{display:flex;flex-direction:column;gap:2px;min-width:0}
 /* one plain label for what is running; the cube is the only thing that moves */
 .thinking-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--c-text)}
 .thinking-note{font-size:var(--fs-cap);color:var(--c-text-3);opacity:0;animation:polaris-fade-in .4s var(--ease-out) 15s forwards}
+.thinking-note.now{opacity:1;animation:none}
 @keyframes polaris-fade-in{to{opacity:1}}
 .queued-label{color:var(--c-text-3)}
 .thinking.queued{color:var(--c-text-3)}
-:is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stMarkdownContainer"] p.reasoning-first{margin:0;font:400 var(--fs-cap)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
 @media (prefers-reduced-motion:reduce){
   [data-testid="stMarkdownContainer"] .sky{animation:none;transition-duration:.15s}
   .q,.thinking,p.stopped,.cmp-compact,.card,.st-key-composer-dock,.st-key-stop-gen{animation:polaris-fade-in .15s linear both!important}

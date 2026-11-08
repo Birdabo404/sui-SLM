@@ -1245,79 +1245,134 @@ def evidence_block_html(record, collapsed=True):
     )
 
 
-CUBE_COLS, CUBE_ROWS, CUBE_FRAMES = 16, 8, 12
-_CUBE_RAMP = ".-~=+*#%@"
-_CUBE_TILT = math.radians(-28)
-_CUBE_LIGHT = (-0.5, 0.75, -0.45)
+# The loader: a 3x3 cube in oblique text projection (front face, the top above it, the right side beside it) turning
+# its top and right faces. Each move is two frames at rest and one mid-turn frame in which the turning row or column
+# squashes toward the way it travels, so every sticker keeps its own cells and the frame never changes size.
+CUBE_COLS, CUBE_ROWS = 12, 6
+CUBE_MOVES = ("U", "R", "U'", "R'", "R", "U", "R'", "U'")  # a commutator, then its inverse: back to solved
+CUBE_FRAMES = 3 * len(CUBE_MOVES)
+CUBE_SECONDS = 3.6
+_CUBE_FACES = {(0, 1, 0): "w", (0, -1, 0): "y", (0, 0, 1): "g", (0, 0, -1): "b", (1, 0, 0): "r", (-1, 0, 0): "o"}
+# A quarter turn of the U (top) or R (right) layer, clockwise as seen from that side, on positions and normals alike.
+_CUBE_TURNS = {"U": (1, lambda x, y, z: (-z, y, x)), "R": (0, lambda x, y, z: (x, z, -y))}
+_CUBE_GLYPHS = {"f": "██", "t": "▄▄", "s": "▌"}
+_CUBE_MID = {"U": {"f": "█ "}, "U'": {"f": " █"}, "R": {"f": "▀▀", "t": "▀▀"}, "R'": {"f": "▄▄", "t": "██"}}
 
 
-def _cube_turn(p, a):
-    x, y, z = p
-    x, z = x * math.cos(a) - z * math.sin(a), x * math.sin(a) + z * math.cos(a)
-    return x, y * math.cos(_CUBE_TILT) - z * math.sin(_CUBE_TILT), y * math.sin(_CUBE_TILT) + z * math.cos(_CUBE_TILT)
+def _cube_solved():
+    cube = {}
+    for normal, color in _CUBE_FACES.items():
+        axis = next(i for i, n in enumerate(normal) if n)
+        for a in (-1, 0, 1):
+            for b in (-1, 0, 1):
+                pos = [a, b]
+                pos.insert(axis, normal[axis])
+                cube[tuple(pos), normal] = color
+    return cube
 
 
-def cube_frame(t, cols=CUBE_COLS, rows=CUBE_ROWS, frames=CUBE_FRAMES):
-    """Frame t of a lit cube turning about its vertical axis, as rows of text: each cell takes the shade of the
-    visible face whose sample lands nearest its centre, shaded by how squarely that face meets the light. A
-    convex cube's front faces never overlap, so no depth test is needed, and a quarter turn brings the cube back
-    onto itself, so `frames` frames over 90 degrees loop without a seam."""
-    a = math.radians(20) + t * (math.pi / 2) / frames
-    norm = math.sqrt(sum(c * c for c in _CUBE_LIGHT))
-    light = [c / norm for c in _CUBE_LIGHT]
-    nearest = [[math.inf] * cols for _ in range(rows)]
-    grid = [[" "] * cols for _ in range(rows)]
-    for axis in range(3):
-        u, v = (k for k in range(3) if k != axis)
-        for sign in (-1, 1):
-            normal = _cube_turn(tuple(sign if k == axis else 0 for k in range(3)), a)
-            if normal[2] >= 0:
-                continue
-            lum = max(0.0, sum(n * l for n, l in zip(normal, light)))
-            glyph = _CUBE_RAMP[min(len(_CUBE_RAMP) - 1, int(lum * len(_CUBE_RAMP)))]
-            for i in range(40):
-                for j in range(40):
-                    p = [0.0, 0.0, 0.0]
-                    p[axis], p[u], p[v] = sign, (i + 0.5) / 20 - 1, (j + 0.5) / 20 - 1
-                    x, y, _ = _cube_turn(p, a)
-                    cx = (cols - 1) / 2 + x * cols * 0.27
-                    cy = (rows - 1) / 2 - y * rows * 0.28
-                    col, row = round(cx), round(cy)
-                    gap = round((cx - col) ** 2 + (cy - row) ** 2, 9)
-                    if 0 <= col < cols and 0 <= row < rows and gap < nearest[row][col]:
-                        nearest[row][col] = gap
-                        grid[row][col] = glyph
-    return ["".join(row) for row in grid]
+def _cube_turn(cube, move):
+    axis, quarter = _CUBE_TURNS[move[0]]
+    turns = 3 if move.endswith("'") else 1
+    out = {}
+    for (pos, normal), color in cube.items():
+        if pos[axis] == 1:
+            for _ in range(turns):
+                pos, normal = quarter(*pos), quarter(*normal)
+        out[pos, normal] = color
+    return out
+
+
+def _cube_cells(cube, move=None):
+    """Rows of (glyph, classes) cells: front stickers two columns wide, the top's rows stepping one column right per
+    row of depth, the right side one column wide stepping up."""
+    grid = [[(" ", "")] * CUBE_COLS for _ in range(CUBE_ROWS)]
+    for ((x, y, z), normal), color in cube.items():
+        depth = 1 - z
+        if normal == (0, 0, 1):
+            row, col, face = 4 - y, 3 * x + 3, "f"
+        elif normal == (0, 1, 0):
+            row, col, face = 2 - depth, 3 * x + 4 + depth, "t"
+        elif normal == (1, 0, 0):
+            row, col, face = 4 - y - depth, 9 + depth, "s"
+        else:
+            continue
+        glyphs = _CUBE_GLYPHS[face]
+        if move and (x, y, z)[_CUBE_TURNS[move[0]][0]] == 1:
+            glyphs = _CUBE_MID[move].get(face, glyphs)
+        for i, glyph in enumerate(glyphs):
+            if glyph != " ":
+                grid[row][col + i] = (glyph, f"{color} {face}")
+    return grid
+
+
+def _cube_frames():
+    frames, cube = [], _cube_solved()
+    for move in CUBE_MOVES:
+        rest = _cube_cells(cube)
+        frames += [rest, rest, _cube_cells(cube, move)]
+        cube = _cube_turn(cube, move)
+    return frames
+
+
+_CUBE_CELLS = _cube_frames()
+
+
+def cube_frame(t):
+    """Frame t of the loop as plain rows of text."""
+    return ["".join(glyph for glyph, _ in row) for row in _CUBE_CELLS[t % CUBE_FRAMES]]
+
+
+def _cube_lines(frame):
+    lines = []
+    for row in frame:
+        line, i = "", 0
+        while i < len(row):
+            glyph, classes = row[i]
+            j = i
+            while j < len(row) and row[j][1] == classes:
+                j += 1
+            run = "".join(g for g, _ in row[i:j])
+            line += f'<i class="{classes}">{run}</i>' if classes else run
+            i = j
+        lines.append(line)
+    return lines
 
 
 # One line of HTML, every frame stacked in a reel that one CSS steps() animation slides through.
-_CUBE_REEL = "<br>".join(line for t in range(CUBE_FRAMES) for line in cube_frame(t))
+_CUBE_REEL = "<br>".join(line for frame in _CUBE_CELLS for line in _cube_lines(frame))
+_CUBE_REST = "<br>".join(_cube_lines(_CUBE_CELLS[0]))
 
 
-def cube_html(still=False):
-    klass = "cube still" if still else "cube"
-    return f'<span class="{klass}" aria-hidden="true"><span class="cube-reel">{_CUBE_REEL}</span></span>'
+def cube_html(still=False, elapsed=0.0):
+    """The turning cube, or its first (solved) frame when still. `elapsed` seconds into the loop: a loader drawn again
+    with a new label picks the turn up where the last one was rather than at its first frame."""
+    if still:
+        return f'<span class="cube still" aria-hidden="true"><span class="cube-reel">{_CUBE_REST}</span></span>'
+    delay = f' style="animation-delay:-{elapsed % CUBE_SECONDS:.2f}s"' if elapsed else ""
+    return f'<span class="cube" aria-hidden="true"><span class="cube-reel"{delay}>{_CUBE_REEL}</span></span>'
 
 
-def thinking_html(label, still=STILL_WORKING):
-    """Loader for the wait before an answer's first text: a turning ASCII cube beside one plain label. Sent once;
-    the cube is a CSS animation, so it keeps turning while the script waits, and goes when the first text lands."""
+def thinking_html(label, elapsed=0.0, note=None):
+    """The loader: the turning cube beside one plain label for what runs. Without a note, STILL_WORKING fades in once
+    the wait passes 15 s; a note given is shown at once."""
+    if note is None:
+        wait = f' style="animation-delay:{max(0.0, 15 - elapsed):.1f}s"' if elapsed else ""
+        note_html = f'<span class="thinking-note"{wait}>{escape(STILL_WORKING)}</span>'
+    else:
+        note_html = f'<span class="thinking-note now">{escape(note)}</span>'
     return (
         '<div class="thinking" role="status">'
-        + cube_html()
+        + cube_html(elapsed=elapsed)
         + '<span class="thinking-text">'
         f'<span class="thinking-label">{escape(label)}…</span>'
-        f'<span class="thinking-note">{escape(still)}</span>'
-        "</span></div>"
+        + note_html
+        + "</span></div>"
     )
 
 
-REASONING_FIRST = "Writing its reasoning first, under Show reasoning. The answer starts after its Answer: line."
-
-
-def reasoning_first_html():
-    """Under +CoT and +RAG+CoT, between the first text and the answer: nothing moves, the text is real and shown."""
-    return f'<p class="reasoning-first" role="status">{escape(REASONING_FIRST)}</p>'
+REASONING_LABEL = "Writing its reasoning, under Show reasoning"
+REASONING_NOTE = "The answer shows from its Answer: line, or when the reply ends."
 
 
 def flags_html(sky, daylight=False, compare=False, generating=False):

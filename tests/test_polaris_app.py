@@ -7,6 +7,7 @@ import sqlite3
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -31,6 +32,7 @@ REAL_STREAM = streaming.stream_answer_question
 try:
     import streamlit
     from streamlit.logger import set_log_level
+    from streamlit.runtime.forward_msg_queue import ForwardMsgQueue
     from streamlit.runtime.scriptrunner_utils.exceptions import StopException
     from streamlit.testing.v1 import AppTest
 except ImportError:
@@ -93,10 +95,11 @@ def _ndjson(pieces, done_reason="stop"):
 
 
 class _NdjsonOllama(BaseHTTPRequestHandler):
-    """/api/chat streaming `events`: by default two text deltas and Ollama's terminal record."""
+    """/api/chat streaming `events`: by default two text deltas and Ollama's terminal record, `pause` seconds apart."""
 
     bodies = []
     events = _ndjson(["Use ", "`tar -xzf`."])
+    pause = 0.0
 
     def do_POST(self):
         size = int(self.headers.get("Content-Length") or 0)
@@ -105,6 +108,7 @@ class _NdjsonOllama(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/x-ndjson")
         self.end_headers()
         for event in type(self).events:
+            time.sleep(type(self).pause)
             self.wfile.write(json.dumps(event).encode("utf-8") + b"\n")
             self.wfile.flush()
 
@@ -467,14 +471,117 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertEqual(self.store.load_chat(self._chat_id()).messages[1]["record"]["done_reason"], "stop")
         self.assertNotIn("cut off", self._html())
 
+    def _record_deltas(self):
+        """Every element the runs send from here on, in order, as (delta path, element type, text)."""
+        seen = []
+
+        def hook(msg):
+            if msg.WhichOneof("type") == "delta" and msg.delta.WhichOneof("type") == "new_element":
+                element = msg.delta.new_element
+                kind = element.WhichOneof("type")
+                text = element.markdown.body if kind == "markdown" else element.code.code_text if kind == "code" else ""
+                seen.append((tuple(msg.metadata.delta_path), kind, text))
+
+        ForwardMsgQueue.on_before_enqueue_msg(hook)
+        self.addCleanup(ForwardMsgQueue.on_before_enqueue_msg, None)
+        return seen
+
+    @staticmethod
+    def _loader_lifecycles(deltas):
+        """Per answer card, in send order: its loader going on (with its label) and off, and its reasoning and answer
+        blocks being drawn, with repeats folded. An answer view's children are the head (0), reasoning (1), blocks
+        (2), loader (3) and footer (4)."""
+        cards = sorted({path[:-1] for path, kind, text in deltas
+                        if kind == "markdown" and text.startswith('<div class="card-head">')})
+        lifecycles = []
+        for card in cards:
+            n = len(card)
+            events, labels = [], []
+            for path, kind, text in deltas:
+                if path[:n] != card or len(path) == n:
+                    continue
+                child = path[n]
+                if child == 3 and kind == "markdown" and 'class="thinking" role="status"' in text:
+                    event = "loader"
+                    labels.append(text.split('class="thinking-label">', 1)[1].split("…<", 1)[0])
+                elif child == 3 and kind == "empty" and labels:
+                    event = "off"
+                elif child == 1 and kind == "markdown":
+                    event = "reasoning"
+                elif child == 2 and kind in ("markdown", "code") and text.strip():
+                    event = "answer"
+                else:
+                    continue
+                if not events or events[-1] != event:
+                    events.append(event)
+            lifecycles.append((events, list(dict.fromkeys(labels))))
+        return lifecycles
+
+    def _paced(self, text, *cuts, pause=0.15):
+        """`text` streamed in pieces cut at `cuts`, `pause` seconds apart, so each piece is its own redraw."""
+        _NdjsonOllama.pause = pause
+        self.addCleanup(setattr, _NdjsonOllama, "pause", 0.0)
+        bounds = (0, *cuts, len(text))
+        return _ndjson([text[a:b] for a, b in zip(bounds, bounds[1:])])
+
+    def test_the_cube_stays_through_the_reasoning_and_goes_when_the_answer_starts(self):
+        deltas = self._record_deltas()
+        cut = DRAFT.index("Answer:")
+        self._ask_real("make a file readable only by me", self._paced(DRAFT, 30, 80, cut, cut + 40, cut + 90),
+                       mode="cot")
+        self.assertEqual(len(_NdjsonOllama.bodies), 1)
+        ((events, labels),) = self._loader_lifecycles(deltas)
+        self.assertEqual(events, ["loader", "reasoning", "loader", "reasoning", "off", "answer"])
+        self.assertEqual(labels, ["Waiting for the model", polaris.REASONING_LABEL])
+        self.assertNotIn('class="cube"', self._html())
+
+    def test_a_cot_reply_without_an_answer_line_keeps_the_cube_until_it_ends(self):
+        deltas = self._record_deltas()
+        text = ("Reasoning:\n1. The excerpts mention `df -h` for free space per filesystem.\n2. `du -sh` sums one "
+                "directory.\n\nRun `df -h` to see free space on every mounted filesystem.")
+        self._ask_real("how much disk space is free", self._paced(text, 40, 90, 120), mode="cot")
+        ((events, labels),) = self._loader_lifecycles(deltas)
+        # Every streamed piece is held as reasoning; the finished reply then shows its last paragraph as the answer.
+        self.assertEqual(events[-2:], ["off", "answer"])
+        self.assertNotIn("answer", events[:-1])
+        self.assertEqual(labels[-1], polaris.REASONING_LABEL)
+        (reasoning,) = self.at.expander
+        self.assertIn("du -sh", reasoning.markdown[0].value)
+        self.assertIn("Run `df -h` to see free space on every mounted filesystem.", [m.value for m in self.at.markdown])
+
+    def test_both_compare_sides_keep_the_cube_through_reasoning_and_drop_it_at_the_answer(self):
+        deltas = self._record_deltas()
+        cut = DRAFT.index("Answer:")
+        host = self._ollama(self._paced(DRAFT, 30, 80, cut, cut + 40, cut + 90))
+        index, rag = self._full_mode()
+        self.streamlit.cache_resource.clear()
+        with patch("app.streaming.stream_answer_question", REAL_STREAM), patch("app.streaming.OLLAMA_HOST", host), \
+                patch("app.engine.LOG_CSV", Path(tempfile.mkdtemp()) / "answers.csv"), index, rag:
+            self.at.run()
+            self.at.toggle(key="compare").set_value(True).run()
+            self.at.selectbox(key="cmp-left-config").set_value("qwen3.5:2b|cot").run()
+            self.at.selectbox(key="cmp-right-config").set_value("qwen3.5:2b|full").run()
+            del deltas[:]
+            self._ask("make a file readable only by me", "landing")
+        self.assertEqual(len(_NdjsonOllama.bodies), 2)
+        left, right = self._loader_lifecycles(deltas)
+        for events, labels in (left, right):
+            self.assertEqual(events, ["loader", "reasoning", "loader", "reasoning", "off", "answer"])
+            self.assertEqual(labels[-1], polaris.REASONING_LABEL)
+        self.assertEqual(right[1][0], "Searching the lab docs")
+        self.assertNotIn('class="cube"', self._html())
+
     def test_an_answer_cut_at_a_length_limit_says_so(self):
         self._ask_real("extract a .tar.gz file", _ndjson(["Use ", "`tar -x"], done_reason="length"))
         self.assertEqual(len(_NdjsonOllama.bodies), 1)
         self.assertIn("cut off at a length limit", self._html())
 
     def test_a_weak_retrieval_never_calls_the_model(self):
+        deltas = self._record_deltas()
         self._ask_real("what's the lab wi-fi password?", mode="full", dense=0.1)
         self.assertEqual(_NdjsonOllama.bodies, [])
+        ((events, labels),) = self._loader_lifecycles(deltas)
+        self.assertEqual((events, labels), (["loader", "off", "answer"], ["Searching the lab docs"]))
         html = self._html()
         self.assertIn("No fix on this one", html)
         self.assertNotIn('class="cube"', html)
@@ -1298,6 +1405,10 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertNotIn("adduser", note)
 
 
+DRAFT = ("Reasoning:\n1. The excerpts show `chmod 600` gives the owner read and write.\n"
+         "2. `ls -l` shows the result.\n3. A third draft line, longer than the answer.\n\nAnswer:\n"
+         "To make a file readable only by you:\n1. Remove group and other access:\n"
+         "```bash\nchmod 600 <path/to/file>\n```\n2. Check it:\n```bash\nls -l <path/to/file>\n```\nSource: [1]")
 SUDO_QUESTION = "How do I add a new user on Ubuntu and give them sudo access?"
 SUDO_COMMANDS = ("sudo adduser <username>", "sudo usermod -aG sudo <username>", "groups <username>")
 SUDO_HITS = [dict(HIT, title="adduser", path="tldr/adduser.md"), dict(HIT, title="usermod", path="tldr/usermod.md")]
