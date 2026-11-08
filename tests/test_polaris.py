@@ -1652,9 +1652,11 @@ class StopTests(unittest.TestCase):
         self.assertEqual((run["state"], run["record"]), ("done", rec))
         drawn = self.monitor.slot.markdown.call_args.args[0]
         self.assertIn('<span class="mon-tag">last answer</span>', drawn)
-        status = st.empty.return_value
-        self.assertEqual(status.markdown.call_count, 1)
-        self.assertIn("Waiting for the model…", status.markdown.call_args.args[0])
+        # the loader is the first block's slot, which the answer's first block then takes
+        first_block = st.container.return_value.empty.return_value
+        loaders = [c.args[0] for c in first_block.markdown.call_args_list if 'class="thinking"' in c.args[0]]
+        self.assertEqual(len(loaders), 1)
+        self.assertIn("Waiting for the model…", loaders[0])
         stop_checks = [c for c in st.session_state.get.call_args_list if c.args == ("stop-gen",)]
         self.assertGreaterEqual(len(stop_checks), 2)
         self.assertTrue(answer.closed)
