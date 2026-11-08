@@ -501,18 +501,21 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 .cmp-top .card-head .sub{display:none}
 .cmp-top .card-head .model{max-width:none}
 
-/* ---------- loader: an ASCII cube spinning until the answer's first text ----------
- * The frames are text drawn in Python (app/polaris.py), each in a 120px block, stacked in one reel that a single
- * steps() keyframe slides a block at a time: 24 frames in 2 s, on its own layer. 120px is a whole number of device
- * pixels at 80, 90, 100, 110, 120, 125, 150 and 175%, so every frame lands on the same pixels; the blank 24px under
- * each frame's 12 lines keeps the next one out of view at other scales. ASCII only, ligatures off, a fixed line
- * height and a width in ch: any monospace font draws the same 20 by 12 grid in a box that never changes size. */
+/* ---------- loader: an ASCII cube tumbling until the answer's first text ----------
+ * The frames are text drawn in Python (app/polaris.py), each in a 60px block, stacked in one reel that a single
+ * steps() keyframe slides a block at a time: 48 frames in 4 s, on its own layer. 60px is a whole number of device
+ * pixels at 80, 90, 100, 110, 120, 125, 150 and 175%, so every frame lands on the same pixels; the blank 16px under
+ * each frame's 11 lines keeps the next one out of view at other scales. ASCII only, ligatures off, a fixed line
+ * height and a width in ch: any monospace font draws the same 15 by 11 grid in a box (45 x 44 px) that never changes
+ * size. At 5px a glyph is texture rather than a letter, so the faces also part by ink, in three clear steps. */
 .thinking{display:flex;align-items:center;gap:var(--s-3);min-height:40px;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-text-2)}
-.cube{flex:none;display:block;width:20ch;height:96px;overflow:hidden;contain:strict;white-space:pre;
-  font:400 8px/8px var(--f-mono);letter-spacing:0;font-variant-ligatures:none;font-feature-settings:"liga" 0,"calt" 0;
-  color:var(--c-text-2)}
-.cube-reel{display:block;animation:polaris-cube 2s steps(24) infinite;will-change:transform}
-.cube-frame{display:block;height:120px}
+.cube{flex:none;display:block;width:15ch;height:44px;overflow:hidden;contain:strict;white-space:pre;
+  font:600 5px/4px var(--f-mono);letter-spacing:0;font-variant-ligatures:none;font-feature-settings:"liga" 0,"calt" 0;
+  color:var(--c-text-3)}
+.cube .d{color:color-mix(in oklch,var(--c-text-3) 50%,transparent)}
+.cube .b{color:var(--c-text)}
+.cube-reel{display:block;animation:polaris-cube 4s steps(48) infinite;will-change:transform}
+.cube-frame{display:block;height:60px}
 @keyframes polaris-cube{to{transform:translateY(-100%)}}
 .cube.still{opacity:.55}
 .cube.still .cube-reel{animation:none;will-change:auto}

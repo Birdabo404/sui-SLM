@@ -5,6 +5,7 @@ import http.client
 import importlib
 import io
 import json
+import math
 import os
 import re
 import socket
@@ -93,8 +94,12 @@ from app.polaris import (
     CUBE_RAMP,
     CUBE_ROWS,
     CUBE_SECONDS,
+    _CUBE_DISTANCE,
+    _CUBE_FACE_LIST,
     _CUBE_FIT,
+    _cube_orientation,
     _cube_render,
+    _mat_apply,
     waiting_html,
     STILL_WORKING,
     CancellableChat,
@@ -725,9 +730,15 @@ class LoaderAndNamingTests(unittest.TestCase):
         self.assertIn('role="status"', html)
         self.assertIn('<span class="cube" aria-hidden="true">', html)
         reel = html.split('<span class="cube-reel">', 1)[1].split('</span></span><span class="thinking-text">', 1)[0]
-        frames = [block.split("<br>") for block in re.findall(r'<span class="cube-frame">(.*?)</span>', reel)]
-        self.assertEqual(frames, [cube_frame(t) for t in range(CUBE_FRAMES)])
-        for frame in frames:
+        blocks = reel.split('<span class="cube-frame">')[1:]
+        self.assertEqual(len(blocks), CUBE_FRAMES)
+        for t, block in enumerate(blocks):
+            # The dimmest third of the ramp is inked .d, the brightest .b, the middle third the cube's own ink.
+            for ink, run in re.findall(r'<span class="([db])">([^<]*)</span>', block):
+                thirds = {CUBE_RAMP.index(ch) * 3 // len(CUBE_RAMP) for ch in run}
+                self.assertEqual(thirds, {0 if ink == "d" else 2}, run)
+            frame = re.sub(r"</?span[^>]*>", "", block).split("<br>")
+            self.assertEqual(frame, cube_frame(t))
             self.assertEqual(len(frame), CUBE_ROWS)
             self.assertTrue(all(len(line) == CUBE_COLS for line in frame))
             self.assertLessEqual(set("".join(frame)), set(CUBE_RAMP + " "))
@@ -742,17 +753,23 @@ class LoaderAndNamingTests(unittest.TestCase):
                 body = keyframes.split("}}", 1)[0]
                 self.assertNotIn(prop, body, f"loader keyframes animate {prop}")
         # A fixed grid in any monospace font: whole-pixel lines, a width in ch, no ligatures merging runs of a glyph.
-        self.assertIn(f"width:{CUBE_COLS}ch;height:{CUBE_ROWS * 8}px", block)
-        self.assertIn("font:400 8px/8px var(--f-mono)", block)
+        self.assertIn(f"width:{CUBE_COLS}ch;height:{CUBE_ROWS * 4}px", block)
+        self.assertIn("font:600 5px/4px var(--f-mono)", block)
         self.assertIn('font-variant-ligatures:none;font-feature-settings:"liga" 0,"calt" 0', block)
-        self.assertIn(f".cube-frame{{display:block;height:{CUBE_PITCH * 8}px}}", block)
+        self.assertIn(f".cube-frame{{display:block;height:{CUBE_PITCH * 4}px}}", block)
+        self.assertIn("color:var(--c-text-3)}\n.cube .d{color:color-mix(in oklch,var(--c-text-3) 50%,transparent)}", block)
+        self.assertIn(".cube .b{color:var(--c-text)}", block)
+        # An inline indicator: no side over 48px (a 0.6em advance at 5px is 3px).
+        self.assertLessEqual(CUBE_ROWS * 4, 48)
+        self.assertLessEqual(CUBE_COLS * 3, 48)
         self.assertNotIn("\u2588", "".join(cube_frame(t)[r] for t in range(CUBE_FRAMES) for r in range(CUBE_ROWS)))
 
-    def test_cube_is_projected_and_spins_a_quarter_turn_per_loop(self):
+    def test_cube_is_projected_and_loops_with_no_seam(self):
         frames = [cube_frame(t) for t in range(CUBE_FRAMES)]
-        # A quarter turn brings the cube onto itself: drawing one step past the last frame gives the first again.
+        # One step past either end of the loop draws the frame at the other end: the wrap is just another step.
         self.assertEqual(_cube_render(CUBE_FRAMES, _CUBE_FIT), frames[0])
-        self.assertEqual(len({tuple(frame) for frame in frames}), CUBE_FRAMES)
+        self.assertEqual(_cube_render(-1, _CUBE_FIT), frames[-1])
+        self.assertGreaterEqual(len({tuple(frame) for frame in frames}), CUBE_FRAMES - 2)
 
         def cells(frame):
             return {(r, c): ch for r, line in enumerate(frame) for c, ch in enumerate(line) if ch != " "}
@@ -760,19 +777,56 @@ class LoaderAndNamingTests(unittest.TestCase):
         sizes = [len(cells(frame)) for frame in frames]
         for t, frame in enumerate(frames):
             drawn = cells(frame)
-            # Two or three faces, each its own character, and the cube fills most of the box without leaving it.
-            self.assertIn(len(set(drawn.values())), (2, 3), frame)
+            # Two or three faces, each its own character and its own ink, and the cube fills most of the box.
+            glyphs = set(drawn.values())
+            self.assertIn(len(glyphs), (2, 3), frame)
+            self.assertEqual(len({CUBE_RAMP.index(ch) * 3 // len(CUBE_RAMP) for ch in glyphs}), len(glyphs), frame)
+            # No specks: every cell touches another of its face, at least at a corner.
+            for (r, c), ch in drawn.items():
+                self.assertTrue(any(drawn.get((r + dr, c + dc)) == ch for dr in (-1, 0, 1) for dc in (-1, 0, 1)
+                                    if dr or dc), (t, r, c))
             rows = {r for r, _ in drawn}
             cols = {c for _, c in drawn}
-            self.assertGreaterEqual(max(rows) - min(rows) + 1, CUBE_ROWS - 2, frame)
+            self.assertGreaterEqual(max(rows) - min(rows) + 1, CUBE_ROWS - 3, frame)
             self.assertGreaterEqual(max(cols) - min(cols) + 1, CUBE_COLS // 2, frame)
             # Smooth: the outline barely changes from one frame to the next and the cube doesn't drift.
             after = cells(frames[(t + 1) % CUBE_FRAMES])
-            self.assertLessEqual(len(set(drawn) ^ set(after)), len(drawn) // 8, (frame, frames[(t + 1) % CUBE_FRAMES]))
+            self.assertLessEqual(len(set(drawn) ^ set(after)), len(drawn) // 6, (frame, frames[(t + 1) % CUBE_FRAMES]))
             centre = sum(c for _, c in drawn) / len(drawn), sum(r for r, _ in drawn) / len(drawn)
             moved = sum(c for _, c in after) / len(after), sum(r for r, _ in after) / len(after)
             self.assertLess(abs(centre[0] - moved[0]) + abs(centre[1] - moved[1]), 1.0)
         self.assertLess(max(sizes) - min(sizes), min(sizes) // 4)
+
+    def test_cube_tumbles_about_more_than_one_axis(self):
+        def transpose(m):
+            return tuple(tuple(m[j][i] for j in range(3)) for i in range(3))
+
+        def step_axis(t):
+            a, b = _cube_orientation(t), _cube_orientation(t + 1)
+            r = tuple(tuple(sum(b[i][k] * a[j][k] for k in range(3)) for j in range(3)) for i in range(3))
+            axis = (r[2][1] - r[1][2], r[0][2] - r[2][0], r[1][0] - r[0][1])
+            norm = math.sqrt(sum(x * x for x in axis))
+            return tuple(x / norm for x in axis)
+
+        axes = [step_axis(t) for t in range(CUBE_FRAMES)]
+        spread = max(math.degrees(math.acos(max(-1.0, min(1.0, sum(p * q for p, q in zip(a, b))))))
+                     for a in axes for b in axes)
+        # Spinning about one fixed axis would keep every step's axis the same; this one swings through 50 degrees.
+        self.assertGreater(spread, 45)
+        seen, hidden, tops = set(), set(), set()
+        for t in range(CUBE_FRAMES):
+            m = _cube_orientation(t)
+            for face, (normal, corners) in enumerate(_CUBE_FACE_LIST):
+                turned, first = _mat_apply(m, normal), _mat_apply(m, corners[0])
+                facing = sum(a * b for a, b in zip(turned, (first[0], first[1], first[2] + _CUBE_DISTANCE))) < 0
+                (seen if facing else hidden).add(face)
+            tops.add(max(range(6), key=lambda f: _mat_apply(m, _CUBE_FACE_LIST[f][0])[1]))
+            # Never face-on: the view always meets a second face at a real angle, so it reads as a solid.
+            view = sorted((abs(c) for c in _mat_apply(transpose(m), (0, 0, -1))), reverse=True)
+            self.assertGreater(view[1], 0.5 * view[0], t)
+        self.assertEqual(seen, set(range(6)))
+        self.assertEqual(hidden, set(range(6)))
+        self.assertGreaterEqual(len(tops), 4)
 
     def test_cube_rests_under_reduced_motion_and_keeps_its_place_when_relabelled(self):
         css = style_path().read_text(encoding="utf-8")
@@ -782,7 +836,7 @@ class LoaderAndNamingTests(unittest.TestCase):
         still = cube_html(still=True)
         self.assertIn('class="cube still"', still)
         self.assertEqual(still.count("<br>"), CUBE_ROWS - 1)
-        self.assertIn("<br>".join(cube_frame(0)), still)
+        self.assertIn("<br>".join(cube_frame(0)), re.sub(r'</?span(?: class="[db]")?>', "", still))
         self.assertNotIn("animation-delay", thinking_html("Waiting for the model"))
         later = thinking_html("Waiting for the model", elapsed=5.0)
         self.assertIn('<span class="cube-reel" style="animation-delay:-1.00s">', later)

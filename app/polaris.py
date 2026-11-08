@@ -13,6 +13,7 @@ import os
 import random
 import re
 from html import escape
+from itertools import groupby
 from pathlib import Path
 from typing import TypedDict
 
@@ -1245,21 +1246,23 @@ def evidence_block_html(record, collapsed=True):
     )
 
 
-# The loader: an ASCII cube spinning on its vertical axis, seen from a little above and to the side. Each frame is
-# drawn the way terminal ASCII cubes are: rotate the corners, project them in perspective (x/z, y/z), fill every face
-# that faces the camera into a depth buffer of 4x4 samples per character cell keeping the nearest (largest 1/z), then
-# give each cell the character of the face covering most of it, picked from a brightness ramp by the face's angle to
-# a fixed light. A quarter turn brings the cube back onto itself, so the frames loop with no seam. Written from the
-# standard rotation / perspective / z-buffer technique; no third-party code.
-CUBE_COLS, CUBE_ROWS, CUBE_PITCH = 20, 12, 15  # frames sit 15 lines apart in the reel: 3 blank lines under each
-CUBE_FRAMES, CUBE_SECONDS = 24, 2.0
-CUBE_RAMP = ".:-=+*#%@"
+# The loader: a small ASCII cube tumbling about two axes at once, seen from above. Each frame is drawn the way terminal
+# ASCII cubes are: rotate the corners, project them in perspective (x/z, y/z), fill every face that faces the camera
+# into a depth buffer of 4x4 samples per character cell keeping the nearest (largest 1/z), then give each cell the
+# character of the face covering most of it, picked from a brightness ramp by the face's angle to a fixed light. The
+# cube turns once about the vertical while it rolls half a turn about its own x axis; a half roll brings it back onto
+# itself, so the frames loop with no seam and no change of speed. Written from the standard rotation / perspective /
+# z-buffer technique; no third-party code.
+CUBE_COLS, CUBE_ROWS, CUBE_PITCH = 15, 11, 15  # frames sit 15 lines apart in the reel: 4 blank lines under each
+CUBE_FRAMES, CUBE_SECONDS = 48, 4.0
+CUBE_RAMP = "=+*#%@"  # dense glyphs only: at 5px a dot or a dash reads as empty
 _CUBE_SAMPLES = 4
-_CUBE_ASPECT = 8 / 4.8  # a cell's height over its width: 8px lines, 0.6em advance at 8px
+_CUBE_ASPECT = 4 / 3  # a cell's height over its width: 4px lines, 0.6em advance at 5px
 _CUBE_DISTANCE = 5.0  # camera to cube centre, in half-edges
-_CUBE_TILT, _CUBE_ROLL = math.radians(-28), math.radians(10)
-_CUBE_LIGHT = (-0.5, 0.5, -0.7)  # towards the light: upper left, in front
-_CUBE_AMBIENT = 0.14
+_CUBE_TILT = math.radians(-40)
+_CUBE_PHASE = 0.25  # of the loop: the first frame, also the still one, shows three faces
+_CUBE_LIGHT = (-0.35, 0.45, -0.82)  # towards the light: just above and left of the camera, so the faces that face it read
+_CUBE_AMBIENT = 0.25
 
 
 def _rot_x(a):
@@ -1270,11 +1273,6 @@ def _rot_x(a):
 def _rot_y(a):
     c, s = math.cos(a), math.sin(a)
     return ((c, 0, s), (0, 1, 0), (-s, 0, c))
-
-
-def _rot_z(a):
-    c, s = math.cos(a), math.sin(a)
-    return ((c, -s, 0), (s, c, 0), (0, 0, 1))
 
 
 def _mat_mul(a, b):
@@ -1305,7 +1303,8 @@ _CUBE_FACE_LIST = _cube_faces()
 
 
 def _cube_orientation(t):
-    return _mat_mul(_mat_mul(_rot_x(_CUBE_TILT), _rot_z(_CUBE_ROLL)), _rot_y(math.pi / 2 * t / CUBE_FRAMES))
+    f = t / CUBE_FRAMES + _CUBE_PHASE
+    return _mat_mul(_mat_mul(_rot_x(_CUBE_TILT), _rot_y(2 * math.pi * f)), _rot_x(math.pi * f))
 
 
 def _cube_project(m, point):
@@ -1340,12 +1339,16 @@ def _cube_render(t, fit):
         first = _mat_apply(m, corners[0])
         if sum(a * b for a, b in zip(turned, (first[0], first[1], first[2] + _CUBE_DISTANCE))) < 0:
             visible.append(face)  # faces the camera
-    # Brightest first; a face that would share the next brighter face's character steps one down the ramp, so two
-    # faces never merge into one patch and the order of brightness is kept.
-    glyphs, above = {}, len(CUBE_RAMP)
-    for face in sorted(visible, key=lambda f: -levels[f]):
-        above = max(0, min(above - 1, int(levels[face] * len(CUBE_RAMP))))
-        glyphs[face] = CUBE_RAMP[above]
+    # Brightest first, each face at least two steps down the ramp from the one before, lifted together if that runs off
+    # its foot: faces never merge into one patch, keep their order of brightness, and fall in different thirds of the
+    # ramp, which are drawn in different inks.
+    order = sorted(visible, key=lambda f: -levels[f])
+    steps, above = [], len(CUBE_RAMP) + 1
+    for face in order:
+        above = min(above - 2, int(levels[face] * len(CUBE_RAMP)))
+        steps.append(above)
+    lift = max(0, -min(steps, default=0))
+    glyphs = {face: CUBE_RAMP[step + lift] for face, step in zip(order, steps)}
     for face in visible:
         corners = _CUBE_FACE_LIST[face][1]
         pts = []
@@ -1370,19 +1373,28 @@ def _cube_render(t, fit):
                     w = w0 + dw_dx * (cx - x0) + dw_dy * (cy - y0)
                     if w > depth[py][px]:
                         depth[py][px], owner[py][px] = w, face
-    rows = []
+    cells = {}
     for r in range(CUBE_ROWS):
-        line = ""
         for c in range(CUBE_COLS):
             counts = {}
             for py in range(r * n, r * n + n):
                 for px in range(c * n, c * n + n):
                     if owner[py][px] >= 0:
                         counts[owner[py][px]] = counts.get(owner[py][px], 0) + 1
-            covered = sum(counts.values())
-            line += glyphs[max(counts, key=counts.get)] if covered * 2 >= n * n else " "
-        rows.append(line)
-    return rows
+            if sum(counts.values()) * 2 >= n * n:
+                cells[r, c] = counts
+    winners = {cell: max(counts, key=counts.get) for cell, counts in cells.items()}
+    rows = [[" "] * CUBE_COLS for _ in range(CUBE_ROWS)]
+    for (r, c), counts in cells.items():
+        # A cell touching no other cell of its face, even at a corner, is a tip caught by the sampling: one speck that
+        # blinks for a frame. It goes to the next face in it, if that still covers half of it.
+        face = winners[r, c]
+        if not any(winners.get((r + dr, c + dc)) == face for dr in (-1, 0, 1) for dc in (-1, 0, 1) if dr or dc):
+            counts = {other: k for other, k in counts.items() if other != face}
+            if sum(counts.values()) * 2 < n * n:
+                continue
+        rows[r][c] = glyphs[max(counts, key=counts.get)]
+    return ["".join(row) for row in rows]
 
 
 _CUBE_FIT = _cube_fit()
@@ -1394,8 +1406,17 @@ def cube_frame(t):
     return _CUBE_TEXT[t % CUBE_FRAMES]
 
 
+def _cube_row_html(row):
+    """The dimmest and brightest thirds of the ramp in their own ink, so faces part by tone as well as by glyph."""
+    parts = []
+    for tone, run in groupby(row, key=lambda ch: None if ch == " " else CUBE_RAMP.index(ch) * 3 // len(CUBE_RAMP)):
+        text = "".join(run)
+        parts.append(text if tone in (None, 1) else f'<span class="{"d" if tone == 0 else "b"}">{text}</span>')
+    return "".join(parts)
+
+
 def _cube_frame_html(t):
-    return '<span class="cube-frame">' + "<br>".join(cube_frame(t)) + "</span>"
+    return '<span class="cube-frame">' + "<br>".join(_cube_row_html(row) for row in cube_frame(t)) + "</span>"
 
 
 # One line of HTML: every frame in its own fixed-height block, stacked in a reel that one CSS steps() animation slides.
