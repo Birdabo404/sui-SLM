@@ -42,6 +42,67 @@ class OllamaResponseError(requests.RequestException):
     """Ollama returned an unusable response."""
 
 
+def backend_error_text(
+    error,
+    *,
+    host="",
+    index_dir="",
+    model="",
+    model_command="",
+):
+    """Return one plain app message without exposing exception internals."""
+    if isinstance(error, EmbeddingModelError):
+        return (
+            "The embedding model is not available in the local cache. "
+            "Run `bash install.sh` once while online, then try again."
+        )
+    if isinstance(error, IndexLoadError):
+        return (
+            f"The local search index at {index_dir} could not be opened. "
+            "It may be incomplete or incompatible. Rebuild the index, then try again."
+        )
+    if isinstance(error, AppRetrievalError):
+        return (
+            "The local search index failed while searching. "
+            "Rebuild the index, then try again."
+        )
+    if isinstance(error, OllamaModelMissing):
+        if model_command.startswith("ollama create"):
+            return (
+                f"{model} isn't installed in Ollama on this machine. "
+                "The exported GGUF and Modelfile are not included in this repository. "
+                f"Copy them to this machine, then run `{model_command}` with their actual path."
+            )
+        if model_command:
+            return (
+                f"{model} isn't installed in Ollama on this machine. "
+                f"Install it with `{model_command}`, then ask again."
+            )
+        return (
+            f"The Ollama model {model!r} is not installed. "
+            "Install or create it in Ollama, then try again."
+        )
+    if isinstance(error, OllamaTimedOut):
+        return (
+            "Ollama took too long to answer. The request was stopped. "
+            "Try again, or restart Ollama if it keeps happening."
+        )
+    if isinstance(error, OllamaDisconnected):
+        return (
+            "Ollama disconnected before the answer finished. "
+            "The partial answer was discarded; try again."
+        )
+    if isinstance(error, (OllamaUnavailable, requests.ConnectionError)):
+        return (
+            f"Ollama is not running or could not be reached at {host}. "
+            "Start it with `ollama serve`, then try again."
+        )
+    return (
+        "Ollama could not finish this answer. "
+        "Try again, or restart Ollama if the problem continues."
+    )
+
+
 @dataclass(frozen=True)
 class SafeRetriever:
     """Wrap a retriever so query failures do not leak implementation errors."""

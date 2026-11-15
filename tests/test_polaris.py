@@ -32,13 +32,7 @@ from app.backend import (
     OllamaTimedOut,
     RetrievalQueryError,
 )
-from app.streaming import (
-    APP_NUM_PREDICT,
-    APP_REPEAT_LAST_N,
-    APP_REPEAT_PENALTY,
-    LiveThroughput,
-    retrieval_chart,
-)
+from app.streaming import LiveThroughput, retrieval_chart
 from app.models import ComparePick, ModelOption, compare_picks, default_compare_ids, model_options, modes_for, pair_compare_ids
 from app.engine import (
     OllamaInfo,
@@ -1372,21 +1366,16 @@ class StopTests(unittest.TestCase):
                 log_commit=chat.commit,
             )
         self.assertEqual(out["text"], "use tar -xzf")
-        expected = ollama_chat_body(
-            build_messages("hi", [], "base"),
-            "qwen3.5:2b",
-            temperature=0,
-            seed=42,
-            keep_alive="30m",
+        self.assertEqual(
+            _SlowOllama.bodies[0],
+            ollama_chat_body(
+                build_messages("hi", [], "base"),
+                "qwen3.5:2b",
+                temperature=0,
+                seed=42,
+                keep_alive="30m",
+            ),
         )
-        expected["options"].update(
-            {
-                "num_predict": APP_NUM_PREDICT,
-                "repeat_penalty": APP_REPEAT_PENALTY,
-                "repeat_last_n": APP_REPEAT_LAST_N,
-            }
-        )
-        self.assertEqual(_SlowOllama.bodies[0], expected)
 
     def test_warm_model_makes_a_real_non_streaming_call(self):
         _SlowOllama.delay = 0
@@ -1750,13 +1739,13 @@ class StopTests(unittest.TestCase):
 
     def test_index_and_embedding_load_messages_hide_internal_errors(self):
         st, app_mod = self._app_with_mock_st()
-        index = app_mod._retrieval_error_text(
+        index = app_mod.backend_error_text(
             IndexLoadError("sqlite database disk image is malformed"),
-            "/tmp/index",
+            index_dir="/tmp/index",
         )
-        embedding = app_mod._retrieval_error_text(
+        embedding = app_mod.backend_error_text(
             EmbeddingModelError("cache/config.json missing"),
-            "/tmp/index",
+            index_dir="/tmp/index",
         )
         self.assertIn("could not be opened", index)
         self.assertIn("Run `bash install.sh` once while online", embedding)

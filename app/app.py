@@ -21,12 +21,7 @@ import streamlit as st
 from app.answer_format import app_messages, parse_answer, safe_markdown
 from app.backend import (
     AppRetrievalError,
-    EmbeddingModelError,
-    IndexLoadError,
-    OllamaDisconnected,
-    OllamaModelMissing,
-    OllamaTimedOut,
-    OllamaUnavailable,
+    backend_error_text,
     load_app_retriever,
 )
 from app.chat_memory import ChatStore, build_chat_context
@@ -215,7 +210,7 @@ def run_legacy():
             try:
                 retriever = load_retriever(index_dir)
             except AppRetrievalError as error:
-                st.warning(_retrieval_error_text(error, index_dir))
+                st.warning(backend_error_text(error, index_dir=index_dir))
 
     if "messages" not in st.session_state:
         st.session_state.messages = []
@@ -269,12 +264,13 @@ def run_legacy():
                     f"total {result['total_mb']:.0f} MB"
                     + (" (weak retrieval, abstained)" if weak else "")
                 )
-            except requests.RequestException as error:
-                text = _ollama_error_text(error, model=model)
-                hits, weak, stats = [], False, ""
-                failed = True
-            except AppRetrievalError as error:
-                text = _retrieval_error_text(error, index_dir)
+            except (requests.RequestException, AppRetrievalError) as error:
+                text = backend_error_text(
+                    error,
+                    host=OLLAMA_HOST,
+                    index_dir=index_dir,
+                    model=model,
+                )
                 hits, weak, stats = [], False, ""
                 failed = True
         st.markdown(text)
@@ -486,7 +482,7 @@ def _answer_turn(question, option, mode, compare_on, left, right, index_dir, *, 
         try:
             retriever = _retriever_with_loader(index_dir, slot)
         except AppRetrievalError as error:
-            message = _retrieval_error_text(error, index_dir)
+            message = backend_error_text(error, index_dir=index_dir)
             slot.error(message)
             st.session_state.messages.append({"role": "assistant", "error": message})
             return False
@@ -1040,52 +1036,6 @@ class _Monitor:
         self.slot.markdown(monitor_html(views, streaming=streaming), unsafe_allow_html=True)
 
 
-def _retrieval_error_text(error, index_dir):
-    if isinstance(error, EmbeddingModelError):
-        return (
-            "The embedding model is not available in the local cache. "
-            "Run `bash install.sh` once while online, then try again."
-        )
-    if isinstance(error, IndexLoadError):
-        return (
-            f"The local search index at {index_dir} could not be opened. "
-            "It may be incomplete or incompatible. Rebuild the index, then try again."
-        )
-    return (
-        "The local search index failed while searching. "
-        "Rebuild the index, then try again."
-    )
-
-
-def _ollama_error_text(error, option=None, model=None):
-    if isinstance(error, OllamaModelMissing):
-        if option is not None:
-            return missing_text(option)
-        return (
-            f"The Ollama model {model!r} is not installed. "
-            "Install or create it in Ollama, then try again."
-        )
-    if isinstance(error, OllamaTimedOut):
-        return (
-            "Ollama took too long to answer. The request was stopped. "
-            "Try again, or restart Ollama if it keeps happening."
-        )
-    if isinstance(error, OllamaDisconnected):
-        return (
-            "Ollama disconnected before the answer finished. "
-            "The partial answer was discarded; try again."
-        )
-    if isinstance(error, (OllamaUnavailable, requests.ConnectionError)):
-        return (
-            f"Ollama is not running or could not be reached at {OLLAMA_HOST}. "
-            "Start it with `ollama serve`, then try again."
-        )
-    return (
-        "Ollama could not finish this answer. "
-        "Try again, or restart Ollama if the problem continues."
-    )
-
-
 def _answer_record(
     question,
     mode,
@@ -1165,17 +1115,14 @@ def _answer_record(
         monitor.end(run, "stopped")
         slot.empty()
         return None, None
-    except requests.RequestException as error:
-        message = _ollama_error_text(error, option=option, model=option.name)
-        st.session_state.last_error = message
-        monitor.end(run, "error")
-        if show_error:
-            slot.error(message)
-        else:
-            slot.empty()
-        return None, None
-    except AppRetrievalError as error:
-        message = _retrieval_error_text(error, index_dir)
+    except (requests.RequestException, AppRetrievalError) as error:
+        message = backend_error_text(
+            error,
+            host=OLLAMA_HOST,
+            index_dir=index_dir,
+            model=option.name,
+            model_command=option.create,
+        )
         st.session_state.last_error = message
         monitor.end(run, "error")
         if show_error:

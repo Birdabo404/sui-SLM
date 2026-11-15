@@ -38,13 +38,6 @@ from app.engine import (
 )
 from shared.prompt import ABSTAIN
 
-# The longest normal answer fixture is 83 words / 458 characters. A 512-token
-# app cap leaves several times that headroom while bounding a repetition loop.
-APP_NUM_PREDICT = 512
-APP_REPEAT_PENALTY = 1.1
-APP_REPEAT_LAST_N = 64
-APP_OLLAMA_TIMEOUT_S = 300
-
 
 class ChatCancelled(Exception):
     """The user stopped the answer before Ollama committed a result."""
@@ -149,14 +142,7 @@ def _terminal_result(text, payload):
 class CancellableChat:
     """Cancellable nonstreaming and streaming `/api/chat` transport."""
 
-    def __init__(
-        self,
-        host=None,
-        timeout=APP_OLLAMA_TIMEOUT_S,
-        temperature=0.2,
-        seed=None,
-        keep_alive=None,
-    ):
+    def __init__(self, host=None, timeout=300, temperature=0.2, seed=None, keep_alive=None):
         self._url = urlsplit((host or OLLAMA_HOST).rstrip("/") + "/api/chat")
         self._timeout = timeout
         self._temperature = temperature
@@ -176,22 +162,16 @@ class CancellableChat:
             self._keep_alive = keep_alive
 
     def _body(self, messages, model, *, stream):
-        body = ollama_chat_body(
-            messages,
-            model,
-            temperature=self._temperature,
-            seed=self._seed,
-            keep_alive=self._keep_alive,
-            stream=stream,
-        )
-        body["options"].update(
-            {
-                "num_predict": APP_NUM_PREDICT,
-                "repeat_penalty": APP_REPEAT_PENALTY,
-                "repeat_last_n": APP_REPEAT_LAST_N,
-            }
-        )
-        return json.dumps(body).encode("utf-8")
+        return json.dumps(
+            ollama_chat_body(
+                messages,
+                model,
+                temperature=self._temperature,
+                seed=self._seed,
+                keep_alive=self._keep_alive,
+                stream=stream,
+            )
+        ).encode("utf-8")
 
     @contextmanager
     def _response(self, body):
