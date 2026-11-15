@@ -196,14 +196,14 @@ fi
 
 requirements_file="$ROOT/requirements.txt"
 requirements_profile="base"
+read -r base_requirements_hash _ < <(sha256sum "$ROOT/requirements.txt")
+requirements_hash="$base_requirements_hash"
 if [ "$ENHANCED" -eq 1 ]; then
   requirements_file="$ROOT/requirements-enhanced.txt"
   requirements_profile="enhanced"
   read -r requirements_hash _ < <(
     sha256sum "$ROOT/requirements.txt" "$requirements_file" | sha256sum
   )
-else
-  read -r requirements_hash _ < <(sha256sum "$requirements_file")
 fi
 requirements_stamp="$ROOT/.venv/.sui-slm-${requirements_profile}-requirements.sha256"
 needs_packages=1
@@ -233,6 +233,10 @@ python -m pip check
 python -c "import bs4, chromadb, lxml, psutil, rank_bm25, requests, sentence_transformers, streamlit, torch"
 python -c "import torch; assert torch.version.cuda is None, 'CUDA-enabled torch is not supported on this CPU-only install'"
 printf '%s\n' "$requirements_hash" > "$requirements_stamp"
+if [ "$ENHANCED" -eq 1 ]; then
+  printf '%s\n' "$base_requirements_hash" > \
+    "$ROOT/.venv/.sui-slm-base-requirements.sha256"
+fi
 
 if [ "$OFFLINE" -eq 1 ]; then
   python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('$EMBED_MODEL', device='cpu', local_files_only=True)" ||
