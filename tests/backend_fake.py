@@ -49,6 +49,12 @@ class RetrievalQueryError(AppRetrievalError):
     code = "index_query_failed"
 
 
+class GroundingModelError(UserFacingBackendError):  # app/grounding.py, PR #28
+    code = "grounding_model_unavailable"
+    message = "The optional grounding check is not available in the local cache."
+    action = "Turn off grounding, or run `bash install.sh --enhanced` while online."
+
+
 class OllamaUnavailable(UserFacingBackendError, requests.ConnectionError):
     code = "ollama_unavailable"
     message = "Ollama is not running or could not be reached."

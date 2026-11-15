@@ -34,6 +34,7 @@ TITLES = {
     "ollama_timeout": "Ollama took too long",
     "ollama_disconnected": "The answer stopped mid-stream",
     "ollama_response_error": "Ollama returned an error",
+    "grounding_model_unavailable": "The grounding model isn't on this machine",
 }
 
 
@@ -133,11 +134,18 @@ def load_index(index_dir, factory):
 
 
 def issue_for_error(error, *, host, stage="answer", partial_chars=0, index_dir="", model="", create=""):
-    """The card for an exception raised while loading the index (stage "load"), searching it ("retrieve") or
-    answering ("answer") with `model`, which `create` installs. partial_chars is how much answer text had arrived;
-    that text is never kept."""
+    """The card for an exception raised while loading the index (stage "load"), searching it ("retrieve"),
+    answering ("answer") with `model`, which `create` installs, or scoring a finished answer's grounding ("ground").
+    partial_chars is how much answer text had arrived; that text is never kept."""
     if backend is not None and isinstance(error, backend.UserFacingBackendError):
         return backend_issue(error, model=model, create=create, partial_chars=partial_chars)
+    if stage == "ground":
+        return Issue(
+            "grounding_failed",
+            "The grounding check failed",
+            "The answer above is unchanged; only its grounding score is missing.",
+            hint="Turn grounding off in Settings, or ask again. The details are in the terminal running the app.",
+        )
     message = str(error or "")
     lowered = message.lower()
     if stage == "load":
@@ -291,9 +299,9 @@ def hf_cached(repo_id=EMBED_MODEL, environ=None):
 
 
 def offline_checks(*, host, ollama_up, model, installed, create, index_dir, index_present, chunks, embed_cached,
-                   online):
-    """Everything an answer needs from this machine, in the order it's needed. installed is None when Ollama can't
-    be asked."""
+                   online, extra=()):
+    """Everything an answer needs from this machine, in the order it's needed, with `extra` checks before the
+    network. installed is None when Ollama can't be asked."""
     checks = [Check("Ollama", ollama_up, f"running at {host}" if ollama_up else f"not running at {host}",
                     "" if ollama_up else "ollama serve")]
     if installed is None:
@@ -306,6 +314,7 @@ def offline_checks(*, host, ollama_up, model, installed, create, index_dir, inde
                         "" if index_present else INDEX_BUILD))
     checks.append(Check("Embedding model", embed_cached, "MiniLM cached locally" if embed_cached else "not cached",
                         "" if embed_cached else "bash install.sh"))
+    checks.extend(extra)
     checks.append(Check("Network", None, "online, not used" if online else "offline, not needed"))
     return checks
 
