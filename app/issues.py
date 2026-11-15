@@ -75,7 +75,7 @@ def index_missing(index_dir):
         "The lab docs index isn't there",
         f"No index at {_short(index_dir)}, so +RAG and +RAG+CoT can't look anything up. BASE and +CoT still work.",
         fix=INDEX_BUILD,
-        hint="See Build the index in the README, or set RAG_INDEX to an index you already have.",
+        hint="Then trim it into rag-index-v2 (README, Build the index), or set RAG_INDEX to an index you have.",
     )
 
 
