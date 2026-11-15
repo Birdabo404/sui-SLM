@@ -104,6 +104,7 @@ EXPORT_FIELDS = (
     "k",
     "git_commit",
     "hits_json",
+    "config_mode",
 )
 EXAMPLES = (
     "extract a .tar.gz file",
@@ -1101,8 +1102,62 @@ def metrics_html(record):
         + ram_html(record)
         + "".join(f"<span>{b}</span>" for b in bits)
         + cut_off_html(record)
+        + config_chip_html(record)
         + "</div>"
     )
+
+
+CONFIG_FROZEN_TITLE = ("Evaluated config (frozen): the retrieval, 0.30 dense threshold and k=5 that the thesis eval "
+                       "graded.")
+CONFIG_ENHANCED_TITLE = ("Enhanced: retrieved and generated exactly as the evaluated config. Enhanced only adds "
+                         "optional checks after the answer, which are not part of the reported eval.")
+
+
+def config_chip_html(record):
+    """Which config produced the answer. Answers saved before the toggle existed say nothing: all were frozen."""
+    config = record.get("config_mode")
+    if config == "enhanced":
+        return (f'<span class="stat cfg" title="{escape(CONFIG_ENHANCED_TITLE)}">evaluated config + '
+                "Enhanced checks</span>")
+    if config == "frozen":
+        return f'<span class="stat cfg" title="{escape(CONFIG_FROZEN_TITLE)}">evaluated config</span>'
+    return ""
+
+
+COMMANDS_MISSING_TITLE = ("Not in the excerpts the model was given. They may still be right: check them before "
+                          "running anything.")
+COMMANDS_OK_TITLE = ("Every command and flag in the answer appears in its excerpts. This checks presence, not "
+                     "correctness.")
+GROUNDING_TITLE = ("HHEM consistency between the answer and its excerpts, from 0 to 1; 0.5 and above reads as "
+                   "supported. Experimental and not part of the reported eval.")
+GROUNDING_LABELS = {"consistent": "supported", "hallucinated": "not supported"}
+
+
+def answer_checks_html(record, grounding_pending=False):
+    """The line under a finished answer: the command check, then the grounding score when there is one."""
+    bits = []
+    checked = record.get("command_check") or {}
+    missing = checked.get("missing") or []
+    if missing:
+        items = "".join(f"<code>{escape(item)}</code>" for item in missing)
+        bits.append(f'<span class="ac-cmd warn" title="{escape(COMMANDS_MISSING_TITLE)}">'
+                    f'<span class="ac-k">Not in the excerpts</span>{items}</span>')
+    elif checked.get("commands"):
+        n = len(checked["commands"])
+        noun = "command" if n == 1 else "commands"
+        bits.append(f'<span class="ac-cmd ok" title="{escape(COMMANDS_OK_TITLE)}">{n} {noun} · all in the '
+                    "excerpts</span>")
+    grounding = record.get("grounding") or {}
+    if grounding_pending:
+        bits.append('<span class="ac-gr wait" role="status">grounding · checking…</span>')
+    elif grounding.get("score") is not None:
+        label = str(grounding.get("label") or "")
+        tone = "ok" if label == "consistent" else "low"
+        bits.append(f'<span class="ac-gr {tone}" title="{escape(GROUNDING_TITLE)}">grounding '
+                    f'<b>{float(grounding["score"]):.2f}</b> · {escape(GROUNDING_LABELS.get(label, label))}</span>')
+    if not bits:
+        return ""
+    return '<div class="ans-checks">' + "".join(bits) + "</div>"
 
 
 CUT_OFF_TITLE = ("Ollama ended this answer with done_reason=length: it reached the app's token cap or the context "

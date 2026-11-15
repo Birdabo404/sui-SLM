@@ -33,6 +33,7 @@
   --c-ok:var(--c-data);                   /* retrieval cleared the threshold */
   --c-idk:oklch(0.7 0.03 258);            /* abstained */
   --c-danger:oklch(0.72 0.14 25);
+  --c-caution:oklch(0.83 0.135 78);       /* worth a look, not an error: star amber, 10:1 on surface */
   --c-star:#F5B942;                       /* the star's own gold, same in both themes */
   --h-text:var(--c-text); --h-text-2:var(--c-text-2); --h-accent:var(--c-star);
   --shadow-float:0 1px 0 oklch(1 0 0 / 0.04) inset,0 10px 30px -12px oklch(0.08 0.04 260 / 0.7);
@@ -74,6 +75,7 @@
   --c-ok:var(--c-data);
   --c-idk:oklch(0.5 0.02 264);
   --c-danger:oklch(0.55 0.17 27);
+  --c-caution:oklch(0.5 0.12 62);         /* amber dark enough for text, 5.6:1 on white */
   --shadow-float:0 1px 2px oklch(0 0 0 / 0.04),0 8px 24px -12px oklch(0 0 0 / 0.12);
 }
 
@@ -396,6 +398,18 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 .stat.calc{border-color:transparent;background:transparent;padding:0 2px;font-variant-numeric:tabular-nums}
 .stat.na{border-style:dashed;border-color:var(--c-line-strong);background:transparent}
 .stat.warn{border-color:color-mix(in oklch,var(--c-danger) 55%,transparent);background:transparent;color:var(--c-danger)}
+.stat.cfg{border-style:dashed;border-color:var(--c-line-strong);background:transparent}
+/* under the metrics: which commands the excerpts never show, and the grounding score */
+.ans-checks{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-1) var(--s-2);margin-top:var(--s-2);
+  font:400 var(--fs-meta)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
+.ac-cmd,.ac-gr{display:inline-flex;flex-wrap:wrap;align-items:center;gap:4px;max-width:100%;min-height:22px;padding:1px 7px;
+  border:1px solid var(--c-line);border-radius:var(--r-xs);cursor:default}
+.ac-cmd.warn,.ac-gr.low{border-color:color-mix(in oklch,var(--c-caution) 55%,transparent);color:var(--c-caution)}
+.ac-cmd .ac-k{font-weight:600;margin-right:2px}
+.ac-cmd code{padding:0 4px;border-radius:3px;background:var(--c-raised);font:500 var(--fs-cap)/1.5 var(--f-mono);color:var(--c-text);overflow-wrap:anywhere}
+.ac-gr b{font-weight:600;color:var(--c-text);font-variant-numeric:tabular-nums}
+.ac-gr.wait{border-style:dashed}
+.ans-checks + .issue{margin-top:var(--s-2)}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 
 .idk-body{display:grid;grid-template-columns:24px 1fr;column-gap:var(--s-3);row-gap:var(--s-1)}
@@ -760,6 +774,7 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 [data-testid="stDialog"] [role="dialog"] button[aria-label="Close"]:hover{color:var(--c-text)}
 p.dlg-h{margin:var(--s-3) 0 var(--s-1);padding-bottom:var(--s-2);border-bottom:1px solid var(--c-line);font:600 var(--fs-cap)/1 var(--f-ui);color:var(--c-text-3);letter-spacing:.02em}
 p.dlg-note{margin:0 0 var(--s-2);font:400 var(--fs-cap)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
+p.dlg-note.warn{color:var(--c-caution)}
 .kv-list{display:flex;flex-direction:column;gap:6px;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui)}
 .kv{display:flex;justify-content:space-between;align-items:baseline;gap:var(--s-3);min-width:0}
 .kv .k{flex:none;color:var(--c-text-3)}

@@ -505,9 +505,11 @@ class PolarisRunLoopTests(unittest.TestCase):
         (reasoning,) = self.at.expander
         self.assertEqual(reasoning.label, "Show reasoning")
         self.assertIn("The excerpts show", reasoning.markdown[0].value)
-        answer = [m.value for m in self.at.markdown if m not in reasoning.markdown]
+        answer = [m.value for m in self.at.markdown if m not in reasoning.markdown and "ans-checks" not in m.value]
         self.assertFalse([m for m in answer if "excerpts" in m or "draft line" in m])
         self.assertEqual([c.value for c in self.at.code], ["chmod 600 <path/to/file>", "ls -l <path/to/file>"])
+        # The fake excerpt is just "tar", so neither command is in it.
+        self.assertIn("<code>chmod</code><code>ls</code>", self._html())
         self.assertEqual(self.store.load_chat(self._chat_id()).messages[1]["record"]["done_reason"], "stop")
         self.assertNotIn("cut off", self._html())
 
