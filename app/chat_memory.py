@@ -230,6 +230,27 @@ class ChatStore:
             messages=tuple(messages),
         )
 
+    def update_record(self, chat_id, ts, fields):
+        """Merge fields into the run record of the stored answer stamped ts, leaving every other message and the
+        chat's place in history as they are. Read and write share one write transaction, like append_messages.
+        Returns whether that answer was found."""
+        self._validate_id(chat_id)
+        with closing(self._connect()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            current = db.execute("SELECT messages FROM chats WHERE id = ?", (chat_id,)).fetchone()
+            if current is None:
+                raise KeyError(chat_id)
+            messages = json.loads(current["messages"])
+            found = [m["record"] for m in messages if (m.get("record") or {}).get("ts") == ts]
+            if not found:
+                return False
+            found[-1].update(fields)
+            db.execute(
+                "UPDATE chats SET messages = ? WHERE id = ?",
+                (json.dumps(messages, ensure_ascii=False, sort_keys=True, separators=(",", ":")), chat_id),
+            )
+        return True
+
     def delete_chat(self, chat_id):
         self._validate_id(chat_id)
         with closing(self._connect()) as db, db:

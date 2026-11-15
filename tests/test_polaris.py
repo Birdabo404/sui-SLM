@@ -31,6 +31,7 @@ from app.streaming import (
     OllamaStreamError,
     retrieval_chart,
 )
+from tests.backend_fake import PlainStreamError
 from app.models import ComparePick, ModelOption, compare_picks, default_compare_ids, model_options, modes_for, pair_compare_ids
 from app.engine import (
     OllamaInfo,
@@ -572,6 +573,8 @@ class HtmlTests(unittest.TestCase):
         self.assertNotIn("tldr/common/tar.md", panel.split("<details", 1)[0])
         self.assertIn("app <b>420</b> MB", panel)
         self.assertIn("ollama <b>2100</b> MB", panel)
+        self.assertIn('<details class="dbg"><summary>Raw scores</summary>', panel)
+        self.assertNotIn("Debug", panel)
         dbg = debug_rows_html(hits)
         self.assertIn("rrf 0.0500", dbg)
         self.assertIn("bm25 6.200", dbg)
@@ -1299,8 +1302,8 @@ class HistoryHelperTests(unittest.TestCase):
         self.assertEqual(DELETE_ASK, "Delete this chat? This can't be undone.")
 
 
-class _Interrupted(Exception):
-    pass
+class _Interrupted(BaseException):
+    """Like Streamlit's StopException and RerunException, a BaseException, so no `except Exception` swallows it."""
 
 
 class _SlowOllama(BaseHTTPRequestHandler):
@@ -1671,7 +1674,7 @@ class StopTests(unittest.TestCase):
         self.assertTrue(answer.cancelled.is_set())
         self.assertTrue(answer.closed)
         self.assertFalse(answer.worker_alive_after(1.0))
-        slot.error.assert_not_called()
+        slot.markdown.assert_not_called()
 
     def test_answer_record_catches_chat_cancelled(self):
         st, app_mod = self._app_with_mock_st()
@@ -1687,19 +1690,43 @@ class StopTests(unittest.TestCase):
         self.assertTrue(answer.closed)
 
     def test_a_stream_error_hides_protocol_details_and_is_not_a_connection_failure(self):
+        html, _ = self._failed_card(OllamaStreamError("model 'm' not found"))
+        self.assertIn("response the app could not use", html)
+        self.assertNotIn("model 'm' not found", html)
+        self.assertNotIn("Could not reach", html)
+        self.assertNotIn("isn&#x27;t running", html)
+
+    def _failed_card(self, error):
         st, app_mod = self._app_with_mock_st()
         slot = MagicMock()
-        answer = _BlockingAnswer(error=OllamaStreamError("model 'm' not found"))
+        answer = _BlockingAnswer(error=error)
         with patch.object(app_mod, "stream_answer_question", return_value=answer), \
-                patch.object(app_mod, "_model_info", return_value=None):
+                patch.object(app_mod, "_model_info", return_value=None), patch("app.issues.backend", None):
             rec, run = self._answer(app_mod, slot)
         self.assertIsNone(rec)
         self.assertEqual(run["state"], "error")
-        message = slot.error.call_args.args[0]
-        self.assertIn("response the app could not use", message)
-        self.assertNotIn("model 'm' not found", message)
-        self.assertNotIn("Could not reach", message)
         self.assertTrue(answer.closed)
+        slot.error.assert_not_called()
+        (html,) = slot.markdown.call_args.args
+        return html, st.session_state.last_issue
+
+    def test_a_model_not_found_in_the_stream_names_the_command_not_a_connection_failure(self):
+        html, issue = self._failed_card(PlainStreamError("model 'm' not found"))
+        self.assertEqual(issue.kind, "ollama_model_missing")
+        self.assertIn("m isn&#x27;t installed", html)
+        self.assertIn("<code>ollama pull m</code>", html)
+        self.assertNotIn("isn&#x27;t running", html)
+
+    def test_another_stream_error_says_ollama_returned_an_error(self):
+        html, issue = self._failed_card(PlainStreamError("Ollama returned invalid NDJSON"))
+        self.assertEqual(issue.kind, "ollama_response_error")
+        self.assertIn("Ollama returned invalid NDJSON", html)
+
+    def test_any_other_exception_is_a_card_not_a_traceback(self):
+        html, issue = self._failed_card(KeyError("eval_count"))
+        self.assertEqual(issue.kind, "unexpected")
+        self.assertIn("KeyError while answering", html)
+        self.assertNotIn("Traceback", html)
 
     def test_loader_is_sent_once_while_waiting_for_the_first_chunk(self):
         st, app_mod = self._app_with_mock_st()
@@ -1810,13 +1837,24 @@ class HelperTests(unittest.TestCase):
         self.assertIn("I don&#x27;t know.", html)
 
     def test_cut_off_only_when_ollama_says_length(self):
-        self.assertIn("cut off at a length limit", cut_off_html({"done_reason": "length"}))
+        self.assertIn("answer cut off at the length limit", cut_off_html({"done_reason": "length"}))
         for reason in ("stop", None, ""):
             self.assertEqual(cut_off_html({"done_reason": reason}), "")
         self.assertIn("cut off", metrics_html({"done_reason": "length", "mode": "base"}))
         self.assertEqual(build_run_record({"done_reason": "length", "mode": "base"})["done_reason"], "length")
         self.assertIsNone(build_run_record({"mode": "base"})["done_reason"])
         self.assertIn("done_reason", EXPORT_FIELDS)
+        self.assertIn("token cap", cut_off_html({"done_reason": "length"}))
+
+    def test_compare_cards_say_which_side_was_cut_off(self):
+        html = compare_compact_html({"mode": "base", "answer": "Use `tar`.", "done_reason": "length"},
+                                    {"mode": "cot", "answer": "Use `tar -x`.", "done_reason": "stop"})
+        self.assertEqual(html.count("answer cut off at the length limit"), 1)
+
+    def test_an_abstention_says_why_under_the_unchanged_text(self):
+        html = idk_card_html({"answer": ABSTAIN}, "No documents were retrieved for this question.")
+        self.assertIn('<p class="idk-why">No documents were retrieved for this question.</p>', html)
+        self.assertNotIn("idk-why", idk_card_html({"answer": ABSTAIN}))
 
     def test_max_dense(self):
         self.assertIsNone(max_dense([]))

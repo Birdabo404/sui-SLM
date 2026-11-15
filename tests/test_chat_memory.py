@@ -306,6 +306,22 @@ class ChatStoreTests(unittest.TestCase):
         self.assertEqual(self.store.load_chat(chat.chat_id), second)
         self.assertEqual(self.store.list_chats()[0].turn_count, 2)
 
+    def test_update_record_merges_into_one_answer_and_keeps_the_chat_in_place(self):
+        chat = self.store.new_chat()
+        self.store.append_messages(chat.chat_id, [
+            {"role": "user", "content": "q1"}, {"role": "assistant", "record": {"answer": "a1", "ts": "t1"}},
+            {"role": "user", "content": "q2"}, {"role": "assistant", "record": {"answer": "a2", "ts": "t2"}},
+        ])
+        before = self.store.load_chat(chat.chat_id)
+        self.assertTrue(self.store.update_record(chat.chat_id, "t1", {"grounding": {"score": 0.8}}))
+        after = self.store.load_chat(chat.chat_id)
+        self.assertEqual(after.messages[1]["record"], {"answer": "a1", "ts": "t1", "grounding": {"score": 0.8}})
+        self.assertEqual(after.messages[2:], before.messages[2:])
+        self.assertEqual((after.updated_at, after.title), (before.updated_at, before.title))
+        self.assertFalse(self.store.update_record(chat.chat_id, "t9", {"grounding": {}}))
+        with self.assertRaises(KeyError):
+            self.store.update_record("0" * len(chat.chat_id), "t1", {})
+
     def test_append_stamps_updated_at_while_it_holds_the_write_lock(self):
         chat = self.store.new_chat()
         probes = []

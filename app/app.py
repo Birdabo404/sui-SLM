@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Offline Streamlit chat app for the CCIS Linux lab assistant."""
+import logging
 import os
 import queue
 import sqlite3
@@ -20,6 +21,7 @@ import streamlit as st
 
 from app.answer_format import app_messages, parse_answer, safe_markdown
 from app.chat_memory import ChatStore, build_chat_context
+from app.command_check import check as check_commands
 from app.engine import (
     BASE_MODEL,
     DEFAULT_INDEX,
@@ -38,11 +40,39 @@ from app.engine import (
     uses_rag,
     warm_model,
 )
+from app.enhanced import (
+    CONFIG_LABELS,
+    ENHANCED,
+    FROZEN,
+    GROUNDING_MODEL,
+    NOT_EVALUATED,
+    Unavailable,
+    config_for,
+    excerpts_of,
+    ground,
+    grounding_backend,
+)
+from app.issues import (
+    COMPLETE,
+    Check,
+    Issue,
+    abstain_note,
+    answer_status,
+    checks_html,
+    hf_cached,
+    index_missing,
+    issue_for_error,
+    issue_from_dict,
+    issue_html,
+    load_index,
+    model_missing,
+    offline_checks,
+    ollama_down,
+)
 from app.models import (
     compare_picks,
     installed_names,
     is_installed,
-    missing_text,
     model_options,
     modes_for,
     option_named,
@@ -60,6 +90,7 @@ from app.polaris import (
     REASONING_NOTE,
     SCORES_NOTE,
     RateTrace,
+    answer_checks_html,
     avg_latency,
     best_match_html,
     build_run_record,
@@ -114,12 +145,14 @@ from app.polaris import (
 from app.streaming import ChatCancelled, stream_answer_question
 from shared.frozen import format_threshold, load_frozen
 
+log = logging.getLogger("polaris")
+
 
 @st.cache_resource(show_spinner=False)
 def load_retriever(index_dir):
     from rag.query_hybrid import HybridRetriever
 
-    return HybridRetriever(index_dir)
+    return load_index(index_dir, HybridRetriever)
 
 
 @st.cache_data(ttl=15, show_spinner=False)
@@ -140,6 +173,11 @@ def _network_online():
 @st.cache_data(ttl=60, show_spinner=False)
 def _chunk_count(index_dir):
     return index_chunk_count(index_dir)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _embed_cached():
+    return hf_cached()
 
 
 @st.cache_resource(show_spinner=False)
@@ -307,6 +345,8 @@ def _init_session():
     st.session_state.setdefault("mode", "full")
     st.session_state.setdefault("compare", False)
     st.session_state.setdefault("model_pick", BASE_MODEL)
+    st.session_state.setdefault("config_mode", FROZEN)
+    st.session_state.setdefault("grounding_enabled", False)
     st.session_state.setdefault("chat", _chat_state())
     _session_git_commit()
     if "tabs" not in st.session_state:
@@ -324,14 +364,14 @@ def _installed_names():
 
 
 def _still_missing(option, names):
-    """The not-installed message for option, or None. A cached "missing" is checked once more against Ollama, so a
+    """The not-installed issue for option, or None. A cached "missing" is checked once more against Ollama, so a
     model created a moment ago is picked up without waiting for the cache."""
     if is_installed(option.name, names) is not False:
         return None
     _installed_names.clear()
     if is_installed(option.name, _installed_names()) is not False:
         return None
-    return missing_text(option)
+    return model_missing(option.name, option.create)
 
 
 def _compare_pair(options):
@@ -405,6 +445,9 @@ def run_polaris():
         with st.container(key="landing"):
             st.markdown(empty_hero_html(), unsafe_allow_html=True)
             _render_composer("landing", **composer)
+            blocker = _start_blocker(status, compare_on, left, right)
+            if blocker is not None:
+                st.markdown(issue_html(blocker, compact=True), unsafe_allow_html=True)
             _render_examples()
         return
 
@@ -448,6 +491,9 @@ def run_polaris():
         rail.foot.empty()
         mark(generating=False)
     rail.refresh()
+    queued = st.session_state.pop("grounding_queue", [])
+    if queued:
+        _ground_answers(queued, chat)
 
 
 def _answer_turn(question, option, mode, compare_on, left, right, index_dir, *, monitor, names, context=None):
@@ -458,19 +504,23 @@ def _answer_turn(question, option, mode, compare_on, left, right, index_dir, *, 
     if not compare_on:
         missing = _still_missing(option, names)
         if missing:
-            slot.error(missing)
-            st.session_state.messages.append({"role": "assistant", "error": missing})
+            _show_failed_turn(slot, missing)
             return False
 
     need_rag = (uses_rag(left.mode) or uses_rag(right.mode)) if compare_on else uses_rag(mode)
     retriever = None
     if need_rag:
         if not index_ok(index_dir):
-            message = f"No index at {index_dir}. Fetch the corpus and run rag/build_index.py first."
-            slot.error(message)
-            st.session_state.messages.append({"role": "assistant", "error": message})
+            # Nothing answers without Ollama, so that comes first; names is None when it couldn't be asked.
+            down = names is None and not ollama_reachable()
+            _show_failed_turn(slot, ollama_down(OLLAMA_HOST) if down else index_missing(index_dir))
             return False
-        retriever = _retriever_with_loader(index_dir, slot)
+        try:
+            retriever = _retriever_with_loader(index_dir, slot)
+        except Exception as e:
+            log.warning("index %s did not load", index_dir, exc_info=e)
+            _show_failed_turn(slot, issue_for_error(e, host=OLLAMA_HOST, stage="load", index_dir=index_dir))
+            return False
 
     if compare_on:
         slot.empty()
@@ -495,11 +545,86 @@ def _answer_turn(question, option, mode, compare_on, left, right, index_dir, *, 
     if rec is None:
         if st.session_state.pop("last_cancelled", False):
             return False
-        st.session_state.messages.append({"role": "assistant", "error": st.session_state.pop("last_error", "")})
+        st.session_state.messages.append(_failed_turn(_pop_issue()))
         return False
     st.session_state.messages.append({"role": "assistant", "record": rec})
     view.finish(rec)
     return True
+
+
+def _start_blocker(status, compare_on, left, right):
+    """What would stop the next question before it's asked: Ollama down, the picked model missing, or no index for a
+    RAG mode. None when the machine is ready."""
+    if not status["up"]:
+        return ollama_down(OLLAMA_HOST)
+    picks = [(left.option, left.mode), (right.option, right.mode)] if compare_on else [(status["picked"], status["mode"])]
+    for option, _ in picks:
+        if is_installed(option.name, status["names"]) is False:
+            return model_missing(option.name, option.create)
+    if any(uses_rag(mode) for _, mode in picks) and not index_ok(status["index_dir"]):
+        return index_missing(status["index_dir"])
+    return None
+
+
+def _start_checks(status):
+    index_dir = status["index_dir"]
+    present = index_ok(index_dir)
+    picked = status["picked"]
+    return offline_checks(
+        host=OLLAMA_HOST,
+        ollama_up=status["up"],
+        model=picked.name,
+        installed=None if status["names"] is None else is_installed(picked.name, status["names"]) is not False,
+        create=picked.create,
+        index_dir=index_dir,
+        index_present=present,
+        chunks=_chunk_count(index_dir) if present else 0,
+        embed_cached=_embed_cached(),
+        online=status["online"],
+        extra=_enhanced_checks(),
+    )
+
+
+def _enhanced_checks():
+    """With the grounding score on, the model it loads from the local cache. Looks at the folder only, like the
+    MiniLM row."""
+    if not _grounding_on():
+        return ()
+    cached = _hf_cached(GROUNDING_MODEL)
+    return (Check("Grounding model", cached,
+                  f"{GROUNDING_MODEL.split('/')[-1]} cached locally" if cached else f"{GROUNDING_MODEL} not cached",
+                  "" if cached else "cache it once while online (README, Enhanced)"),)
+
+
+def _grounding_on():
+    """Enhanced is picked, the grounding score is switched on, and app/grounding.py is in this build. Imports
+    app.grounding only once the first two hold."""
+    if st.session_state.get("config_mode") != ENHANCED or not st.session_state.get("grounding_enabled"):
+        return False
+    try:
+        grounding_backend()
+    except Unavailable:
+        return False
+    return True
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _hf_cached(repo_id):
+    return hf_cached(repo_id)
+
+
+def _failed_turn(issue):
+    """A failed answer as kept in the thread and in history: the plain text chat memory reads, and the card."""
+    return {"role": "assistant", "error": issue.text(), "issue": issue.as_dict()}
+
+
+def _show_failed_turn(slot, issue):
+    slot.markdown(issue_html(issue), unsafe_allow_html=True)
+    st.session_state.messages.append(_failed_turn(issue))
+
+
+def _pop_issue():
+    return st.session_state.pop("last_issue", None) or Issue("failed", "That answer failed", "No reason was given.")
 
 
 def _retriever_with_loader(index_dir, slot):
@@ -770,6 +895,10 @@ def _sync_pick(key, target):
         st.session_state[target] = picked
 
 
+def _sync_flag(key, target):
+    st.session_state[target] = bool(st.session_state.get(key))
+
+
 def _run_controls(status, compare_on, left, right, suffix, busy):
     options, names = status["options"], status["names"]
     st.markdown('<p class="side-h">Run</p>', unsafe_allow_html=True)
@@ -828,6 +957,39 @@ def _compare_pickers(options, names, left, right, suffix, busy):
                  args=(f"cmp-right-config{suffix}", "cmp_right_pick"), disabled=busy)
 
 
+FROZEN_NOTE = "Exactly what the thesis eval graded: hybrid retrieval, k=5, and the 0.30 dense-similarity threshold."
+ENHANCED_NOTE = ("Answers are retrieved and generated exactly as in the evaluated config. Enhanced only allows "
+                 "optional checks after a +RAG answer: each is off until you switch it on, and each is "
+                 f"{NOT_EVALUATED}.")
+ENHANCED_MISSING_NOTE = ("This build has no optional checks (app/grounding.py can't be imported), so Enhanced answers "
+                         "are the same as the evaluated config's.")
+GROUNDING_HELP = ("Off by default; whether it stays is undecided. After a +RAG answer finishes, a local HHEM model "
+                  "scores how well its excerpts support it, from 0 to 1. Loads the model the first time; the answer "
+                  "is shown first and never waits for it.")
+
+
+def _config_settings():
+    """The answer config: the evaluated one by default, or Enhanced with an optional grounding score. Only reading
+    whether grounding is available imports app.grounding, and only once Enhanced is picked."""
+    st.markdown('<p class="dlg-h">Answer config</p>', unsafe_allow_html=True)
+    configs = [FROZEN, ENHANCED]
+    current = st.session_state.get("config_mode", FROZEN)
+    picked = st.radio("Answer config", configs, index=configs.index(current) if current in configs else 0,
+                      format_func=CONFIG_LABELS.get, key="config-pick", horizontal=True,
+                      label_visibility="collapsed", on_change=_sync_pick, args=("config-pick", "config_mode"))
+    if picked != ENHANCED:
+        st.markdown(f'<p class="dlg-note">{escape(FROZEN_NOTE)}</p>', unsafe_allow_html=True)
+        return
+    try:
+        grounding_backend()
+    except Unavailable:
+        st.markdown(f'<p class="dlg-note warn">{escape(ENHANCED_MISSING_NOTE)}</p>', unsafe_allow_html=True)
+        return
+    st.markdown(f'<p class="dlg-note">{escape(ENHANCED_NOTE)}</p>', unsafe_allow_html=True)
+    st.toggle("Grounding score · experimental", value=bool(st.session_state.get("grounding_enabled")),
+              key="grounding-pick", help=GROUNDING_HELP, on_change=_sync_flag, args=("grounding-pick", "grounding_enabled"))
+
+
 @st.dialog("Settings", width="large")
 def _settings_dialog(status):
     records = st.session_state.get("run_records") or []
@@ -838,6 +1000,9 @@ def _settings_dialog(status):
     loaded = index_ok(index_dir)
     chunks = _chunk_count(index_dir) if loaded else 0
     sha = st.session_state.get("git_sha", "")
+    _config_settings()
+    st.markdown('<p class="dlg-h">Offline check</p>', unsafe_allow_html=True)
+    st.markdown(checks_html(_start_checks(status)), unsafe_allow_html=True)
     session_col, system_col = st.columns(2, gap="large")
     with session_col:
         st.markdown('<p class="dlg-h">Session</p>', unsafe_allow_html=True)
@@ -872,7 +1037,6 @@ def _settings_dialog(status):
                     ("Chunks", f"{chunks:,}" if loaded else "not loaded"),
                     ("IDK threshold", f"cos {format_threshold(status['frozen']['threshold'])}"),
                     ("Top-k", str(status["frozen"]["k"])),
-                    ("Network", "connected" if status["online"] else "offline"),
                     ("Warm-up", warm_label(st.session_state.get("warmed"))),
                     ("Commit", sha[:7] if sha else "—"),
                 ]
@@ -952,6 +1116,9 @@ def _stream_text(events, on_event, heartbeat=_check_for_stop, tick=0.2, every=0.
         except queue.Empty:
             kind, value = None, None
         if kind == "error":
+            if pending:
+                # What arrived before the failure counts, so its message can say how far the answer got.
+                yield "".join(pending)
             raise value
         if kind == "text":
             pending.append(value)
@@ -1021,12 +1188,6 @@ class _Monitor:
         self.slot.markdown(monitor_html(views, streaming=streaming), unsafe_allow_html=True)
 
 
-def _ollama_error_text(error):
-    if isinstance(error, requests.ConnectionError):
-        return f"Could not reach Ollama at {OLLAMA_HOST}. Start it with `ollama serve`.\n\n{error}"
-    return f"Ollama stopped this answer with an error.\n\n{error}"
-
-
 def _answer_record(
     question,
     mode,
@@ -1049,14 +1210,15 @@ def _answer_record(
     run = monitor.begin(side)
     missing = _still_missing(option, names)
     if missing:
-        st.session_state.last_error = missing
-        monitor.end(run, "error")
-        if show_error:
-            slot.error(missing)
-        else:
-            slot.empty()
+        _record_failure(missing, run, slot, monitor, show_error)
         return None, None
     events = queue.Queue()
+    grounding = config_for(st.session_state.get("config_mode"), uses_rag(mode)) == ENHANCED and _grounding_on()
+    extra = {}
+    if grounding:
+        # The score's model loads into this process, so later rows' RSS can include it. Same columns, so the log
+        # keeps its header.
+        extra["extra_log"] = {"config": config_id(option.key, mode) + "+grounding"}
     answer = stream_answer_question(
         question,
         mode,
@@ -1070,9 +1232,12 @@ def _answer_record(
         messages_fn=partial(app_messages, step_note=context.note_for(side) if context is not None else ""),
         on_retrieval=lambda chart: events.put(("retrieval", chart)),
         on_progress=lambda live: events.put(("progress", live)),
+        **extra,
     )
     worker = threading.Thread(target=_pump, args=(answer, events), daemon=True)
     done = False
+    text = ""
+    retrieving = uses_rag(mode)
     try:
         with slot.container(key=f"live-{key}"):
             view = _AnswerView(mode, tag)
@@ -1080,10 +1245,11 @@ def _answer_record(
         weak = False
 
         def on_event(kind, value):
-            nonlocal weak
+            nonlocal weak, retrieving
             if kind == "retrieval":
+                retrieving = False
                 monitor.retrieval(run, value)
-                weak = value.weak
+                weak = answer_status(value, value.rows, value.weak) != COMPLETE
                 if weak:
                     # No generation: the abstain card is drawn when the turn finishes, so the cube stops here.
                     view.stop_loading()
@@ -1093,7 +1259,6 @@ def _answer_record(
             monitor.progress(run, value)
 
         worker.start()
-        text = ""
         for piece in _stream_text(events, on_event):
             if weak:
                 continue
@@ -1106,14 +1271,13 @@ def _answer_record(
         monitor.end(run, "stopped")
         slot.empty()
         return None, None
-    except requests.RequestException as e:
-        message = _ollama_error_text(e)
-        st.session_state.last_error = message
-        monitor.end(run, "error")
-        if show_error:
-            slot.error(message)
-        else:
-            slot.empty()
+    except Exception as e:
+        # Anything raised while answering ends as a card with a next step; the traceback goes to the terminal.
+        issue = issue_for_error(e, host=OLLAMA_HOST, partial_chars=len(text), index_dir=index_dir,
+                                model=option.name, create=option.create,
+                                stage="retrieve" if retrieving else "answer")
+        log.warning("answer failed (%s)", issue.kind, exc_info=e)
+        _record_failure(issue, run, slot, monitor, show_error)
         return None, None
     finally:
         if not done:
@@ -1123,11 +1287,71 @@ def _answer_record(
         if not worker.is_alive():
             answer.close()
     rec = build_run_record(result, index_path=index_dir)
+    rec["status"] = answer_status(result, result.get("hits"), rec["abstained"])
+    rec["abstained"] = rec["status"] != COMPLETE
+    # What this answer ran: generation is the evaluated config's either way, so only an Enhanced check makes it
+    # an Enhanced answer.
+    rec["config_mode"] = ENHANCED if grounding else FROZEN
+    hits = result.get("hits") or []
+    if hits and not rec["abstained"]:
+        shown = _shown_markdown(rec["answer"], mode, len(hits))
+        excerpts = excerpts_of(hits)
+        rec["command_check"] = check_commands(shown, excerpts).as_dict()
+        if grounding:
+            st.session_state.setdefault("grounding_queue", []).append((rec, view, shown, excerpts))
     monitor.end(run, "done", rec)
     st.session_state.setdefault("live_traces", {})[key] = run["trace"].frozen()
     st.session_state.run_records.append(rec)
     st.session_state.warmed = True
     return rec, view
+
+
+def _shown_markdown(answer, mode, n_hits):
+    """The finished answer as its card shows it, reasoning left out and loose commands in code blocks."""
+    parsed = parse_answer(answer, mode, n_hits=n_hits)
+    return "\n\n".join(f"```{b.lang or 'bash'}\n{b.text}\n```" if b.kind == "code" else b.text
+                         for b in parsed.blocks)
+
+
+def _ground_answers(queued, chat):
+    """Score each finished answer's grounding after the turn, on a worker thread: the answer is already shown and
+    stored, and a new question or Stop still interrupts this run while the model loads or scores. The worker writes
+    the score to the record and to history itself, so it is kept even if this run ends first."""
+    for rec, view, answer, excerpts in queued:
+        view.show_checks(rec, grounding_pending=True)
+        worker = threading.Thread(target=_ground_into, args=(rec, answer, excerpts, chat), daemon=True)
+        worker.start()
+        while worker.is_alive():
+            worker.join(timeout=0.2)
+            _check_for_stop()
+        view.show_checks(rec)
+
+
+def _ground_into(rec, answer, excerpts, chat):
+    """Makes no st call: it runs on a worker thread."""
+    try:
+        rec["grounding"] = ground(answer, excerpts)
+    except ValueError:
+        return
+    except Exception as e:
+        issue = issue_for_error(e, host=OLLAMA_HOST, stage="ground")
+        log.warning("grounding failed (%s)", issue.kind, exc_info=e)
+        rec["grounding"] = {"issue": issue.as_dict()}
+    if chat.get("id") is None:
+        return
+    try:
+        ChatStore().update_record(chat["id"], rec.get("ts"), {"grounding": rec["grounding"]})
+    except (KeyError, sqlite3.Error, OSError) as e:
+        log.warning("grounding score not saved to history (%s)", type(e).__name__)
+
+
+def _record_failure(issue, run, slot, monitor, show_error):
+    st.session_state.last_issue = issue
+    monitor.end(run, "error")
+    if show_error:
+        slot.markdown(issue_html(issue), unsafe_allow_html=True)
+    else:
+        slot.empty()
 
 
 def _run_compare(question, left, right, retriever, index_dir, *, monitor, names=None, context=None):
@@ -1215,7 +1439,8 @@ def _side_outcome(mode, model):
     """Why a compare side has no record, kept with its config so a replay can say which side it was."""
     if st.session_state.pop("last_cancelled", False):
         return {"mode": mode, "model": model, "state": "cancelled"}
-    return {"mode": mode, "model": model, "state": "error", "error": st.session_state.pop("last_error", "")}
+    issue = _pop_issue()
+    return {"mode": mode, "model": model, "state": "error", "error": issue.text(), "issue": issue.as_dict()}
 
 
 def _keep_compare(messages, message, recs, unanswered):
@@ -1235,7 +1460,8 @@ def _keep_compare(messages, message, recs, unanswered):
         if not any(kept is message for kept in messages):
             messages.append(message)
     elif not any(side["state"] == "cancelled" for side in unanswered):
-        messages.append({"role": "assistant", "error": unanswered[0]["error"] or unanswered[1]["error"]})
+        failed = unanswered[0] if unanswered[0].get("error") else unanswered[1]
+        messages.append({"role": "assistant", "error": failed.get("error", ""), "issue": failed.get("issue")})
 
 
 def _render_unanswered_side(side, key, model=""):
@@ -1244,7 +1470,8 @@ def _render_unanswered_side(side, key, model=""):
         if side.get("state") == "cancelled":
             st.markdown(cancelled_side_html(), unsafe_allow_html=True)
         else:
-            st.error(side.get("error") or "That answer failed.")
+            st.markdown(issue_html(issue_from_dict(side.get("issue"), side.get("error")), compact=True),
+                        unsafe_allow_html=True)
 
 
 def _replay_message(msg, index, compact_compare=False):
@@ -1277,7 +1504,7 @@ def _replay_message(msg, index, compact_compare=False):
         _render_card(rec, key=f"answer-{index}")
         return
     if "error" in msg:
-        st.error(msg["error"] or "That answer failed.")
+        st.markdown(issue_html(issue_from_dict(msg.get("issue"), msg.get("error"))), unsafe_allow_html=True)
         return
     st.markdown(msg.get("content") or "")
 
@@ -1397,7 +1624,7 @@ class _AnswerView:
         abstained = bool(record.get("abstained"))
         if abstained:
             self._show_reasoning("")
-            self._show_parts([("html", idk_card_html(record))])
+            self._show_parts([("html", idk_card_html(record, abstain_note(record)))])
         else:
             parsed = parse_answer(record.get("answer") or "", mode, n_hits=len(hits))
             self.show(parsed)
@@ -1414,6 +1641,19 @@ class _AnswerView:
             elif align_slots:
                 st.markdown(empty_slot_html("best"), unsafe_allow_html=True)
             st.markdown(metrics_html(record), unsafe_allow_html=True)
+            self._checks = st.empty()
+        self.show_checks(record)
+
+    def show_checks(self, record, grounding_pending=False):
+        """The command check and grounding score under the metrics, redrawn when the score arrives."""
+        grounding = record.get("grounding") or {}
+        html = answer_checks_html(record, grounding_pending=grounding_pending)
+        if grounding.get("issue") and not grounding_pending:
+            html += issue_html(issue_from_dict(grounding["issue"]), compact=True)
+        if html:
+            self._checks.markdown(html, unsafe_allow_html=True)
+        else:
+            self._checks.empty()
 
 
 if __name__ == "__main__":
