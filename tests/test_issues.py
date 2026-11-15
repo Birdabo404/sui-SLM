@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
-"""Which card each failure gets. The backend's own error types are stood in for by local classes with the same names
-and bases, so the cards are right before and after those types exist."""
+"""Which card each failure gets, both with app/backend.py (PR #20) present, stood in for by tests/backend_fake.py
+with the same classes, codes and messages, and without it, where plain requests and socket errors are classified."""
+import importlib
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from app import issues
 from app.issues import (
     Issue,
+    abstain_note,
+    answer_status,
     checks_html,
     checks_summary,
     hf_cached,
@@ -19,43 +24,16 @@ from app.issues import (
     issue_for_error,
     issue_from_dict,
     issue_html,
+    load_index,
+    model_missing,
     offline_checks,
+    ollama_down,
 )
 from app.streaming import OllamaStreamError
+from tests import backend_fake
 
+fake = backend_fake.module()
 HOST = "http://127.0.0.1:11434"
-
-
-class OllamaUnavailable(requests.ConnectionError):
-    pass
-
-
-class OllamaTimedOut(requests.Timeout):
-    pass
-
-
-class OllamaDisconnected(requests.ConnectionError):
-    pass
-
-
-class OllamaModelMissing(requests.RequestException):
-    pass
-
-
-class AppRetrievalError(RuntimeError):
-    pass
-
-
-class IndexLoadError(AppRetrievalError):
-    pass
-
-
-class EmbeddingModelError(AppRetrievalError):
-    pass
-
-
-class RetrievalQueryError(AppRetrievalError):
-    pass
 
 
 def kind(error, **kw):
@@ -70,34 +48,73 @@ def wrapped(error, cause):
         return e
 
 
-class ClassifyTodayTests(unittest.TestCase):
-    """The plain requests and socket errors app.streaming raises now."""
+class WithoutBackend(unittest.TestCase):
+    def setUp(self):
+        patcher = patch.object(issues, "backend", None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
-    def test_refused_before_any_text_is_ollama_down(self):
+
+class WithBackend(unittest.TestCase):
+    def setUp(self):
+        patcher = patch.object(issues, "backend", fake)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+
+class ImportTests(unittest.TestCase):
+    def test_without_app_backend_the_module_still_imports_and_uses_its_own_classification(self):
+        with patch.dict(sys.modules, {"app.backend": None}):
+            reloaded = importlib.reload(issues)
+            try:
+                self.assertIsNone(reloaded.backend)
+                self.assertEqual(reloaded.issue_for_error(requests.ConnectionError("refused"), host=HOST).kind,
+                                 "ollama_unavailable")
+            finally:
+                sys.modules.pop("app.backend", None)
+                importlib.reload(issues)
+
+    def test_with_app_backend_importable_the_module_picks_it_up(self):
+        with patch.dict(sys.modules, {"app.backend": fake}):
+            reloaded = importlib.reload(issues)
+            try:
+                self.assertIs(reloaded.backend, fake)
+            finally:
+                sys.modules.pop("app.backend", None)
+                importlib.reload(issues)
+
+
+class ClassifyWithoutBackendTests(WithoutBackend):
+    """The plain requests and socket errors app.streaming raises before PR #20."""
+
+    def test_refused_before_any_text_is_ollama_unavailable(self):
         issue = issue_for_error(requests.ConnectionError("[Errno 111] Connection refused"), host=HOST)
-        self.assertEqual((issue.kind, issue.fix), ("ollama_down", "ollama serve"))
+        self.assertEqual((issue.kind, issue.fix), ("ollama_unavailable", "ollama serve"))
         self.assertIn(HOST, issue.detail)
         self.assertNotIn("Errno", issue.text())
 
     def test_a_socket_timeout_wrapped_as_a_connection_error_is_a_timeout(self):
-        self.assertEqual(kind(wrapped(requests.ConnectionError("timed out"), TimeoutError("timed out"))), "timeout")
-        self.assertEqual(kind(wrapped(requests.ConnectionError("x"), TimeoutError())), "timeout")
-        self.assertEqual(kind(wrapped(requests.ConnectionError("x"), requests.ReadTimeout())), "timeout")
+        self.assertEqual(kind(wrapped(requests.ConnectionError("timed out"), TimeoutError("timed out"))),
+                         "ollama_timeout")
+        self.assertEqual(kind(wrapped(requests.ConnectionError("x"), TimeoutError())), "ollama_timeout")
+        self.assertEqual(kind(wrapped(requests.ConnectionError("x"), requests.ReadTimeout())), "ollama_timeout")
 
-    def test_a_connection_lost_after_text_arrived_is_a_drop(self):
+    def test_a_connection_lost_after_text_arrived_is_a_disconnect(self):
         issue = issue_for_error(requests.ConnectionError("Connection reset by peer"), host=HOST, partial_chars=1234)
-        self.assertEqual(issue.kind, "dropped")
+        self.assertEqual(issue.kind, "ollama_disconnected")
         self.assertIn("after 1,234 characters. The partial answer was not kept.", issue.detail)
 
-    def test_a_stream_without_its_terminal_record_is_a_drop(self):
-        self.assertEqual(kind(OllamaStreamError("Ollama stream ended without a terminal event")), "dropped")
+    def test_a_stream_without_its_terminal_record_is_a_disconnect(self):
+        self.assertEqual(kind(OllamaStreamError("Ollama stream ended without a terminal event")),
+                         "ollama_disconnected")
 
     def test_a_404_or_an_in_stream_not_found_is_the_missing_model_with_its_command(self):
-        for error in (requests.HTTPError('Ollama returned HTTP 404: {"error":"model \\"x\\" not found, try pulling it first"}'),
+        for error in (requests.HTTPError('Ollama returned HTTP 404: {"error":"model \\"x\\" not found"}'),
                       OllamaStreamError("model 'thesis-student' not found")):
             issue = issue_for_error(error, host=HOST, model="thesis-student",
                                     create="ollama create thesis-student -f Modelfile")
-            self.assertEqual((issue.kind, issue.fix), ("model_missing", "ollama create thesis-student -f Modelfile"))
+            self.assertEqual((issue.kind, issue.fix),
+                             ("ollama_model_missing", "ollama create thesis-student -f Modelfile"))
             self.assertEqual(issue.title, "thesis-student isn't installed")
             self.assertIn("kd/README.md", issue.hint)
 
@@ -109,15 +126,21 @@ class ClassifyTodayTests(unittest.TestCase):
 
     def test_another_http_error_shows_its_first_line_only(self):
         issue = issue_for_error(requests.HTTPError("Ollama returned HTTP 500: out of memory\nstack..."), host=HOST)
-        self.assertEqual((issue.kind, issue.detail), ("ollama_error", "Ollama returned HTTP 500: out of memory"))
+        self.assertEqual((issue.kind, issue.detail),
+                         ("ollama_response_error", "Ollama returned HTTP 500: out of memory"))
 
-    def test_the_rag_index_not_loaded_runtime_error_is_the_broken_index(self):
-        self.assertEqual(kind(RuntimeError("RAG index is not loaded"), index_dir="/x"), "index_broken")
+    def test_the_rag_index_not_loaded_runtime_error_is_an_unreadable_index(self):
+        self.assertEqual(kind(RuntimeError("RAG index is not loaded"), index_dir="/x"), "index_corrupt")
 
-    def test_an_error_while_searching_is_a_retrieval_failure(self):
-        self.assertEqual(kind(ValueError("bad"), retrieving=True), "retrieval_failed")
+    def test_a_load_failure_is_an_unreadable_index_or_the_missing_embedding_model(self):
+        self.assertEqual(kind(ValueError("bad sqlite"), stage="load", index_dir="/x"), "index_corrupt")
+        self.assertEqual(kind(OSError("We couldn't connect to huggingface.co"), stage="load"),
+                         "embedding_model_missing")
+
+    def test_an_error_while_searching_is_a_failed_query(self):
+        self.assertEqual(kind(ValueError("bad"), stage="retrieve"), "index_query_failed")
         # A transport error is still about Ollama, whatever stage it came from.
-        self.assertEqual(kind(requests.ConnectionError("refused"), retrieving=True), "ollama_down")
+        self.assertEqual(kind(requests.ConnectionError("refused"), stage="retrieve"), "ollama_unavailable")
 
     def test_anything_else_names_its_type_and_hides_its_message(self):
         issue = issue_for_error(KeyError("secret internals"), host=HOST)
@@ -125,35 +148,118 @@ class ClassifyTodayTests(unittest.TestCase):
         self.assertIn("KeyError", issue.detail)
         self.assertNotIn("secret internals", issue.text())
 
-
-class ClassifyBackendTypesTests(unittest.TestCase):
-    """The same cards for the backend's named error types."""
-
-    def test_each_named_type_gets_its_own_card(self):
-        for error, expected in (
-            (OllamaUnavailable("x"), "ollama_down"),
-            (OllamaTimedOut("x"), "timeout"),
-            (OllamaDisconnected("x"), "dropped"),
-            (OllamaModelMissing("x"), "model_missing"),
-            (IndexLoadError("x"), "index_broken"),
-            (EmbeddingModelError("x"), "embedding_missing"),
-            (RetrievalQueryError("x"), "retrieval_failed"),
-        ):
-            with self.subTest(type(error).__name__):
-                self.assertEqual(kind(error), expected)
-
-    def test_a_disconnect_is_a_drop_even_before_text_and_unavailable_never_is(self):
-        self.assertEqual(kind(OllamaDisconnected("x"), partial_chars=0), "dropped")
-        self.assertEqual(kind(OllamaUnavailable("x"), partial_chars=0), "ollama_down")
-
-    def test_a_subclass_of_a_named_type_is_named_too(self):
-        class SlowFirstToken(OllamaTimedOut):
-            pass
-
-        self.assertEqual(kind(SlowFirstToken("x")), "timeout")
+    def test_the_index_loads_through_the_factory_directly(self):
+        self.assertEqual(load_index("/idx", lambda path: ("loaded", path)), ("loaded", "/idx"))
 
 
-class CardTests(unittest.TestCase):
+class ClassifyWithBackendTests(WithBackend):
+    """app.backend's typed errors: a title for the code, its user_message exactly, never its detail."""
+
+    CODES = (
+        (fake.OllamaUnavailable, "ollama_unavailable"),
+        (fake.OllamaModelMissing, "ollama_model_missing"),
+        (fake.EmbeddingModelError, "embedding_model_missing"),
+        (fake.IndexMissingError, "index_missing"),
+        (fake.IndexLoadError, "index_corrupt"),
+        (fake.RetrievalQueryError, "index_query_failed"),
+        (fake.OllamaTimedOut, "ollama_timeout"),
+        (fake.OllamaDisconnected, "ollama_disconnected"),
+        (fake.OllamaResponseError, "ollama_response_error"),
+    )
+
+    def test_every_code_gets_its_own_title_and_the_user_message_as_written(self):
+        titles = set()
+        for cls, code in self.CODES:
+            with self.subTest(code):
+                error = cls("internal detail: /home/x/secret.sqlite3")
+                issue = issue_for_error(error, host=HOST, model="qwen3.5:2b", create="ollama pull qwen3.5:2b")
+                self.assertEqual(issue.kind, code)
+                self.assertEqual(issue.detail, error.user_message)
+                self.assertNotIn("secret", issue.text() + issue_html(issue))
+                self.assertNotIn("Traceback", issue_html(issue))
+                titles.add(issue.title)
+        self.assertEqual(len(titles), len(self.CODES))
+
+    def test_the_stage_does_not_override_a_typed_error(self):
+        self.assertEqual(kind(fake.OllamaUnavailable("x"), stage="load"), "ollama_unavailable")
+        self.assertEqual(kind(fake.IndexLoadError("x"), stage="answer"), "index_corrupt")
+
+    def test_the_missing_model_adds_the_exact_command_for_the_selected_model(self):
+        for create, hint in (("ollama create thesis-student -f Modelfile", "kd/README.md"),
+                             ("ollama pull qwen3.5:2b", "works offline")):
+            issue = issue_for_error(fake.OllamaModelMissing("404"), host=HOST, model=create.split()[2], create=create)
+            self.assertEqual(issue.fix, create)
+            self.assertIn(hint, issue.hint)
+            self.assertEqual(issue.title, f"{create.split()[2]} isn't installed")
+
+    def test_index_cards_add_the_build_command_and_others_add_nothing_that_contradicts(self):
+        self.assertIn("rag/build_index.py", issue_for_error(fake.IndexMissingError(), host=HOST).fix)
+        self.assertIn("rag/build_index.py", issue_for_error(fake.IndexLoadError(), host=HOST).fix)
+        self.assertIn("rag/build_index.py", issue_for_error(fake.RetrievalQueryError(), host=HOST).fix)
+        for cls in (fake.OllamaTimedOut, fake.OllamaResponseError, fake.EmbeddingModelError):
+            issue = issue_for_error(cls(), host=HOST)
+            self.assertEqual((issue.fix, issue.hint), ("", ""), cls.__name__)
+
+    def test_a_disconnect_says_how_much_was_discarded(self):
+        issue = issue_for_error(fake.OllamaDisconnected("eof"), host=HOST, partial_chars=4321)
+        self.assertIn("Discard the partial answer", issue.detail)
+        self.assertEqual(issue.hint, "The partial answer (4,321 characters) was discarded.")
+
+    def test_untyped_errors_still_fall_back_to_the_local_classification(self):
+        self.assertEqual(kind(KeyError("x")), "unexpected")
+        self.assertEqual(kind(requests.ConnectionError("refused")), "ollama_unavailable")
+
+    def test_pre_checks_use_the_backend_messages(self):
+        self.assertEqual(ollama_down(HOST).detail, fake.OllamaUnavailable().user_message)
+        self.assertEqual(index_missing("/x").detail, fake.IndexMissingError().user_message)
+        issue = model_missing("thesis-student", "ollama create thesis-student -f Modelfile")
+        self.assertEqual((issue.detail, issue.fix),
+                         (fake.OllamaModelMissing().user_message, "ollama create thesis-student -f Modelfile"))
+
+    def test_the_index_loads_through_the_backend_loader_so_failures_arrive_typed(self):
+        def broken(path):
+            raise ValueError("no such table: embeddings")
+
+        with tempfile.TemporaryDirectory() as idx:
+            loaded = load_index(idx, lambda path: ("ok", path))
+            self.assertIsInstance(loaded, fake.SafeRetriever)
+            with self.assertRaises(fake.IndexLoadError):
+                load_index(idx, broken)
+        with self.assertRaises(fake.IndexMissingError):
+            load_index("/nonexistent/index", broken)
+
+    def test_backticked_commands_in_the_message_render_as_code(self):
+        html = issue_html(issue_for_error(fake.OllamaUnavailable(), host=HOST))
+        self.assertIn("Start it with <code>ollama serve</code>, then try again.", html)
+
+
+class AbstainStatusTests(unittest.TestCase):
+    def test_the_backend_status_wins_over_the_local_reading(self):
+        class Chart:
+            status = fake.AnswerStatus.ABSTAIN_EMPTY_RETRIEVAL
+
+        self.assertEqual(answer_status(Chart(), [{"x": 1}], weak=False), "abstain_empty_retrieval")
+        self.assertEqual(answer_status({"status": "complete"}, [], weak=True), "complete")
+
+    def test_without_a_status_it_comes_from_the_hits_and_the_threshold_decision(self):
+        self.assertEqual(answer_status({}, [{"x": 1}], weak=False), "complete")
+        self.assertEqual(answer_status({}, [{"x": 1}], weak=True), "abstain_weak_retrieval")
+        self.assertEqual(answer_status(object(), [], weak=True), "abstain_empty_retrieval")
+
+    def test_the_note_is_the_status_message_with_the_backend_and_the_apps_words_without(self):
+        weak = {"status": "abstain_weak_retrieval", "threshold": 0.3, "hits": [{}]}
+        empty = {"status": "abstain_empty_retrieval", "hits": []}
+        with patch.object(issues, "backend", fake):
+            self.assertEqual(abstain_note(weak), fake.AnswerStatus("abstain_weak_retrieval").user_message)
+            self.assertEqual(abstain_note(empty), fake.AnswerStatus("abstain_empty_retrieval").user_message)
+            self.assertEqual(abstain_note({"status": "complete"}), "")
+        with patch.object(issues, "backend", None):
+            self.assertEqual(abstain_note(weak), "No retrieved chunk reached cosine 0.30, so the model wasn't asked.")
+            self.assertIn("Nothing was retrieved", abstain_note(empty))
+            self.assertIn("No retrieved chunk", abstain_note({"hits": [{}]}))
+
+
+class CardTests(WithoutBackend):
     def test_the_card_escapes_and_shows_the_command_as_code(self):
         html = issue_html(Issue("x", "A <b> title", "detail & more", fix="ollama pull a<b>", hint="then <i>"))
         self.assertIn('role="alert"', html)

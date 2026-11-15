@@ -40,14 +40,17 @@ from app.engine import (
     warm_model,
 )
 from app.issues import (
+    COMPLETE,
     Issue,
+    abstain_note,
+    answer_status,
     checks_html,
     hf_cached,
-    index_broken,
     index_missing,
     issue_for_error,
     issue_from_dict,
     issue_html,
+    load_index,
     model_missing,
     offline_checks,
     ollama_down,
@@ -134,7 +137,7 @@ log = logging.getLogger("polaris")
 def load_retriever(index_dir):
     from rag.query_hybrid import HybridRetriever
 
-    return HybridRetriever(index_dir)
+    return load_index(index_dir, HybridRetriever)
 
 
 @st.cache_data(ttl=15, show_spinner=False)
@@ -496,7 +499,7 @@ def _answer_turn(question, option, mode, compare_on, left, right, index_dir, *, 
             retriever = _retriever_with_loader(index_dir, slot)
         except Exception as e:
             log.warning("index %s did not load", index_dir, exc_info=e)
-            _show_failed_turn(slot, index_broken(index_dir, e))
+            _show_failed_turn(slot, issue_for_error(e, host=OLLAMA_HOST, stage="load", index_dir=index_dir))
             return False
 
     if compare_on:
@@ -1152,7 +1155,7 @@ def _answer_record(
             if kind == "retrieval":
                 retrieving = False
                 monitor.retrieval(run, value)
-                weak = value.weak
+                weak = answer_status(value, value.rows, value.weak) != COMPLETE
                 if weak:
                     # No generation: the abstain card is drawn when the turn finishes, so the cube stops here.
                     view.stop_loading()
@@ -1177,7 +1180,8 @@ def _answer_record(
     except Exception as e:
         # Anything raised while answering ends as a card with a next step; the traceback goes to the terminal.
         issue = issue_for_error(e, host=OLLAMA_HOST, partial_chars=len(text), index_dir=index_dir,
-                                model=option.name, create=option.create, retrieving=retrieving)
+                                model=option.name, create=option.create,
+                                stage="retrieve" if retrieving else "answer")
         log.warning("answer failed (%s)", issue.kind, exc_info=e)
         _record_failure(issue, run, slot, monitor, show_error)
         return None, None
@@ -1189,6 +1193,8 @@ def _answer_record(
         if not worker.is_alive():
             answer.close()
     rec = build_run_record(result, index_path=index_dir)
+    rec["status"] = answer_status(result, result.get("hits"), rec["abstained"])
+    rec["abstained"] = rec["status"] != COMPLETE
     monitor.end(run, "done", rec)
     st.session_state.setdefault("live_traces", {})[key] = run["trace"].frozen()
     st.session_state.run_records.append(rec)
@@ -1475,7 +1481,7 @@ class _AnswerView:
         abstained = bool(record.get("abstained"))
         if abstained:
             self._show_reasoning("")
-            self._show_parts([("html", idk_card_html(record))])
+            self._show_parts([("html", idk_card_html(record, abstain_note(record)))])
         else:
             parsed = parse_answer(record.get("answer") or "", mode, n_hits=len(hits))
             self.show(parsed)
