@@ -973,6 +973,60 @@ class InstallScriptTests(unittest.TestCase):
         self.assertIn("3.12, 3.13, and 3.14", combined)
         self.assertTrue(combined.startswith("Python 3.11.9") or r.stdout.startswith("Python 3.11.9"))
 
+    def test_disk_check_fails_before_installing_when_space_is_low(self):
+        with tempfile.TemporaryDirectory() as td:
+            env = self._fake_python(td, "Python 3.12.3")
+            fake_df = Path(td) / "df"
+            fake_df.write_text(
+                "#!/bin/sh\n"
+                "printf '%s\\n' "
+                "'Filesystem 1024-blocks Used Available Capacity Mounted on' "
+                "'/dev/fake 100000 90000 1024 99% /'\n",
+                encoding="utf-8",
+            )
+            fake_df.chmod(0o755)
+            env["SUI_SLM_MIN_FREE_KB"] = "4194304"
+            result = subprocess.run(
+                ["bash", str(ROOT / "install.sh"), "--check-disk"],
+                cwd=str(ROOT),
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("At least 4 GiB free is required", result.stderr)
+        self.assertIn("Python 3.12.3", result.stdout)
+
+    def test_offline_mode_fails_clearly_when_ollama_is_stopped(self):
+        with tempfile.TemporaryDirectory() as td:
+            env = self._fake_python(td, "Python 3.12.3")
+            fake_ollama = Path(td) / "ollama"
+            fake_ollama.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+            fake_ollama.chmod(0o755)
+            env["SUI_SLM_MIN_FREE_KB"] = "1"
+            result = subprocess.run(
+                ["bash", str(ROOT / "install.sh"), "--offline"],
+                cwd=str(ROOT),
+                env=env,
+                capture_output=True,
+                text=True,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Ollama is installed but not running", result.stderr)
+        self.assertNotIn("apt-get", result.stdout + result.stderr)
+        self.assertNotIn("pip install", result.stdout + result.stderr)
+
+    def test_unknown_install_option_is_rejected(self):
+        result = subprocess.run(
+            ["bash", str(ROOT / "install.sh"), "--surprise"],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Unknown option: --surprise", result.stderr)
+        self.assertIn("Usage:", result.stderr)
+
 
 class ImportTests(unittest.TestCase):
     def test_engine_and_prompt_import(self):
