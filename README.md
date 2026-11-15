@@ -57,6 +57,14 @@ On the T14, with Ubuntu and Python 3.12, 3.13 or 3.14 (`install.sh` checks and e
 | +RAG+CoT | +RAG with the step-by-step prompt. The default. |
 | Compare | Runs any two model and mode pairs one after the other and shows them side by side. |
 
+### Answer config: Evaluated or Enhanced
+
+Settings → Answer config has two choices. **Evaluated config (frozen)** is the default and is exactly what the thesis eval graded; in it the app never imports `app/grounding.py`. **Enhanced** retrieves and generates exactly the same way (hybrid retrieval, k=5, the 0.30 threshold, `think: false`, temperature 0.2) and only allows optional checks after a +RAG answer. None is on by default, and none is part of the reported eval.
+
+The one optional check is **Grounding score · experimental**. It is off by default and undecided, and it needs `app/grounding.py` (PR #28); without that file Settings says so and offers nothing. Switched on, it runs after an answer is shown and saved: a local HHEM-2.1-Open model scores how well the excerpts support the answer, from 0 to 1, with 0.5 and above reading "supported". The answer never waits for it, and a new question doesn't stop it from being saved. An answer it scored says "evaluated config + Enhanced checks" in its stats line, and its `answers.csv` row reads `<config>+grounding`, since the model loads into the app's process and later rows' RSS can include it. The model loads from the local Hugging Face cache only; `bash install.sh --enhanced` (PR #28) caches it once while online.
+
+In both configs, every +RAG answer that wasn't an abstention gets a small line under its stats: "N commands · all in the excerpts", or "Not in the excerpts" followed by each command or flag (`apt-fast`, `tar -j`) that appears in the answer's code but in none of the excerpts it was given. It is a presence check with no model: something listed may still be right, and something not listed may still be wrong.
+
 Every request sends `think: false` and `temperature` 0.2. Models: `qwen3.5:2b` (default base, `OLLAMA_MODEL`), `thesis-base-q4km`, and the KD student `thesis-student` (or `OLLAMA_DISTILLED_MODEL`), which runs +RAG+CoT only. The two thesis models are built with `ollama create` from the KD export (`kd/README.md`); the app never downloads, builds or substitutes a model.
 
 ## Troubleshooting
@@ -76,6 +84,8 @@ Every failure shows as a card in the chat: a title, what happened, and the next 
 | Ollama took too long (`ollama_timeout`) | No data from Ollama within the client's read timeout (300 s). Usually a model still loading or a busy CPU. | Ask again; if it repeats, restart Ollama. |
 | The answer stopped mid-stream (`ollama_disconnected`) | Ollama closed the stream before its final record. The partial answer is discarded, and the card says how many characters were. | `ollama ps` to check it is still running with the model loaded, then ask again. |
 | Ollama returned an error (`ollama_response_error`) | Any other error reply from Ollama. Without `app/backend.py` the card shows its first line. | Ask again; if it repeats, restart Ollama. |
+| The grounding model isn't on this machine (`grounding_model_unavailable`) | Grounding is on but HHEM isn't in the local cache, or it failed. A small card under the answer; the answer itself is kept. | Turn grounding off, or `bash install.sh --enhanced` once while online. |
+| The grounding check failed (`grounding_failed`) | Any other grounding error, without `app/backend.py`'s typed errors. The answer is kept; only the score is missing. | Ask again, or turn grounding off; the details are in the terminal. |
 | Something in the app failed (`unexpected`) | An unexpected exception; the card names its type only. | Ask again; the traceback is in the terminal. |
 
 The launcher itself prints "Ollama is not available. Install it or start `ollama serve`." when it can't start Ollama: install it, or start it by hand and run `sui-slm` again.
@@ -92,6 +102,9 @@ The launcher itself prints "Ollama is not available. Install it or start `ollama
 - The read timeout (300 s) is fixed in the client and can't be changed from the UI.
 - A long answer can stop at the length limit (an app-only token cap where the generation guard is in place, or the 4096-token context). The footer says so, but the rest of the answer is not fetched.
 - The old sidebar UI (`POLARIS_ENABLED=0`) still shows plain Streamlit error boxes.
+- The grounding score has no measured effect on answer accuracy, and HHEM tends to score correct command answers low on tldr excerpts. The first score also pays the model load. Its offline check row looks for the HHEM folder only, not HHEM's FLAN tokenizer.
+- The command check compares names, not meaning: it can't tell a wrong but documented flag from a right one, and it skips filters that read a pipe (`grep`, `sort`, `head`) and shell builtins.
+- A grounding score still computing when the next question is asked keeps running in the background beside that answer, sharing the CPU with it, and is saved to history when it finishes.
 
 ## How the app works
 
