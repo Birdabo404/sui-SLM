@@ -279,7 +279,8 @@ p.composer-cmp{margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsi
 .st-key-examples button:active{transform:scale(.96)}
 
 /* dock: the composer rides the bottom of the thread; the page fades under it instead of cutting off */
-div:has(> .st-key-composer-dock){position:sticky;bottom:0;z-index:20;padding:var(--s-6) 0 var(--s-4);margin-top:var(--s-4);
+/* above Streamlit's code copy buttons (z-index 101), which otherwise float over it as answers scroll under */
+div:has(> .st-key-composer-dock){position:sticky;bottom:0;z-index:110;padding:var(--s-6) 0 var(--s-4);margin-top:var(--s-4);
   background:linear-gradient(to bottom,transparent,var(--c-bg) var(--s-6))}
 
 /* ---------- thread ---------- */
