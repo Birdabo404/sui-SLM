@@ -13,6 +13,7 @@ from scripts.compare_enhanced import (
     load_jsonl,
     mode_summary,
     normalized_question,
+    placeholder_reported_paths,
     reciprocal_rank,
     refuse_reported_overlap,
     validate_dev_rows,
@@ -56,6 +57,12 @@ class DevBoundaryTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "DEV overlaps"):
             check_reported_questions(dev, (example,))
+
+    def test_placeholder_reported_set_is_identified(self):
+        self.assertEqual(
+            placeholder_reported_paths((DEFAULT_REPORTED_PATH,)),
+            [str(DEFAULT_REPORTED_PATH)],
+        )
 
     def test_dev_validator_refuses_held_out_or_placeholder_rows(self):
         base = {
@@ -197,6 +204,7 @@ class OutputTests(unittest.TestCase):
             summary = markdown_path.read_text(encoding="utf-8")
             self.assertIn("frozen", summary)
             self.assertIn("not run", summary)
+            self.assertIn("placeholder questions only", summary)
 
 
 if __name__ == "__main__":

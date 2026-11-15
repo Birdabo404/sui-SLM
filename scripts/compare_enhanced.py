@@ -153,6 +153,17 @@ def check_reported_questions(dev_rows, paths):
     refuse_reported_overlap(dev_rows, reported)
 
 
+def placeholder_reported_paths(paths):
+    """Return reported files that contain only placeholder rows."""
+
+    placeholders = []
+    for path in paths:
+        rows = load_jsonl(path)
+        if rows and all(bool(row.get("placeholder")) for row in rows):
+            placeholders.append(str(Path(path)))
+    return placeholders
+
+
 def gold_source_matches(gold_source, hit):
     """Return whether a retrieved hit belongs to the DEV gold source."""
 
@@ -415,11 +426,23 @@ def write_summary(
         "- Overlap check passed against: "
         + ", ".join(str(Path(item)) for item in reported_paths)
         + ".",
-        "",
-        "| Mode | hit@5 | MRR | answer accuracy | answerable accuracy | "
-        "abstain rate | median latency (s) | peak app+Ollama RSS (MB) |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
+    placeholder_paths = placeholder_reported_paths(reported_paths)
+    if placeholder_paths:
+        lines.append(
+            "- Warning: the overlap input contains placeholder questions only: "
+            + ", ".join(placeholder_paths)
+            + ". Rerun with the real reported test JSONL before relying on "
+            "split isolation."
+        )
+    lines.extend(
+        (
+            "",
+            "| Mode | hit@5 | MRR | answer accuracy | answerable accuracy | "
+            "abstain rate | median latency (s) | peak app+Ollama RSS (MB) |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        )
+    )
     for mode in MODES:
         if mode not in grouped:
             continue
@@ -486,6 +509,13 @@ def main(argv=None):
         check_reported_questions(questions, reported_paths)
     except ValueError as error:
         raise SystemExit(str(error)) from None
+    placeholder_paths = placeholder_reported_paths(reported_paths)
+    if placeholder_paths:
+        print(
+            "Warning: reported overlap input contains placeholder questions; "
+            "pass the real reported test JSONL before relying on split isolation.",
+            file=sys.stderr,
+        )
     index_path = Path(args.index)
     if not (index_path / "chunks.jsonl").is_file() or not (
         index_path / "chroma"
