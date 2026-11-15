@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare frozen and optional Enhanced app paths on the DEV questions only.
+"""Compare frozen answers with optional grounding on the DEV questions only.
 
 Retrieval-only (no Ollama):
   python scripts/compare_enhanced.py --retrieval-only
@@ -38,7 +38,6 @@ from app.engine import (
     ollama_chat_result,
 )
 from app.grounding import score as grounding_score
-from app.hybrid import retrieve_hybrid
 from rag.query_hybrid import HybridRetriever
 from shared.frozen import load_frozen
 from shared.prompt import ABSTAIN
@@ -50,7 +49,7 @@ DEFAULT_OUT = ROOT / "logs" / "compare-enhanced-dev.csv"
 APP_TEMPERATURE = 0.2
 APP_K = 5
 APP_THRESHOLD = 0.30
-MODES = ("frozen", "reranker", "reranker+grounding")
+MODES = ("frozen", "grounding")
 CSV_FIELDS = (
     "mode",
     "index_snapshot",
@@ -231,20 +230,17 @@ def answer_correct(question, answer, abstained):
     )
 
 
-def retrieve(mode, question, retriever, reranker=None):
-    """Retrieve one mode and return hits plus the frozen abstention decision."""
+def retrieve(question, retriever):
+    """Retrieve with the frozen path and return its abstention decision."""
 
-    if mode == "frozen":
-        hits = tuple(
-            retriever.retrieve(
-                question,
-                k=APP_K,
-                tldr_lane=True,
-            )
+    hits = tuple(
+        retriever.retrieve(
+            question,
+            k=APP_K,
+            tldr_lane=True,
         )
-        return hits, is_weak(hits, threshold=APP_THRESHOLD)
-    result = retrieve_hybrid(question, retriever, reranker=reranker)
-    return result.hits, result.weak
+    )
+    return hits, is_weak(hits, threshold=APP_THRESHOLD)
 
 
 def generate_answer(question, hits, weak, model, host):
@@ -271,7 +267,6 @@ def compare_mode(
     retrieval_only,
     model,
     host,
-    reranker=None,
     answer_fn=generate_answer,
     grounding_fn=grounding_score,
 ):
@@ -285,12 +280,7 @@ def compare_mode(
         sampler.start()
         started = time.perf_counter()
         try:
-            hits, weak = retrieve(
-                mode,
-                question["question"],
-                retriever,
-                reranker=reranker,
-            )
+            hits, weak = retrieve(question["question"], retriever)
             answer = ""
             correct = ""
             consistency = ""
@@ -303,7 +293,7 @@ def compare_mode(
                     host,
                 )
                 correct = int(answer_correct(question, answer, weak))
-                if mode == "reranker+grounding" and not weak:
+                if mode == "grounding" and not weak:
                     excerpts = tuple(str(hit.get("text", "")) for hit in hits)
                     consistency = grounding_fn(answer, excerpts).score
         finally:
@@ -417,7 +407,7 @@ def write_summary(
     for row in rows:
         grouped.setdefault(row["mode"], []).append(row)
     lines = [
-        "# Enhanced DEV comparison",
+        "# Grounding DEV comparison",
         "",
         f"- Questions: `{DEV_PATH.relative_to(ROOT)}` only.",
         f"- Index: `{index_path or '<injected test index>'}`.",
@@ -479,7 +469,7 @@ def write_csv(path, rows):
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        description="Compare frozen and Enhanced app paths on DEV only.",
+        description="Compare frozen answers with optional grounding on DEV only.",
     )
     parser.add_argument("--retrieval-only", action="store_true")
     parser.add_argument("--index", default=DEFAULT_INDEX)
@@ -532,7 +522,7 @@ def main(argv=None):
         raise SystemExit(f"No RAG index at {index_path}")
 
     retriever = HybridRetriever(index_path)
-    modes = MODES[:2] if args.retrieval_only else MODES
+    modes = MODES[:1] if args.retrieval_only else MODES
     rows = []
     try:
         for mode in modes:

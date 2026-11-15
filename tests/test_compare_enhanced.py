@@ -3,12 +3,15 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from scripts.compare_enhanced import (
     DEFAULT_REPORTED_PATH,
     DEV_PATH,
+    MODES,
     answer_correct,
     check_reported_questions,
+    compare_mode,
     gold_source_matches,
     load_jsonl,
     mode_summary,
@@ -88,6 +91,9 @@ class DevBoundaryTests(unittest.TestCase):
 
 
 class MetricTests(unittest.TestCase):
+    def test_comparison_modes_are_frozen_and_grounding_only(self):
+        self.assertEqual(MODES, ("frozen", "grounding"))
+
     def test_tldr_gold_source_matches_path_or_title(self):
         by_path = {
             "source": "tldr",
@@ -165,6 +171,52 @@ class MetricTests(unittest.TestCase):
         self.assertEqual(summary["abstain_rate"], 0.5)
         self.assertEqual(summary["median_latency_s"], 2.0)
         self.assertEqual(summary["peak_total_rss_mb"], 500.0)
+
+    def test_grounding_mode_reuses_frozen_hits_and_records_score(self):
+        class Retriever:
+            col = SimpleNamespace(metadata={"snapshot": "test"})
+
+            def __init__(self):
+                self.calls = []
+
+            def retrieve(self, question, k=5, tldr_lane=True):
+                self.calls.append((question, k, tldr_lane))
+                return [
+                    {
+                        "dense": 0.9,
+                        "source": "tldr",
+                        "path": "tar.md",
+                        "title": "tar",
+                        "text": "tar excerpt",
+                    }
+                ]
+
+        retriever = Retriever()
+        question = {
+            "id": "dev",
+            "question": "How do I extract a tar archive?",
+            "answerable": True,
+            "gold_answer": "tar -xzf archive.tar.gz",
+            "source": "tldr tar",
+        }
+        rows = compare_mode(
+            "grounding",
+            [question],
+            retriever,
+            retrieval_only=False,
+            model="student",
+            host="http://localhost",
+            answer_fn=lambda *args: "Run tar -xzf archive.tar.gz",
+            grounding_fn=lambda answer, excerpts: SimpleNamespace(score=0.75),
+        )
+
+        self.assertEqual(
+            retriever.calls,
+            [("How do I extract a tar archive?", 5, True)],
+        )
+        self.assertEqual(rows[0]["mode"], "grounding")
+        self.assertEqual(rows[0]["grounding_score"], "0.750000")
+        self.assertEqual(rows[0]["answer_correct"], 1)
 
 
 class OutputTests(unittest.TestCase):
