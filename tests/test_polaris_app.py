@@ -702,6 +702,7 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertIn('data-kind="index_missing"', card)
         self.assertIn("python rag/build_index.py --snap corpus/snapshot-YYYY-MM-DD --out rag/rag-index", card)
         self.assertIn("BASE and +CoT still work", card)
+        self.assertIn("trim it into rag-index-v2", card)
         self.assertEqual((self.calls, _FakeStream.made), ([], []))
 
     def test_an_index_that_will_not_load_is_a_card_and_is_tried_again_next_time(self):
