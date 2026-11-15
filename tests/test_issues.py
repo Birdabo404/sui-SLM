@@ -2,6 +2,7 @@
 """Which card each failure gets. The backend's own error types are stood in for by local classes with the same names
 and bases, so the cards are right before and after those types exist."""
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -11,10 +12,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.issues import (
     Issue,
+    checks_html,
+    checks_summary,
+    hf_cached,
     index_missing,
     issue_for_error,
     issue_from_dict,
     issue_html,
+    offline_checks,
 )
 from app.streaming import OllamaStreamError
 
@@ -170,6 +175,46 @@ class CardTests(unittest.TestCase):
 
     def test_text_reads_as_one_message(self):
         self.assertEqual(Issue("k", "T", "D.", fix="c", hint="H.").text(), "T. D. Run `c`. H.")
+
+
+class OfflineCheckTests(unittest.TestCase):
+    def _checks(self, **kw):
+        args = {"host": HOST, "ollama_up": True, "model": "qwen3.5:2b", "installed": True,
+                "create": "ollama pull qwen3.5:2b", "index_dir": "/idx", "index_present": True, "chunks": 1200,
+                "embed_cached": True, "online": False}
+        args.update(kw)
+        return offline_checks(**args)
+
+    def test_a_ready_machine_needs_no_network(self):
+        checks = self._checks()
+        self.assertEqual(checks_summary(checks), "Ready to answer offline")
+        self.assertEqual([c.label for c in checks], ["Ollama", "Model", "Lab docs index", "Embedding model", "Network"])
+        self.assertIsNone(checks[-1].ok)
+        self.assertEqual(checks[-1].value, "offline, not needed")
+        self.assertNotIn("ck-fix", checks_html(checks))
+
+    def test_each_failing_check_names_its_fix(self):
+        checks = self._checks(installed=False, index_present=False, embed_cached=False)
+        self.assertEqual(checks_summary(checks), "Needs attention: model, lab docs index, embedding model")
+        self.assertEqual([c.fix for c in checks if c.ok is False],
+                         ["ollama pull qwen3.5:2b", checks[2].fix, "bash install.sh"])
+        self.assertIn("rag/build_index.py", checks[2].fix)
+
+    def test_with_ollama_down_the_model_cannot_be_checked(self):
+        checks = self._checks(ollama_up=False, installed=None)
+        self.assertEqual((checks[0].ok, checks[0].fix), (False, "ollama serve"))
+        self.assertIsNone(checks[1].ok)
+
+    def test_the_embedding_model_is_found_in_the_hugging_face_cache_without_loading_it(self):
+        with tempfile.TemporaryDirectory() as hub:
+            env = {"HF_HUB_CACHE": hub}
+            self.assertFalse(hf_cached(environ=env))
+            snap = Path(hub) / "models--sentence-transformers--all-MiniLM-L6-v2" / "snapshots" / "abc"
+            snap.mkdir(parents=True)
+            self.assertFalse(hf_cached(environ=env))
+            (snap / "config.json").write_text("{}")
+            self.assertTrue(hf_cached(environ=env))
+            self.assertTrue(hf_cached(environ={"SENTENCE_TRANSFORMERS_HOME": hub, "HF_HOME": "/nonexistent"}))
 
 
 if __name__ == "__main__":

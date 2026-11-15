@@ -41,12 +41,15 @@ from app.engine import (
 )
 from app.issues import (
     Issue,
+    checks_html,
+    hf_cached,
     index_broken,
     index_missing,
     issue_for_error,
     issue_from_dict,
     issue_html,
     model_missing,
+    offline_checks,
     ollama_down,
 )
 from app.models import (
@@ -152,6 +155,11 @@ def _network_online():
 @st.cache_data(ttl=60, show_spinner=False)
 def _chunk_count(index_dir):
     return index_chunk_count(index_dir)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _embed_cached():
+    return hf_cached()
 
 
 @st.cache_resource(show_spinner=False)
@@ -535,6 +543,24 @@ def _start_blocker(status, compare_on, left, right):
     return None
 
 
+def _start_checks(status):
+    index_dir = status["index_dir"]
+    present = index_ok(index_dir)
+    picked = status["picked"]
+    return offline_checks(
+        host=OLLAMA_HOST,
+        ollama_up=status["up"],
+        model=picked.name,
+        installed=None if status["names"] is None else is_installed(picked.name, status["names"]) is not False,
+        create=picked.create,
+        index_dir=index_dir,
+        index_present=present,
+        chunks=_chunk_count(index_dir) if present else 0,
+        embed_cached=_embed_cached(),
+        online=status["online"],
+    )
+
+
 def _failed_turn(issue):
     """A failed answer as kept in the thread and in history: the plain text chat memory reads, and the card."""
     return {"role": "assistant", "error": issue.text(), "issue": issue.as_dict()}
@@ -885,6 +911,8 @@ def _settings_dialog(status):
     loaded = index_ok(index_dir)
     chunks = _chunk_count(index_dir) if loaded else 0
     sha = st.session_state.get("git_sha", "")
+    st.markdown('<p class="dlg-h">Offline check</p>', unsafe_allow_html=True)
+    st.markdown(checks_html(_start_checks(status)), unsafe_allow_html=True)
     session_col, system_col = st.columns(2, gap="large")
     with session_col:
         st.markdown('<p class="dlg-h">Session</p>', unsafe_allow_html=True)
@@ -919,7 +947,6 @@ def _settings_dialog(status):
                     ("Chunks", f"{chunks:,}" if loaded else "not loaded"),
                     ("IDK threshold", f"cos {format_threshold(status['frozen']['threshold'])}"),
                     ("Top-k", str(status["frozen"]["k"])),
-                    ("Network", "connected" if status["online"] else "offline"),
                     ("Warm-up", warm_label(st.session_state.get("warmed"))),
                     ("Commit", sha[:7] if sha else "—"),
                 ]

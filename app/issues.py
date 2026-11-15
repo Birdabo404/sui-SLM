@@ -167,6 +167,73 @@ def issue_html(issue, compact=False):
     )
 
 
+# ---------- the offline start check ----------
+
+@dataclass(frozen=True)
+class Check:
+    label: str
+    ok: bool | None  # None: not needed or can't be known
+    value: str
+    fix: str = ""
+
+
+def hf_cached(repo_id=EMBED_MODEL, environ=None):
+    """True when a snapshot of repo_id is in the local Hugging Face cache, where sentence-transformers loads it from
+    offline. Looks at the folders only; imports and downloads nothing."""
+    env = os.environ if environ is None else environ
+    hubs = [env.get("SENTENCE_TRANSFORMERS_HOME"),
+            env.get("HF_HUB_CACHE") or str(Path(env.get("HF_HOME") or Path.home() / ".cache" / "huggingface") / "hub")]
+    for hub in filter(None, hubs):
+        folder = Path(hub) / ("models--" + repo_id.replace("/", "--")) / "snapshots"
+        try:
+            if any((snap / "config.json").is_file() for snap in folder.iterdir()):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def offline_checks(*, host, ollama_up, model, installed, create, index_dir, index_present, chunks, embed_cached,
+                   online):
+    """Everything an answer needs from this machine, in the order it's needed. installed is None when Ollama can't
+    be asked."""
+    checks = [Check("Ollama", ollama_up, f"running at {host}" if ollama_up else f"not running at {host}",
+                    "" if ollama_up else "ollama serve")]
+    if installed is None:
+        checks.append(Check("Model", None, f"{model} · can't check until Ollama runs"))
+    else:
+        checks.append(Check("Model", installed, f"{model} installed" if installed else f"{model} missing",
+                            "" if installed else create))
+    checks.append(Check("Lab docs index", index_present,
+                        f"{chunks:,} chunks · {_short(index_dir)}" if index_present else f"missing · {_short(index_dir)}",
+                        "" if index_present else INDEX_BUILD))
+    checks.append(Check("Embedding model", embed_cached, "MiniLM cached locally" if embed_cached else "not cached",
+                        "" if embed_cached else "bash install.sh"))
+    checks.append(Check("Network", None, "online, not used" if online else "offline, not needed"))
+    return checks
+
+
+def checks_summary(checks):
+    failing = [c for c in checks if c.ok is False]
+    if not failing:
+        return "Ready to answer offline"
+    names = ", ".join(c.label.lower() for c in failing)
+    return f"Needs attention: {names}"
+
+
+def checks_html(checks):
+    rows = []
+    for c in checks:
+        state = {True: "ok", False: "bad", None: "na"}[c.ok]
+        mark = {True: "ok", False: "fix", None: "–"}[c.ok]
+        fix = f'<code class="ck-fix">{escape(c.fix)}</code>' if c.fix else ""
+        rows.append(f'<li class="{state}"><span class="ck-m">{mark}</span><span class="ck-l">{escape(c.label)}</span>'
+                    f'<span class="ck-v">{escape(c.value)}</span>{fix}</li>')
+    ready = all(c.ok is not False for c in checks)
+    return (f'<p class="ck-sum {"ok" if ready else "bad"}">{escape(checks_summary(checks))}</p>'
+            '<ul class="checks">' + "".join(rows) + "</ul>")
+
+
 def _class_names(error):
     return {c.__name__ for c in type(error).__mro__} if error is not None else set()
 
