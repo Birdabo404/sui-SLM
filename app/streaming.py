@@ -41,6 +41,22 @@ from app.engine import (
 )
 from shared.prompt import ABSTAIN
 
+# The longest normal answer fixture is 83 words / 458 characters. A 512-token
+# app cap leaves several times that headroom while bounding a repetition loop.
+APP_NUM_PREDICT = 512
+APP_REPEAT_PENALTY = 1.1
+
+
+def _guarded_chat_body(*args, **kwargs):
+    body = ollama_chat_body(*args, **kwargs)
+    body["options"].update(
+        {
+            "num_predict": APP_NUM_PREDICT,
+            "repeat_penalty": APP_REPEAT_PENALTY,
+        }
+    )
+    return body
+
 
 class ChatCancelled(Exception):
     """The user stopped the answer before Ollama committed a result."""
@@ -178,7 +194,7 @@ class CancellableChat:
 
     def _body(self, messages, model, *, stream):
         return json.dumps(
-            ollama_chat_body(
+            _guarded_chat_body(
                 messages,
                 model,
                 temperature=self._temperature,
