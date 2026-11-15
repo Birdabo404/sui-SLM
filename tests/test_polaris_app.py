@@ -627,7 +627,7 @@ class PolarisRunLoopTests(unittest.TestCase):
     def test_an_answer_cut_at_a_length_limit_says_so(self):
         self._ask_real("extract a .tar.gz file", _ndjson(["Use ", "`tar -x"], done_reason="length"))
         self.assertEqual(len(_NdjsonOllama.bodies), 1)
-        self.assertIn("cut off at a length limit", self._html())
+        self.assertIn("answer cut off at the length limit", self._html())
 
     def test_a_weak_retrieval_never_calls_the_model(self):
         deltas = self._record_deltas()
