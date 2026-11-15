@@ -3,6 +3,7 @@
 import csv
 import json
 import os
+import socket
 import sqlite3
 import sys
 import tempfile
@@ -23,6 +24,12 @@ import app.engine as engine
 import app.polaris as polaris
 import app.streaming as streaming
 from app.answer_format import app_messages
+from app.backend import (
+    OllamaDisconnected,
+    OllamaModelMissing,
+    OllamaTimedOut,
+    RetrievalQueryError,
+)
 from app.chat_memory import ChatStore
 from app.engine import OllamaInfo
 from shared.prompt import ABSTAIN
@@ -461,7 +468,10 @@ class PolarisRunLoopTests(unittest.TestCase):
         self._ask_real("make a file readable only by me", _ndjson([draft[i:i + 7] for i in range(0, len(draft), 7)]),
                        mode="full")
         (body,) = _NdjsonOllama.bodies
-        self.assertEqual(sorted(body["options"]), ["num_ctx", "temperature"])
+        self.assertEqual(
+            sorted(body["options"]),
+            ["num_ctx", "num_predict", "repeat_last_n", "repeat_penalty", "temperature"],
+        )
         self.assertEqual((body["think"], body["options"]["temperature"]), (False, 0.2))
         (reasoning,) = self.at.expander
         self.assertEqual(reasoning.label, "Show reasoning")
@@ -618,6 +628,23 @@ class PolarisRunLoopTests(unittest.TestCase):
         (row,) = list(csv.DictReader(log.open(encoding="utf-8")))
         self.assertEqual(row["tok_s"], "10.0000")
         self.assertEqual(self.store.load_chat(self._chat_id()).messages[1]["record"]["tok_s"], 10.0)
+
+    def test_absent_ollama_shows_a_plain_error_without_an_app_exception(self):
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            dead = f"http://127.0.0.1:{probe.getsockname()[1]}"
+        with patch("app.streaming.stream_answer_question", REAL_STREAM), patch(
+            "app.streaming.OLLAMA_HOST",
+            dead,
+        ):
+            self.at.run()
+            self._ask("extract a .tar.gz file", "landing")
+        self.assertFalse(self.at.exception)
+        (error,) = self.at.error
+        self.assertIn("Ollama is not running or could not be reached", error.value)
+        self.assertIn("ollama serve", error.value)
+        self.assertNotIn("Connection refused", error.value)
+        self.assertNotIn("Errno", error.value)
 
     # ---------- chat history ----------
 
@@ -911,8 +938,8 @@ class PolarisRunLoopTests(unittest.TestCase):
 
         def shown():
             (error,) = self.at.error
-            self.assertIn("Could not reach Ollama", error.value)
-            self.assertIn("connection refused", error.value)
+            self.assertIn("could not be reached", error.value)
+            self.assertNotIn("connection refused", error.value)
             html = self._html()
             # The failed side keeps its config head, so it's clear which one failed.
             self.assertIn('<span class="mode">BASE</span>', html)
@@ -926,7 +953,7 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertEqual(reply["compare"][1]["mode"], "cot")
         failed, ok = reply["compare_unanswered"]
         self.assertEqual((failed["state"], failed["mode"], failed["model"], ok), ("error", "base", "qwen3.5:2b", None))
-        self.assertIn("connection refused", failed["error"])
+        self.assertNotIn("connection refused", failed["error"])
 
         self.at.run()
         shown()

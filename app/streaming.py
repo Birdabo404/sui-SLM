@@ -15,8 +15,13 @@ from dataclasses import dataclass
 from typing import Callable
 from urllib.parse import urlsplit
 
-import requests
-
+from app.backend import (
+    OllamaDisconnected,
+    OllamaModelMissing,
+    OllamaResponseError,
+    OllamaTimedOut,
+    OllamaUnavailable,
+)
 from app.engine import (
     K,
     OLLAMA_HOST,
@@ -33,12 +38,19 @@ from app.engine import (
 )
 from shared.prompt import ABSTAIN
 
+# The longest normal answer fixture is 83 words / 458 characters. A 512-token
+# app cap leaves several times that headroom while bounding a repetition loop.
+APP_NUM_PREDICT = 512
+APP_REPEAT_PENALTY = 1.1
+APP_REPEAT_LAST_N = 64
+APP_OLLAMA_TIMEOUT_S = 300
+
 
 class ChatCancelled(Exception):
     """The user stopped the answer before Ollama committed a result."""
 
 
-class OllamaStreamError(requests.RequestException):
+class OllamaStreamError(OllamaResponseError):
     """Ollama returned malformed or incomplete streaming data."""
 
 
@@ -90,6 +102,14 @@ def _optional_float(value):
         return None
 
 
+def _is_missing_model_error(detail):
+    text = str(detail).lower()
+    return "model" in text and any(
+        phrase in text
+        for phrase in ("not found", "not installed", "missing", "pull the model")
+    )
+
+
 def retrieval_chart(hits, threshold, weak=False):
     rows = []
     for rank, hit in enumerate(hits or (), 1):
@@ -129,7 +149,14 @@ def _terminal_result(text, payload):
 class CancellableChat:
     """Cancellable nonstreaming and streaming `/api/chat` transport."""
 
-    def __init__(self, host=None, timeout=300, temperature=0.2, seed=None, keep_alive=None):
+    def __init__(
+        self,
+        host=None,
+        timeout=APP_OLLAMA_TIMEOUT_S,
+        temperature=0.2,
+        seed=None,
+        keep_alive=None,
+    ):
         self._url = urlsplit((host or OLLAMA_HOST).rstrip("/") + "/api/chat")
         self._timeout = timeout
         self._temperature = temperature
@@ -149,16 +176,22 @@ class CancellableChat:
             self._keep_alive = keep_alive
 
     def _body(self, messages, model, *, stream):
-        return json.dumps(
-            ollama_chat_body(
-                messages,
-                model,
-                temperature=self._temperature,
-                seed=self._seed,
-                keep_alive=self._keep_alive,
-                stream=stream,
-            )
-        ).encode("utf-8")
+        body = ollama_chat_body(
+            messages,
+            model,
+            temperature=self._temperature,
+            seed=self._seed,
+            keep_alive=self._keep_alive,
+            stream=stream,
+        )
+        body["options"].update(
+            {
+                "num_predict": APP_NUM_PREDICT,
+                "repeat_penalty": APP_REPEAT_PENALTY,
+                "repeat_last_n": APP_REPEAT_LAST_N,
+            }
+        )
+        return json.dumps(body).encode("utf-8")
 
     @contextmanager
     def _response(self, body):
@@ -179,7 +212,9 @@ class CancellableChat:
             conn.close()
             if self.cancelled:
                 raise ChatCancelled() from e
-            raise requests.ConnectionError(str(e)) from e
+            if isinstance(e, TimeoutError):
+                raise OllamaTimedOut("Ollama timed out while connecting") from e
+            raise OllamaUnavailable("Ollama could not be reached") from e
         with self._lock:
             if self.cancelled:
                 self._conn = None
@@ -192,7 +227,9 @@ class CancellableChat:
             except (OSError, ValueError, http.client.HTTPException) as e:
                 if self.cancelled:
                     raise ChatCancelled() from e
-                raise requests.ConnectionError(str(e)) from e
+                if isinstance(e, TimeoutError):
+                    raise OllamaTimedOut("Ollama timed out before responding") from e
+                raise OllamaUnavailable("Ollama could not start a response") from e
             yield response
         finally:
             with self._lock:
@@ -209,9 +246,12 @@ class CancellableChat:
         except (OSError, ValueError, http.client.HTTPException) as e:
             if self.cancelled:
                 raise ChatCancelled() from e
-            raise requests.ConnectionError(str(e)) from e
-        suffix = f": {detail}" if detail else ""
-        raise requests.HTTPError(f"Ollama returned HTTP {response.status}{suffix}")
+            if isinstance(e, TimeoutError):
+                raise OllamaTimedOut("Ollama timed out while reporting an error") from e
+            raise OllamaDisconnected("Ollama disconnected while reporting an error") from e
+        if _is_missing_model_error(detail):
+            raise OllamaModelMissing("the requested Ollama model is not installed")
+        raise OllamaResponseError(f"Ollama returned HTTP {response.status}")
 
     def __call__(self, messages, model):
         with self._response(self._body(messages, model, stream=False)) as response:
@@ -221,8 +261,13 @@ class CancellableChat:
             except (OSError, ValueError, http.client.HTTPException) as e:
                 if self.cancelled:
                     raise ChatCancelled() from e
-                raise requests.ConnectionError(str(e)) from e
-        return parse_ollama_chat_response(json.loads(data))
+                if isinstance(e, TimeoutError):
+                    raise OllamaTimedOut("Ollama timed out while answering") from e
+                raise OllamaDisconnected("Ollama disconnected while answering") from e
+        try:
+            return parse_ollama_chat_response(json.loads(data))
+        except (json.JSONDecodeError, KeyError, TypeError, UnicodeDecodeError) as e:
+            raise OllamaStreamError("Ollama returned an invalid response") from e
 
     def stream(self, messages, model):
         """Yield text deltas and return one terminal `OllamaChatResult`."""
@@ -235,7 +280,9 @@ class CancellableChat:
                 except (OSError, ValueError, http.client.HTTPException) as e:
                     if self.cancelled:
                         raise ChatCancelled() from e
-                    raise requests.ConnectionError(str(e)) from e
+                    if isinstance(e, TimeoutError):
+                        raise OllamaTimedOut("Ollama timed out while streaming") from e
+                    raise OllamaDisconnected("Ollama disconnected while streaming") from e
                 if not raw:
                     break
                 if not raw.strip():
@@ -247,7 +294,10 @@ class CancellableChat:
                 if not isinstance(payload, dict):
                     raise OllamaStreamError("Ollama stream event must be a JSON object")
                 if payload.get("error"):
-                    raise OllamaStreamError(str(payload["error"]))
+                    detail = str(payload["error"])
+                    if _is_missing_model_error(detail):
+                        raise OllamaModelMissing("the requested Ollama model is not installed")
+                    raise OllamaStreamError("Ollama reported a generation error")
                 message = payload.get("message")
                 if message is not None:
                     if not isinstance(message, dict) or not isinstance(message.get("content", ""), str):
@@ -264,7 +314,7 @@ class CancellableChat:
                     return _terminal_result("".join(pieces), payload)
                 if done is not False and done is not None:
                     raise OllamaStreamError("Ollama stream field 'done' must be boolean")
-        raise OllamaStreamError("Ollama stream ended without a terminal event")
+        raise OllamaDisconnected("Ollama disconnected before finishing the answer")
 
     def raise_if_cancelled(self):
         if self.cancelled:

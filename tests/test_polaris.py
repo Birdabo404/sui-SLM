@@ -24,7 +24,21 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from shared.prompt import ABSTAIN
-from app.streaming import LiveThroughput, OllamaStreamError, retrieval_chart
+from app.backend import (
+    EmbeddingModelError,
+    IndexLoadError,
+    OllamaDisconnected,
+    OllamaModelMissing,
+    OllamaTimedOut,
+    RetrievalQueryError,
+)
+from app.streaming import (
+    APP_NUM_PREDICT,
+    APP_REPEAT_LAST_N,
+    APP_REPEAT_PENALTY,
+    LiveThroughput,
+    retrieval_chart,
+)
 from app.models import ComparePick, ModelOption, compare_picks, default_compare_ids, model_options, modes_for, pair_compare_ids
 from app.engine import (
     OllamaInfo,
@@ -1353,16 +1367,21 @@ class StopTests(unittest.TestCase):
                 log_commit=chat.commit,
             )
         self.assertEqual(out["text"], "use tar -xzf")
-        self.assertEqual(
-            _SlowOllama.bodies[0],
-            ollama_chat_body(
-                build_messages("hi", [], "base"),
-                "qwen3.5:2b",
-                temperature=0,
-                seed=42,
-                keep_alive="30m",
-            ),
+        expected = ollama_chat_body(
+            build_messages("hi", [], "base"),
+            "qwen3.5:2b",
+            temperature=0,
+            seed=42,
+            keep_alive="30m",
         )
+        expected["options"].update(
+            {
+                "num_predict": APP_NUM_PREDICT,
+                "repeat_penalty": APP_REPEAT_PENALTY,
+                "repeat_last_n": APP_REPEAT_LAST_N,
+            }
+        )
+        self.assertEqual(_SlowOllama.bodies[0], expected)
 
     def test_warm_model_makes_a_real_non_streaming_call(self):
         _SlowOllama.delay = 0
@@ -1675,19 +1694,69 @@ class StopTests(unittest.TestCase):
         slot.empty.assert_called_once()
         self.assertTrue(answer.closed)
 
-    def test_a_stream_error_is_shown_as_ollama_error_not_a_connection_failure(self):
+    def test_a_missing_model_error_names_the_model_and_install_command(self):
         st, app_mod = self._app_with_mock_st()
         slot = MagicMock()
-        answer = _BlockingAnswer(error=OllamaStreamError("model 'm' not found"))
+        answer = _BlockingAnswer(error=OllamaModelMissing("private server detail"))
         with patch.object(app_mod, "stream_answer_question", return_value=answer), \
                 patch.object(app_mod, "_model_info", return_value=None):
             rec, run = self._answer(app_mod, slot)
         self.assertIsNone(rec)
         self.assertEqual(run["state"], "error")
         message = slot.error.call_args.args[0]
-        self.assertIn("model 'm' not found", message)
+        self.assertIn("m isn't installed in Ollama", message)
+        self.assertIn("ollama pull m", message)
+        self.assertNotIn("private server detail", message)
         self.assertNotIn("Could not reach", message)
         self.assertTrue(answer.closed)
+
+    def test_timeout_disconnect_and_retrieval_errors_are_plain_and_distinct(self):
+        cases = (
+            (
+                OllamaTimedOut("private timeout"),
+                "took too long",
+                "private timeout",
+            ),
+            (
+                OllamaDisconnected("socket 9 reset"),
+                "disconnected before the answer finished",
+                "socket 9",
+            ),
+            (
+                RetrievalQueryError("sqlite page 4 corrupt"),
+                "index failed while searching",
+                "sqlite page",
+            ),
+        )
+        for error, expected, hidden in cases:
+            with self.subTest(error=type(error).__name__):
+                st, app_mod = self._app_with_mock_st()
+                slot = MagicMock()
+                answer = _BlockingAnswer(error=error)
+                with patch.object(app_mod, "stream_answer_question", return_value=answer), \
+                        patch.object(app_mod, "_model_info", return_value=None):
+                    rec, run = self._answer(app_mod, slot)
+                self.assertIsNone(rec)
+                self.assertEqual(run["state"], "error")
+                message = slot.error.call_args.args[0]
+                self.assertIn(expected, message)
+                self.assertNotIn(hidden, message)
+                self.assertTrue(answer.closed)
+
+    def test_index_and_embedding_load_messages_hide_internal_errors(self):
+        st, app_mod = self._app_with_mock_st()
+        index = app_mod._retrieval_error_text(
+            IndexLoadError("sqlite database disk image is malformed"),
+            "/tmp/index",
+        )
+        embedding = app_mod._retrieval_error_text(
+            EmbeddingModelError("cache/config.json missing"),
+            "/tmp/index",
+        )
+        self.assertIn("could not be opened", index)
+        self.assertIn("Run `bash install.sh` once while online", embedding)
+        self.assertNotIn("sqlite", index)
+        self.assertNotIn("config.json", embedding)
 
     def test_loader_is_sent_once_while_waiting_for_the_first_chunk(self):
         st, app_mod = self._app_with_mock_st()

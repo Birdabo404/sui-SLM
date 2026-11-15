@@ -2,17 +2,28 @@
 """Ollama NDJSON streaming integration tests against a local fake server."""
 import csv
 import json
+import socket
 import tempfile
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 import requests
 
+from app.backend import (
+    OllamaDisconnected,
+    OllamaModelMissing,
+    OllamaTimedOut,
+    OllamaUnavailable,
+)
 from app.chat_memory import ChatContext, Turn
 from app.engine import OllamaInfo
 from app.streaming import (
+    APP_NUM_PREDICT,
+    APP_REPEAT_LAST_N,
+    APP_REPEAT_PENALTY,
     CancellableChat,
     ChatCancelled,
     OllamaStreamError,
@@ -149,6 +160,9 @@ class StreamingTests(unittest.TestCase):
         self.assertFalse(body["think"])
         self.assertEqual(body["options"]["temperature"], 0)
         self.assertEqual(body["options"]["seed"], 42)
+        self.assertEqual(body["options"]["num_predict"], APP_NUM_PREDICT)
+        self.assertEqual(body["options"]["repeat_penalty"], APP_REPEAT_PENALTY)
+        self.assertEqual(body["options"]["repeat_last_n"], APP_REPEAT_LAST_N)
         self.assertEqual(body["keep_alive"], "30m")
         self.assertEqual(list(stream), [])
 
@@ -318,12 +332,17 @@ class StreamingTests(unittest.TestCase):
     def test_protocol_and_http_errors_write_no_log_and_close(self):
         cases = (
             ([b"not json\n"], 200, OllamaStreamError, "invalid NDJSON"),
-            ([_line({"message": {"content": "partial"}, "done": False})], 200, OllamaStreamError, "terminal"),
-            ([_line({"error": "model missing"})], 200, OllamaStreamError, "model missing"),
+            (
+                [_line({"message": {"content": "partial"}, "done": False})],
+                200,
+                OllamaDisconnected,
+                "disconnected",
+            ),
+            ([_line({"error": "model missing"})], 200, OllamaModelMissing, "not installed"),
             ([_line([])], 200, OllamaStreamError, "JSON object"),
             ([_line({"message": {"content": 3}, "done": False})], 200, OllamaStreamError, "must be text"),
             ([_line({"message": {"content": ""}, "done": 0})], 200, OllamaStreamError, "must be boolean"),
-            ([b"server exploded"], 500, requests.HTTPError, "HTTP 500"),
+            ([b"server exploded"], 500, requests.RequestException, "HTTP 500"),
         )
         for index, (fragments, status, error_type, message) in enumerate(cases):
             with self.subTest(message=message), tempfile.TemporaryDirectory() as td:
@@ -343,6 +362,32 @@ class StreamingTests(unittest.TestCase):
                     list(stream)
                 self.assertFalse(log.exists())
                 self.assertIsNone(chat._conn)
+
+    def test_connection_refusal_and_timeout_are_distinct(self):
+        class TimedOutConnection:
+            auto_open = 0
+
+            def __init__(self, *args, **kwargs):
+                self.sock = None
+
+            def connect(self):
+                raise TimeoutError("private socket detail")
+
+            def close(self):
+                pass
+
+        with self.assertRaises(OllamaTimedOut) as caught, patch(
+            "app.streaming.http.client.HTTPConnection",
+            TimedOutConnection,
+        ):
+            CancellableChat("http://127.0.0.1:11434", timeout=0.01)([], "m")
+        self.assertNotIn("private socket detail", str(caught.exception))
+
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            dead = f"http://127.0.0.1:{probe.getsockname()[1]}"
+        with self.assertRaises(OllamaUnavailable):
+            CancellableChat(dead, timeout=0.2)([], "m")
 
     def test_cancelled_weak_retrieval_yields_nothing_and_writes_no_log(self):
         hits = [{
