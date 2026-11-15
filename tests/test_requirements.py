@@ -3,6 +3,7 @@
 import os
 import re
 import unittest
+from importlib import import_module
 from importlib.metadata import version
 from pathlib import Path
 
@@ -19,12 +20,35 @@ def requirements():
     ]
 
 
+def enhanced_requirements():
+    return [
+        line.strip()
+        for line in (ROOT / "requirements-enhanced.txt").read_text(
+            encoding="utf-8",
+        ).splitlines()
+        if line.strip()
+        and not line.lstrip().startswith(("#", "-r "))
+    ]
+
+
 class RequirementTests(unittest.TestCase):
     def test_every_direct_dependency_is_exactly_pinned(self):
         declared = requirements()
         self.assertGreater(len(declared), 0)
         self.assertEqual(
             [requirement for requirement in declared if not EXACT_REQUIREMENT.fullmatch(requirement)],
+            [],
+        )
+
+    def test_every_enhanced_dependency_is_exactly_pinned(self):
+        declared = enhanced_requirements()
+        self.assertGreater(len(declared), 0)
+        self.assertEqual(
+            [
+                requirement
+                for requirement in declared
+                if not EXACT_REQUIREMENT.fullmatch(requirement)
+            ],
             [],
         )
 
@@ -37,6 +61,21 @@ class RequirementTests(unittest.TestCase):
             name, expected = requirement.split("==", 1)
             with self.subTest(package=name):
                 self.assertEqual(version(name).split("+", 1)[0], expected)
+
+    @unittest.skipUnless(
+        os.environ.get("SUI_SLM_CHECK_ENHANCED") == "1",
+        "set SUI_SLM_CHECK_ENHANCED=1 to verify the optional ML stack",
+    )
+    def test_pinned_transformer_stack_imports_together(self):
+        sentence_transformers = import_module("sentence_transformers")
+        torch = import_module("torch")
+        transformers = import_module("transformers")
+
+        self.assertEqual(sentence_transformers.__version__, "3.3.1")
+        self.assertEqual(transformers.__version__, "4.57.6")
+        self.assertEqual(torch.__version__.split("+", 1)[0], "2.9.1")
+        self.assertIsNotNone(sentence_transformers.CrossEncoder)
+        self.assertIsNotNone(transformers.AutoModelForSequenceClassification)
 
 
 if __name__ == "__main__":

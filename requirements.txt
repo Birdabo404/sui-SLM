@@ -6,7 +6,6 @@ torch==2.9.1
 chromadb==1.0.8
 posthog==5.4.0
 sentence-transformers==3.3.1
-transformers==4.57.6
 rank_bm25==0.2.2
 # 1.41.1 needs protobuf<6; chromadb 1.0.8 needs protobuf 6.x. 1.45.0 is the first with protobuf<7.
 streamlit==1.45.0

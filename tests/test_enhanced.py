@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
 """Phase 1 contracts for opt-in Enhanced retrieval and grounding."""
+import subprocess
+import sys
 import unittest
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
+from app.backend import SafeRetriever
+from app.engine import is_weak
 from app.grounding import GroundingModelError, score
 from app.hybrid import (
     METHOD_LABEL,
+    RERANKER_REVISION,
     RerankerModelError,
+    cache_reranker_model,
     merge_rrf,
     retrieve_enhanced,
+    retrieve_hybrid,
 )
 
 
@@ -29,6 +38,51 @@ class _GroundingScorer:
     def predict(self, pairs):
         self.pairs = tuple(pairs)
         return self.result
+
+
+class _Encoded:
+    def tolist(self):
+        return [[1.0, 0.0]]
+
+
+class _EmbeddingModel:
+    def encode(self, questions, normalize_embeddings=True):
+        return _Encoded()
+
+
+class _Bm25:
+    def get_scores(self, tokens):
+        return [0.1, 4.0, 3.0]
+
+
+class _Collection:
+    def query(self, **kwargs):
+        return {"ids": [["dense"]], "distances": [[0.05]]}
+
+    def get(self, ids, include):
+        vectors = {
+            "keyword": [0.8, 0.0],
+            "other": [0.7, 0.0],
+        }
+        return {
+            "ids": ids,
+            "embeddings": [vectors[hit_id] for hit_id in ids],
+        }
+
+
+class _HybridRetriever:
+    exclude_distro = None
+    model = _EmbeddingModel()
+    bm25 = _Bm25()
+    col = _Collection()
+    rows = (
+        {"id": "dense", "text": "dense text"},
+        {"id": "keyword", "text": "keyword text"},
+        {"id": "other", "text": "other text"},
+    )
+
+    def retrieve(self, question, k=5, tldr_lane=True):
+        return [{"id": "frozen", "text": "frozen text", "dense": 0.29}]
 
 
 class EnhancedRetrievalTests(unittest.TestCase):
@@ -104,6 +158,57 @@ class EnhancedRetrievalTests(unittest.TestCase):
             )
         self.assertNotIn("private tensor", str(caught.exception))
 
+    def test_real_hybrid_retriever_keeps_the_frozen_dense_abstain_decision(self):
+        question = "same question"
+        retriever = SafeRetriever(_HybridRetriever())
+        frozen_hits = retriever.retrieve(question, k=5, tldr_lane=True)
+        result = retrieve_hybrid(
+            question,
+            retriever,
+            reranker=_Reranker([1.0, 0.9, 0.8]),
+        )
+
+        self.assertEqual(result.weak, is_weak(frozen_hits, threshold=0.30))
+        self.assertTrue(result.weak)
+        self.assertEqual(result.dense_gate_similarity, 0.29)
+        self.assertGreater(max(hit["dense"] for hit in result.hits), 0.30)
+        self.assertEqual(result.gate_hits, tuple(frozen_hits))
+
+    def test_frozen_answer_path_never_imports_enhanced_modules(self):
+        probe = """
+import sys
+import tempfile
+from app.engine import answer_question
+
+class Retriever:
+    def retrieve(self, question, k=5, tldr_lane=True):
+        return [{
+            "id": "frozen",
+            "title": "Frozen hit",
+            "path": "frozen.txt",
+            "text": "Frozen evaluated excerpt.",
+            "dense": 0.9,
+        }]
+
+with tempfile.NamedTemporaryFile(suffix=".csv") as log_file:
+    answer_question(
+        "question",
+        "rag",
+        "model",
+        retriever=Retriever(),
+        chat_fn=lambda messages, model: "answer",
+        log_path=log_file.name,
+    )
+assert "app.hybrid" not in sys.modules
+assert "app.grounding" not in sys.modules
+"""
+        result = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
 
 class GroundingTests(unittest.TestCase):
     def test_score_returns_consistency_and_label_information(self):
@@ -126,6 +231,34 @@ class GroundingTests(unittest.TestCase):
         with self.assertRaises(GroundingModelError) as caught:
             score("answer", ("excerpt",), scorer=BrokenScorer())
         self.assertNotIn("private model", str(caught.exception))
+
+
+class OfflineRerankerTests(unittest.TestCase):
+    def test_missing_reranker_cache_raises_typed_plain_error(self):
+        with patch(
+            "app.hybrid.importlib.import_module",
+            side_effect=RuntimeError("private hub error"),
+        ):
+            with self.assertRaises(RerankerModelError) as caught:
+                cache_reranker_model(local_files_only=True)
+        self.assertNotIn("private hub", str(caught.exception))
+        self.assertEqual(caught.exception.code, "reranker_model_unavailable")
+
+    def test_reranker_cache_uses_immutable_revision(self):
+        snapshot_download = Mock(return_value="/cache/reranker")
+        hub = SimpleNamespace(snapshot_download=snapshot_download)
+        with patch("app.hybrid.importlib.import_module", return_value=hub):
+            path = cache_reranker_model(local_files_only=False)
+
+        self.assertEqual(path, "/cache/reranker")
+        self.assertEqual(
+            snapshot_download.call_args.kwargs["revision"],
+            RERANKER_REVISION,
+        )
+        self.assertNotIn(
+            "pytorch_model.bin",
+            snapshot_download.call_args.kwargs["allow_patterns"],
+        )
 
 
 if __name__ == "__main__":
