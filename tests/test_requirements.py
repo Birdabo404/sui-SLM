@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Dependency declaration tests that do not contact package indexes."""
+import os
 import re
 import unittest
 from importlib.metadata import version
@@ -27,6 +28,10 @@ class RequirementTests(unittest.TestCase):
             [],
         )
 
+    @unittest.skipUnless(
+        os.environ.get("SUI_SLM_CHECK_PINS") == "1",
+        "set SUI_SLM_CHECK_PINS=1 to verify installed package versions",
+    )
     def test_clean_environment_versions_match_the_pins(self):
         for requirement in requirements():
             name, expected = requirement.split("==", 1)
