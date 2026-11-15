@@ -53,6 +53,7 @@ APP_THRESHOLD = 0.30
 MODES = ("frozen", "reranker", "reranker+grounding")
 CSV_FIELDS = (
     "mode",
+    "index_snapshot",
     "question_id",
     "question",
     "answerable",
@@ -264,6 +265,8 @@ def compare_mode(
     """Run one comparison mode and return detailed CSV rows."""
 
     rows = []
+    index_metadata = getattr(retriever.col, "metadata", {}) or {}
+    index_snapshot = str(index_metadata.get("snapshot", ""))
     for question in questions:
         sampler = RamSampler()
         sampler.start()
@@ -296,6 +299,7 @@ def compare_mode(
         rows.append(
             {
                 "mode": mode,
+                "index_snapshot": index_snapshot,
                 "question_id": question["id"],
                 "question": question["question"],
                 "answerable": int(bool(question["answerable"])),
@@ -379,7 +383,14 @@ def format_metric(value):
     return "not run" if value is None else f"{value:.3f}"
 
 
-def write_summary(path, rows, *, retrieval_only, reported_paths):
+def write_summary(
+    path,
+    rows,
+    *,
+    retrieval_only,
+    reported_paths,
+    index_path="",
+):
     """Write the compact Markdown evidence summary."""
 
     grouped = {}
@@ -389,6 +400,8 @@ def write_summary(path, rows, *, retrieval_only, reported_paths):
         "# Enhanced DEV comparison",
         "",
         f"- Questions: `{DEV_PATH.relative_to(ROOT)}` only.",
+        f"- Index: `{index_path or '<injected test index>'}`.",
+        f"- Index snapshot metadata: `{rows[0].get('index_snapshot', '') or 'unknown'}`.",
         "- Retrieval metrics use answerable rows with non-empty gold sources.",
         (
             "- Answer score: not run (`--retrieval-only`)."
@@ -510,6 +523,7 @@ def main(argv=None):
         rows,
         retrieval_only=args.retrieval_only,
         reported_paths=reported_paths,
+        index_path=index_path,
     )
     print(f"wrote {len(rows)} rows -> {out_path}")
     print(f"wrote summary -> {summary_path}")
