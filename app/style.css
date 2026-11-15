@@ -753,7 +753,10 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 
 /* ---------- settings: session, models and system details in one modal ---------- */
 [data-testid="stDialog"] [role="dialog"]{background:var(--c-surface);border:1px solid var(--c-line);border-radius:var(--r-xl);box-shadow:var(--shadow-float);color:var(--c-text)}
-[data-testid="stDialog"] [role="dialog"] h2,[data-testid="stDialog"] [role="dialog"] h2 *{font:600 var(--fs-q)/1.3 var(--f-ui)!important;color:var(--c-text)}
+/* Streamlit 1.45 renders the dialog title as the dialog's first div, in the dark theme's ink, not as an h2 */
+[data-testid="stDialog"] [role="dialog"] > div:first-child{font:600 var(--fs-q)/1.3 var(--f-ui)!important;color:var(--c-text)!important}
+[data-testid="stDialog"] [role="dialog"] button[aria-label="Close"]{color:var(--c-text-2)}
+[data-testid="stDialog"] [role="dialog"] button[aria-label="Close"]:hover{color:var(--c-text)}
 p.dlg-h{margin:var(--s-3) 0 var(--s-1);padding-bottom:var(--s-2);border-bottom:1px solid var(--c-line);font:600 var(--fs-cap)/1 var(--f-ui);color:var(--c-text-3);letter-spacing:.02em}
 p.dlg-note{margin:0 0 var(--s-2);font:400 var(--fs-cap)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
 .kv-list{display:flex;flex-direction:column;gap:6px;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui)}
