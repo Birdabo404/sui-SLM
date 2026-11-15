@@ -432,7 +432,7 @@ class CompareTests(unittest.TestCase):
                       model_status_html(student, names, True))
         missing = model_status_html(q4, names, True)
         self.assertIn('class="side-note model-st err"', missing)
-        self.assertIn("<code>ollama create thesis-base-q4km -f Modelfile-base</code>", missing)
+        self.assertIn("<code>ollama create thesis-base-q4km -f /path/to/Modelfile-base</code>", missing)
         self.assertIn("can't check, Ollama is not running", model_status_html(q4, None, False))
 
         table = models_table_html((base, q4, student), names, True)
@@ -506,7 +506,12 @@ class CompareTests(unittest.TestCase):
             app_mod.st, "columns", return_value=(Col(), Col())
         ), patch.object(app_mod, "_answer_record", side_effect=answer):
             base = ModelOption("base", "qwen3.5:2b", "default base", "ollama pull qwen3.5:2b")
-            student = ModelOption("distilled", "student:latest", "KD student", "ollama create student:latest -f Modelfile")
+            student = ModelOption(
+                "distilled",
+                "student:latest",
+                "KD student",
+                "ollama create student:latest -f /path/to/Modelfile",
+            )
             monitor = MagicMock()
             (left, right), unanswered = app_mod._run_compare(
                 "q", ComparePick(base, "base"), ComparePick(student, "full"), None, "idx", monitor=monitor

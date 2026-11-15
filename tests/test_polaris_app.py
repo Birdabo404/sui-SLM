@@ -1076,11 +1076,12 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertEqual(self.at.session_state["model_pick"], "thesis-base-q4km")
         html = self._html()
         self.assertIn("not installed", html)
-        self.assertIn("ollama create thesis-base-q4km -f Modelfile-base", html)
+        self.assertIn("ollama create thesis-base-q4km -f /path/to/Modelfile-base", html)
         self._ask("extract a .tar.gz file", "landing")
         (error,) = self.at.error
         self.assertIn("thesis-base-q4km isn't installed in Ollama on this machine", error.value)
-        self.assertIn("`ollama create thesis-base-q4km -f Modelfile-base`", error.value)
+        self.assertIn("The exported GGUF and Modelfile are not included", error.value)
+        self.assertIn("`ollama create thesis-base-q4km -f /path/to/Modelfile-base`", error.value)
         # Never answered by another model in its place, never warmed, never pulled.
         self.assertEqual((self.calls, _FakeStream.made), ([], []))
         self.assertNotIn("thesis-base-q4km", [c.args[0] for c in warm.call_args_list])
@@ -1250,8 +1251,8 @@ class PolarisRunLoopTests(unittest.TestCase):
             ("Answers", "0"),
         ):
             self.assertIn(f'<span class="k">{k}</span><span class="v">{v}</span>', html)
-        self.assertIn("ollama create thesis-student -f Modelfile", html)
-        self.assertIn("ollama create thesis-base-q4km -f Modelfile-base", html)
+        self.assertIn("ollama create thesis-student -f /path/to/Modelfile", html)
+        self.assertIn("ollama create thesis-base-q4km -f /path/to/Modelfile-base", html)
         self.assertIn(polaris.RATE_NOTE.split(".")[0], html)
         # A run without the click closes it again.
         self.at.run()
