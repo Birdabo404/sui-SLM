@@ -24,7 +24,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from shared.prompt import ABSTAIN
-from app.streaming import LiveThroughput, OllamaStreamError, retrieval_chart
+from app.streaming import LiveThroughput, retrieval_chart
+from tests.backend_fake import PlainStreamError
 from app.models import ComparePick, ModelOption, compare_picks, default_compare_ids, model_options, modes_for, pair_compare_ids
 from app.engine import (
     OllamaInfo,
@@ -1692,14 +1693,14 @@ class StopTests(unittest.TestCase):
         return html, st.session_state.last_issue
 
     def test_a_model_not_found_in_the_stream_names_the_command_not_a_connection_failure(self):
-        html, issue = self._failed_card(OllamaStreamError("model 'm' not found"))
+        html, issue = self._failed_card(PlainStreamError("model 'm' not found"))
         self.assertEqual(issue.kind, "ollama_model_missing")
         self.assertIn("m isn&#x27;t installed", html)
         self.assertIn("<code>ollama pull m</code>", html)
         self.assertNotIn("isn&#x27;t running", html)
 
     def test_another_stream_error_says_ollama_returned_an_error(self):
-        html, issue = self._failed_card(OllamaStreamError("Ollama returned invalid NDJSON"))
+        html, issue = self._failed_card(PlainStreamError("Ollama returned invalid NDJSON"))
         self.assertEqual(issue.kind, "ollama_response_error")
         self.assertIn("Ollama returned invalid NDJSON", html)
 

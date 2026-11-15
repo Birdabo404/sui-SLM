@@ -79,6 +79,11 @@ class OllamaResponseError(UserFacingBackendError, requests.RequestException):
     action = "Try again, or restart Ollama if the problem continues."
 
 
+class PlainStreamError(requests.RequestException):
+    """app.streaming.OllamaStreamError as it is before PR #20: an untyped RequestException carrying Ollama's own
+    text. PR #20 makes it an OllamaResponseError, which hides that text."""
+
+
 class AnswerStatus(str, Enum):
     COMPLETE = "complete"
     ABSTAIN_EMPTY_RETRIEVAL = "abstain_empty_retrieval"
@@ -126,6 +131,6 @@ def load_app_retriever(index_dir, factory=None, is_dir=None):
 def module():
     fake = ModuleType("app.backend")
     for name, value in globals().items():
-        if not name.startswith("_") and name != "module":
+        if not name.startswith("_") and name not in ("module", "PlainStreamError"):
             setattr(fake, name, value)
     return fake

@@ -29,8 +29,8 @@ from app.issues import (
     offline_checks,
     ollama_down,
 )
-from app.streaming import OllamaStreamError
 from tests import backend_fake
+from tests.backend_fake import PlainStreamError
 
 fake = backend_fake.module()
 HOST = "http://127.0.0.1:11434"
@@ -63,25 +63,35 @@ class WithBackend(unittest.TestCase):
 
 
 class ImportTests(unittest.TestCase):
+    """`from app import backend` at import time, with app/backend.py importable or not, whichever this branch has."""
+
+    def _reload_with(self, module):
+        package = sys.modules["app"]
+        had, before = hasattr(package, "backend"), getattr(package, "backend", None)
+        if had:
+            delattr(package, "backend")
+        if module is not None:
+            package.backend = module
+
+        def restore():
+            if hasattr(package, "backend"):
+                delattr(package, "backend")
+            if had:
+                package.backend = before
+            importlib.reload(issues)
+
+        self.addCleanup(restore)
+        self.enterContext(patch.dict(sys.modules, {"app.backend": module}))
+        return importlib.reload(issues)
+
     def test_without_app_backend_the_module_still_imports_and_uses_its_own_classification(self):
-        with patch.dict(sys.modules, {"app.backend": None}):
-            reloaded = importlib.reload(issues)
-            try:
-                self.assertIsNone(reloaded.backend)
-                self.assertEqual(reloaded.issue_for_error(requests.ConnectionError("refused"), host=HOST).kind,
-                                 "ollama_unavailable")
-            finally:
-                sys.modules.pop("app.backend", None)
-                importlib.reload(issues)
+        reloaded = self._reload_with(None)
+        self.assertIsNone(reloaded.backend)
+        self.assertEqual(reloaded.issue_for_error(requests.ConnectionError("refused"), host=HOST).kind,
+                         "ollama_unavailable")
 
     def test_with_app_backend_importable_the_module_picks_it_up(self):
-        with patch.dict(sys.modules, {"app.backend": fake}):
-            reloaded = importlib.reload(issues)
-            try:
-                self.assertIs(reloaded.backend, fake)
-            finally:
-                sys.modules.pop("app.backend", None)
-                importlib.reload(issues)
+        self.assertIs(self._reload_with(fake).backend, fake)
 
 
 class ClassifyWithoutBackendTests(WithoutBackend):
@@ -105,12 +115,12 @@ class ClassifyWithoutBackendTests(WithoutBackend):
         self.assertIn("after 1,234 characters. The partial answer was not kept.", issue.detail)
 
     def test_a_stream_without_its_terminal_record_is_a_disconnect(self):
-        self.assertEqual(kind(OllamaStreamError("Ollama stream ended without a terminal event")),
+        self.assertEqual(kind(PlainStreamError("Ollama stream ended without a terminal event")),
                          "ollama_disconnected")
 
     def test_a_404_or_an_in_stream_not_found_is_the_missing_model_with_its_command(self):
         for error in (requests.HTTPError('Ollama returned HTTP 404: {"error":"model \\"x\\" not found"}'),
-                      OllamaStreamError("model 'thesis-student' not found")):
+                      PlainStreamError("model 'thesis-student' not found")):
             issue = issue_for_error(error, host=HOST, model="thesis-student",
                                     create="ollama create thesis-student -f Modelfile")
             self.assertEqual((issue.kind, issue.fix),
