@@ -254,6 +254,13 @@ import sys
 from pathlib import Path
 
 from app.backend import UserFacingBackendError
+from app.grounding import (
+    FLAN_TOKENIZER_REVISION,
+    GROUNDING_MODEL,
+    GROUNDING_REVISION,
+    _load_scorer,
+    cache_grounding_assets,
+)
 from app.hybrid import (
     RERANKER_MODEL,
     RERANKER_REVISION,
@@ -293,6 +300,15 @@ try:
         cache_reranker_model,
         lambda: _load_reranker(RERANKER_MODEL, RERANKER_REVISION, True),
     )
+    grounding_paths, grounding_status = ensure_cached(
+        cache_grounding_assets,
+        lambda: _load_scorer(
+            GROUNDING_MODEL,
+            GROUNDING_REVISION,
+            FLAN_TOKENIZER_REVISION,
+            True,
+        ),
+    )
 except UserFacingBackendError as error:
     print(f"{type(error).__name__}: {error.user_message}", file=sys.stderr)
     raise SystemExit(1) from None
@@ -301,7 +317,13 @@ print(
     f"Enhanced reranker: {reranker_status} "
     f"({megabytes(reranker_path):.1f} MB)."
 )
-print("Enhanced model check: the reranker loaded with local files only.")
+hhem_path, flan_path = grounding_paths
+print(
+    f"HHEM grounding model: {grounding_status} "
+    f"({megabytes(hhem_path):.1f} MB)."
+)
+print(f"Pinned FLAN tokenizer: {grounding_status} ({megabytes(flan_path):.1f} MB).")
+print("Enhanced model check: both models loaded with local files only.")
 PY
   then
     fail "Enhanced model cache setup failed."

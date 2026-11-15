@@ -28,6 +28,7 @@ unchanged.
 | The index is incomplete, corrupt, or incompatible | `IndexLoadError` / `index_corrupt` | The local search index could not be opened because it is incomplete, corrupt, or incompatible. Rebuild the index, then try again. |
 | A loaded index fails during search | `RetrievalQueryError` / `index_query_failed` | The local search index failed while searching. Rebuild the index, then try again. |
 | The Enhanced reranker is absent from the offline cache or cannot load | `RerankerModelError` / `reranker_model_unavailable` | The Enhanced retrieval reranker is not available in the local cache. Use Evaluated config, or run `bash install.sh --enhanced` while online. |
+| The optional HHEM model or its pinned FLAN tokenizer is absent or cannot load | `GroundingModelError` / `grounding_model_unavailable` | The optional grounding check is not available in the local cache. Turn off grounding, or run `bash install.sh --enhanced` while online. |
 | Ollama exceeds the request timeout | `OllamaTimedOut` / `ollama_timeout` | Ollama took too long to answer, so the request was stopped. Try again, or restart Ollama if it keeps happening. |
 | Ollama disconnects after generation starts | `OllamaDisconnected` / `ollama_disconnected` | Ollama disconnected before the answer finished. Discard the partial answer, then try again. |
 | Ollama returns an unusable response | `OllamaResponseError` / `ollama_response_error` | Ollama returned a response the app could not use. Try again, or restart Ollama if the problem continues. |
