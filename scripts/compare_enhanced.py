@@ -59,6 +59,8 @@ CSV_FIELDS = (
     "answerable",
     "gold_source",
     "gold_answer",
+    "retrieved_sources",
+    "retrieved_titles",
     "retrieval_hit",
     "reciprocal_rank",
     "abstained",
@@ -316,6 +318,13 @@ def compare_mode(
                 "answerable": int(bool(question["answerable"])),
                 "gold_source": question["source"],
                 "gold_answer": question["gold_answer"],
+                "retrieved_sources": " | ".join(
+                    f"{hit.get('source', '')}:{hit.get('path', '')}"
+                    for hit in hits
+                ),
+                "retrieved_titles": " | ".join(
+                    str(hit.get("title", "")) for hit in hits
+                ),
                 "retrieval_hit": (
                     int(rank > 0) if question["source"].strip() else ""
                 ),
