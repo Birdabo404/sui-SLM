@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Offline Streamlit chat app for the CCIS Linux lab assistant."""
+import logging
 import os
 import queue
 import sqlite3
@@ -38,11 +39,20 @@ from app.engine import (
     uses_rag,
     warm_model,
 )
+from app.issues import (
+    Issue,
+    index_broken,
+    index_missing,
+    issue_for_error,
+    issue_from_dict,
+    issue_html,
+    model_missing,
+    ollama_down,
+)
 from app.models import (
     compare_picks,
     installed_names,
     is_installed,
-    missing_text,
     model_options,
     modes_for,
     option_named,
@@ -113,6 +123,8 @@ from app.polaris import (
 )
 from app.streaming import ChatCancelled, stream_answer_question
 from shared.frozen import format_threshold, load_frozen
+
+log = logging.getLogger("polaris")
 
 
 @st.cache_resource(show_spinner=False)
@@ -324,14 +336,14 @@ def _installed_names():
 
 
 def _still_missing(option, names):
-    """The not-installed message for option, or None. A cached "missing" is checked once more against Ollama, so a
+    """The not-installed issue for option, or None. A cached "missing" is checked once more against Ollama, so a
     model created a moment ago is picked up without waiting for the cache."""
     if is_installed(option.name, names) is not False:
         return None
     _installed_names.clear()
     if is_installed(option.name, _installed_names()) is not False:
         return None
-    return missing_text(option)
+    return model_missing(option.name, option.create)
 
 
 def _compare_pair(options):
@@ -405,6 +417,9 @@ def run_polaris():
         with st.container(key="landing"):
             st.markdown(empty_hero_html(), unsafe_allow_html=True)
             _render_composer("landing", **composer)
+            blocker = _start_blocker(status, compare_on, left, right)
+            if blocker is not None:
+                st.markdown(issue_html(blocker, compact=True), unsafe_allow_html=True)
             _render_examples()
         return
 
@@ -458,19 +473,23 @@ def _answer_turn(question, option, mode, compare_on, left, right, index_dir, *, 
     if not compare_on:
         missing = _still_missing(option, names)
         if missing:
-            slot.error(missing)
-            st.session_state.messages.append({"role": "assistant", "error": missing})
+            _show_failed_turn(slot, missing)
             return False
 
     need_rag = (uses_rag(left.mode) or uses_rag(right.mode)) if compare_on else uses_rag(mode)
     retriever = None
     if need_rag:
         if not index_ok(index_dir):
-            message = f"No index at {index_dir}. Fetch the corpus and run rag/build_index.py first."
-            slot.error(message)
-            st.session_state.messages.append({"role": "assistant", "error": message})
+            # Nothing answers without Ollama, so that comes first; names is None when it couldn't be asked.
+            down = names is None and not ollama_reachable()
+            _show_failed_turn(slot, ollama_down(OLLAMA_HOST) if down else index_missing(index_dir))
             return False
-        retriever = _retriever_with_loader(index_dir, slot)
+        try:
+            retriever = _retriever_with_loader(index_dir, slot)
+        except Exception as e:
+            log.warning("index %s did not load", index_dir, exc_info=e)
+            _show_failed_turn(slot, index_broken(index_dir, e))
+            return False
 
     if compare_on:
         slot.empty()
@@ -495,11 +514,39 @@ def _answer_turn(question, option, mode, compare_on, left, right, index_dir, *, 
     if rec is None:
         if st.session_state.pop("last_cancelled", False):
             return False
-        st.session_state.messages.append({"role": "assistant", "error": st.session_state.pop("last_error", "")})
+        st.session_state.messages.append(_failed_turn(_pop_issue()))
         return False
     st.session_state.messages.append({"role": "assistant", "record": rec})
     view.finish(rec)
     return True
+
+
+def _start_blocker(status, compare_on, left, right):
+    """What would stop the next question before it's asked: Ollama down, the picked model missing, or no index for a
+    RAG mode. None when the machine is ready."""
+    if not status["up"]:
+        return ollama_down(OLLAMA_HOST)
+    picks = [(left.option, left.mode), (right.option, right.mode)] if compare_on else [(status["picked"], status["mode"])]
+    for option, _ in picks:
+        if is_installed(option.name, status["names"]) is False:
+            return model_missing(option.name, option.create)
+    if any(uses_rag(mode) for _, mode in picks) and not index_ok(status["index_dir"]):
+        return index_missing(status["index_dir"])
+    return None
+
+
+def _failed_turn(issue):
+    """A failed answer as kept in the thread and in history: the plain text chat memory reads, and the card."""
+    return {"role": "assistant", "error": issue.text(), "issue": issue.as_dict()}
+
+
+def _show_failed_turn(slot, issue):
+    slot.markdown(issue_html(issue), unsafe_allow_html=True)
+    st.session_state.messages.append(_failed_turn(issue))
+
+
+def _pop_issue():
+    return st.session_state.pop("last_issue", None) or Issue("failed", "That answer failed", "No reason was given.")
 
 
 def _retriever_with_loader(index_dir, slot):
@@ -952,6 +999,9 @@ def _stream_text(events, on_event, heartbeat=_check_for_stop, tick=0.2, every=0.
         except queue.Empty:
             kind, value = None, None
         if kind == "error":
+            if pending:
+                # What arrived before the failure counts, so its message can say how far the answer got.
+                yield "".join(pending)
             raise value
         if kind == "text":
             pending.append(value)
@@ -1021,12 +1071,6 @@ class _Monitor:
         self.slot.markdown(monitor_html(views, streaming=streaming), unsafe_allow_html=True)
 
 
-def _ollama_error_text(error):
-    if isinstance(error, requests.ConnectionError):
-        return f"Could not reach Ollama at {OLLAMA_HOST}. Start it with `ollama serve`.\n\n{error}"
-    return f"Ollama stopped this answer with an error.\n\n{error}"
-
-
 def _answer_record(
     question,
     mode,
@@ -1049,12 +1093,7 @@ def _answer_record(
     run = monitor.begin(side)
     missing = _still_missing(option, names)
     if missing:
-        st.session_state.last_error = missing
-        monitor.end(run, "error")
-        if show_error:
-            slot.error(missing)
-        else:
-            slot.empty()
+        _record_failure(missing, run, slot, monitor, show_error)
         return None, None
     events = queue.Queue()
     answer = stream_answer_question(
@@ -1073,6 +1112,8 @@ def _answer_record(
     )
     worker = threading.Thread(target=_pump, args=(answer, events), daemon=True)
     done = False
+    text = ""
+    retrieving = uses_rag(mode)
     try:
         with slot.container(key=f"live-{key}"):
             view = _AnswerView(mode, tag)
@@ -1080,8 +1121,9 @@ def _answer_record(
         weak = False
 
         def on_event(kind, value):
-            nonlocal weak
+            nonlocal weak, retrieving
             if kind == "retrieval":
+                retrieving = False
                 monitor.retrieval(run, value)
                 weak = value.weak
                 if weak:
@@ -1093,7 +1135,6 @@ def _answer_record(
             monitor.progress(run, value)
 
         worker.start()
-        text = ""
         for piece in _stream_text(events, on_event):
             if weak:
                 continue
@@ -1106,14 +1147,12 @@ def _answer_record(
         monitor.end(run, "stopped")
         slot.empty()
         return None, None
-    except requests.RequestException as e:
-        message = _ollama_error_text(e)
-        st.session_state.last_error = message
-        monitor.end(run, "error")
-        if show_error:
-            slot.error(message)
-        else:
-            slot.empty()
+    except Exception as e:
+        # Anything raised while answering ends as a card with a next step; the traceback goes to the terminal.
+        issue = issue_for_error(e, host=OLLAMA_HOST, partial_chars=len(text), index_dir=index_dir,
+                                model=option.name, create=option.create, retrieving=retrieving)
+        log.warning("answer failed (%s)", issue.kind, exc_info=e)
+        _record_failure(issue, run, slot, monitor, show_error)
         return None, None
     finally:
         if not done:
@@ -1128,6 +1167,15 @@ def _answer_record(
     st.session_state.run_records.append(rec)
     st.session_state.warmed = True
     return rec, view
+
+
+def _record_failure(issue, run, slot, monitor, show_error):
+    st.session_state.last_issue = issue
+    monitor.end(run, "error")
+    if show_error:
+        slot.markdown(issue_html(issue), unsafe_allow_html=True)
+    else:
+        slot.empty()
 
 
 def _run_compare(question, left, right, retriever, index_dir, *, monitor, names=None, context=None):
@@ -1215,7 +1263,8 @@ def _side_outcome(mode, model):
     """Why a compare side has no record, kept with its config so a replay can say which side it was."""
     if st.session_state.pop("last_cancelled", False):
         return {"mode": mode, "model": model, "state": "cancelled"}
-    return {"mode": mode, "model": model, "state": "error", "error": st.session_state.pop("last_error", "")}
+    issue = _pop_issue()
+    return {"mode": mode, "model": model, "state": "error", "error": issue.text(), "issue": issue.as_dict()}
 
 
 def _keep_compare(messages, message, recs, unanswered):
@@ -1235,7 +1284,8 @@ def _keep_compare(messages, message, recs, unanswered):
         if not any(kept is message for kept in messages):
             messages.append(message)
     elif not any(side["state"] == "cancelled" for side in unanswered):
-        messages.append({"role": "assistant", "error": unanswered[0]["error"] or unanswered[1]["error"]})
+        failed = unanswered[0] if unanswered[0].get("error") else unanswered[1]
+        messages.append({"role": "assistant", "error": failed.get("error", ""), "issue": failed.get("issue")})
 
 
 def _render_unanswered_side(side, key, model=""):
@@ -1244,7 +1294,8 @@ def _render_unanswered_side(side, key, model=""):
         if side.get("state") == "cancelled":
             st.markdown(cancelled_side_html(), unsafe_allow_html=True)
         else:
-            st.error(side.get("error") or "That answer failed.")
+            st.markdown(issue_html(issue_from_dict(side.get("issue"), side.get("error")), compact=True),
+                        unsafe_allow_html=True)
 
 
 def _replay_message(msg, index, compact_compare=False):
@@ -1277,7 +1328,7 @@ def _replay_message(msg, index, compact_compare=False):
         _render_card(rec, key=f"answer-{index}")
         return
     if "error" in msg:
-        st.error(msg["error"] or "That answer failed.")
+        st.markdown(issue_html(issue_from_dict(msg.get("issue"), msg.get("error"))), unsafe_allow_html=True)
         return
     st.markdown(msg.get("content") or "")
 
