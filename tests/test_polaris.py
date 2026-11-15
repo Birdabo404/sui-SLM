@@ -1299,8 +1299,8 @@ class HistoryHelperTests(unittest.TestCase):
         self.assertEqual(DELETE_ASK, "Delete this chat? This can't be undone.")
 
 
-class _Interrupted(Exception):
-    pass
+class _Interrupted(BaseException):
+    """Like Streamlit's StopException and RerunException, a BaseException, so no `except Exception` swallows it."""
 
 
 class _SlowOllama(BaseHTTPRequestHandler):
@@ -1671,7 +1671,7 @@ class StopTests(unittest.TestCase):
         self.assertTrue(answer.cancelled.is_set())
         self.assertTrue(answer.closed)
         self.assertFalse(answer.worker_alive_after(1.0))
-        slot.error.assert_not_called()
+        slot.markdown.assert_not_called()
 
     def test_answer_record_catches_chat_cancelled(self):
         st, app_mod = self._app_with_mock_st()
@@ -1687,19 +1687,43 @@ class StopTests(unittest.TestCase):
         self.assertTrue(answer.closed)
 
     def test_a_stream_error_hides_protocol_details_and_is_not_a_connection_failure(self):
+        html, _ = self._failed_card(OllamaStreamError("model 'm' not found"))
+        self.assertIn("response the app could not use", html)
+        self.assertNotIn("model 'm' not found", html)
+        self.assertNotIn("Could not reach", html)
+        self.assertNotIn("isn&#x27;t running", html)
+
+    def _failed_card(self, error):
         st, app_mod = self._app_with_mock_st()
         slot = MagicMock()
-        answer = _BlockingAnswer(error=OllamaStreamError("model 'm' not found"))
+        answer = _BlockingAnswer(error=error)
         with patch.object(app_mod, "stream_answer_question", return_value=answer), \
                 patch.object(app_mod, "_model_info", return_value=None):
             rec, run = self._answer(app_mod, slot)
         self.assertIsNone(rec)
         self.assertEqual(run["state"], "error")
-        message = slot.error.call_args.args[0]
-        self.assertIn("response the app could not use", message)
-        self.assertNotIn("model 'm' not found", message)
-        self.assertNotIn("Could not reach", message)
         self.assertTrue(answer.closed)
+        slot.error.assert_not_called()
+        (html,) = slot.markdown.call_args.args
+        return html, st.session_state.last_issue
+
+    def test_a_model_not_found_in_the_stream_names_the_command_not_a_connection_failure(self):
+        html, issue = self._failed_card(OllamaStreamError("model 'm' not found"))
+        self.assertEqual(issue.kind, "model_missing")
+        self.assertIn("m isn&#x27;t installed", html)
+        self.assertIn("<code>ollama pull m</code>", html)
+        self.assertNotIn("isn&#x27;t running", html)
+
+    def test_another_stream_error_says_ollama_returned_an_error(self):
+        html, issue = self._failed_card(OllamaStreamError("Ollama returned invalid NDJSON"))
+        self.assertEqual(issue.kind, "ollama_error")
+        self.assertIn("Ollama returned invalid NDJSON", html)
+
+    def test_any_other_exception_is_a_card_not_a_traceback(self):
+        html, issue = self._failed_card(KeyError("eval_count"))
+        self.assertEqual(issue.kind, "unexpected")
+        self.assertIn("KeyError while answering", html)
+        self.assertNotIn("Traceback", html)
 
     def test_loader_is_sent_once_while_waiting_for_the_first_chunk(self):
         st, app_mod = self._app_with_mock_st()
