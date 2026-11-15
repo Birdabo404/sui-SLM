@@ -61,21 +61,22 @@ Every request sends `think: false` and `temperature` 0.2. Models: `qwen3.5:2b` (
 
 ## Troubleshooting
 
-Every failure shows as a card in the chat with the command that fixes it; the full error goes to the terminal running the app. The same check runs before you ask: on the landing page when something would block the next question, and in Settings.
+Every failure shows as a card in the chat: a title, what happened, and the next step where there is one. The full error goes to the terminal running the app, never to the page. When `app/backend.py` is present, the middle line is its typed error's `user_message`, word for word (codes in `docs/errors.md`); without it, the app classifies plain `requests` and socket errors itself into the same cards under the same codes. The same check runs before you ask: on the landing page when something would block the next question, and in Settings.
 
-| Card | Cause | Fix |
+| Card (code) | Cause | Next step |
 |---|---|---|
-| Ollama isn't running | Nothing answers at `OLLAMA_HOST`. | `ollama serve`, or start the app with `sui-slm`, which starts it. |
-| *model* isn't installed | Ollama runs but doesn't have the picked model. Nothing is asked, and no other model stands in. | The command on the card: `ollama pull qwen3.5:2b`, or `ollama create thesis-student -f Modelfile` / `ollama create thesis-base-q4km -f Modelfile-base` from the KD export. |
-| The lab docs index isn't there | `RAG_INDEX` has no `chunks.jsonl` or no `chroma/`. BASE and +CoT still work. | Build it (Quickstart step 3), or set `RAG_INDEX` to an index you have. |
-| The lab docs index couldn't be opened | The folder exists but chromadb can't load it, often an index built with chromadb 0.6.3. | Rebuild it with `rag/build_index.py`; don't copy an old `chroma/` folder. |
-| The embedding model isn't on this machine | MiniLM is not in the local Hugging Face cache and the app runs offline. | `bash install.sh` once with the network on. |
-| Looking up the lab docs failed | The index loaded, but a search raised an error. | Ask again; if it repeats, restart the app and read the terminal. |
-| No fix on this one | Not an error: no retrieved chunk reached cosine 0.30 (or nothing was retrieved), so the app abstained without calling the model. | Rephrase with the command or tool name, or ask the lab technician. |
-| Ollama took too long | No data from Ollama within the client's read timeout (300 s). Usually a model still loading or a busy CPU. | Ask again; if it repeats, restart Ollama. |
-| The answer stopped mid-stream | Ollama closed the stream before its final record. The card says how many characters arrived; the partial answer is not kept. | `ollama ps` to check it is still running with the model loaded, then ask again. |
-| Ollama returned an error | Any other error reply from Ollama; the card shows its first line. | Ask again; if it repeats, restart Ollama. |
-| Something in the app failed | An unexpected exception; the card names its type only. | Ask again; the traceback is in the terminal. |
+| Ollama isn't running (`ollama_unavailable`) | Nothing answers at `OLLAMA_HOST`. | `ollama serve`, or start the app with `sui-slm`, which starts it. |
+| *model* isn't installed (`ollama_model_missing`) | Ollama runs but doesn't have the picked model. Nothing is asked, and no other model stands in. | The command on the card: `ollama pull qwen3.5:2b`, or `ollama create thesis-student -f Modelfile` / `ollama create thesis-base-q4km -f Modelfile-base` from the KD export. |
+| The lab docs index isn't there (`index_missing`) | `RAG_INDEX` has no `chunks.jsonl` or no `chroma/`. BASE and +CoT still work. | Build it (Quickstart step 3), or set `RAG_INDEX` to an index you have. |
+| The lab docs index couldn't be opened (`index_corrupt`) | The folder exists but chromadb can't load it, often an index built with chromadb 0.6.3. | Rebuild it with `rag/build_index.py`; don't copy an old `chroma/` folder. |
+| The embedding model isn't on this machine (`embedding_model_missing`) | MiniLM is not in the local Hugging Face cache and the app runs offline. | `bash install.sh` once with the network on. |
+| Looking up the lab docs failed (`index_query_failed`) | The index loaded, but a search raised an error. | Ask again; if it repeats, restart the app and read the terminal. |
+| No fix on this one | Not an error: nothing was retrieved (`abstain_empty_retrieval`) or no chunk reached cosine 0.30 (`abstain_weak_retrieval`), so the app abstained without calling the model. A line under the abstain text says which. | Rephrase with the command or tool name, or ask the lab technician. |
+| answer cut off at the length limit | Not an error: a chip in the answer footer. Ollama ended with `done_reason=length`, at the token cap or the 4096-token context, so the text may stop mid-sentence. | Ask a narrower question, or use a mode without CoT. |
+| Ollama took too long (`ollama_timeout`) | No data from Ollama within the client's read timeout (300 s). Usually a model still loading or a busy CPU. | Ask again; if it repeats, restart Ollama. |
+| The answer stopped mid-stream (`ollama_disconnected`) | Ollama closed the stream before its final record. The partial answer is discarded, and the card says how many characters were. | `ollama ps` to check it is still running with the model loaded, then ask again. |
+| Ollama returned an error (`ollama_response_error`) | Any other error reply from Ollama. Without `app/backend.py` the card shows its first line. | Ask again; if it repeats, restart Ollama. |
+| Something in the app failed (`unexpected`) | An unexpected exception; the card names its type only. | Ask again; the traceback is in the terminal. |
 
 The launcher itself prints "Ollama is not available. Install it or start `ollama serve`." when it can't start Ollama: install it, or start it by hand and run `sui-slm` again.
 
@@ -89,6 +90,7 @@ The launcher itself prints "Ollama is not available. Install it or start `ollama
 - The live rate in the rail counts characters, since Ollama's stream carries no per-chunk token counts. tok/s comes from Ollama's own counts once an answer ends.
 - The offline check looks for MiniLM (`sentence-transformers/all-MiniLM-L6-v2`) in the Hugging Face cache. An index built with `--model` set to another embedding model isn't covered by that row.
 - The read timeout (300 s) is fixed in the client and can't be changed from the UI.
+- A long answer can stop at the length limit (an app-only token cap where the generation guard is in place, or the 4096-token context). The footer says so, but the rest of the answer is not fetched.
 - The old sidebar UI (`POLARIS_ENABLED=0`) still shows plain Streamlit error boxes.
 
 ## How the app works
