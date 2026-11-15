@@ -7,6 +7,8 @@ CPU_INDEX="https://download.pytorch.org/whl/cpu"
 EMBED_MODEL="sentence-transformers/all-MiniLM-L6-v2"
 MIN_FREE_KB="${SUI_SLM_MIN_FREE_KB:-4194304}"
 OFFLINE=0
+ENHANCED=0
+ACTION=""
 cd "$ROOT"
 
 fail() {
@@ -16,9 +18,11 @@ fail() {
 
 usage() {
   cat <<'EOF'
-Usage: bash install.sh [--offline|--check-python|--check-disk|--install-launcher]
+Usage: bash install.sh [--offline] [--enhanced]
+       bash install.sh [--check-python|--check-disk|--install-launcher]
 
   --offline           Verify and reuse an existing installation without network access.
+  --enhanced          Install and cache the optional Enhanced retrieval models.
   --check-python      Check only the supported Python version.
   --check-disk        Check only the available disk space.
   --install-launcher  Install only the command, desktop file, and icon.
@@ -124,9 +128,25 @@ ensure_ollama_model() {
 
 check_python
 
-case "${1:-}" in
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --offline) OFFLINE=1 ;;
+    --enhanced) ENHANCED=1 ;;
+    --check-python|--check-disk|--install-launcher)
+      [ -z "$ACTION" ] || fail "Only one check or launcher action may be used."
+      ACTION="$1"
+      ;;
+    -h|--help) ACTION="--help" ;;
+    *)
+      usage >&2
+      fail "Unknown option: $1"
+      ;;
+  esac
+  shift
+done
+
+case "$ACTION" in
   '') ;;
-  --offline) OFFLINE=1 ;;
   --check-python) exit 0 ;;
   --check-disk)
     check_disk
@@ -136,13 +156,9 @@ case "${1:-}" in
     install_launcher
     exit 0
     ;;
-  -h|--help)
+  --help)
     usage
     exit 0
-    ;;
-  *)
-    usage >&2
-    fail "Unknown option: $1"
     ;;
 esac
 
@@ -178,8 +194,18 @@ fi
 # shellcheck disable=SC1091
 . "$ROOT/.venv/bin/activate"
 
-read -r requirements_hash _ < <(sha256sum "$ROOT/requirements.txt")
-requirements_stamp="$ROOT/.venv/.sui-slm-requirements.sha256"
+requirements_file="$ROOT/requirements.txt"
+requirements_profile="base"
+read -r base_requirements_hash _ < <(sha256sum "$ROOT/requirements.txt")
+requirements_hash="$base_requirements_hash"
+if [ "$ENHANCED" -eq 1 ]; then
+  requirements_file="$ROOT/requirements-enhanced.txt"
+  requirements_profile="enhanced"
+  read -r requirements_hash _ < <(
+    sha256sum "$ROOT/requirements.txt" "$requirements_file" | sha256sum
+  )
+fi
+requirements_stamp="$ROOT/.venv/.sui-slm-${requirements_profile}-requirements.sha256"
 needs_packages=1
 if [ -f "$requirements_stamp" ] &&
    [ "$(<"$requirements_stamp")" = "$requirements_hash" ] &&
@@ -197,7 +223,7 @@ else
     export ANONYMIZED_TELEMETRY=False
     # CPU torch first so the later -r install cannot replace it with a CUDA wheel.
     python -m pip install torch==2.9.1 --index-url "$CPU_INDEX"
-    python -m pip install -r "$ROOT/requirements.txt" --extra-index-url "$CPU_INDEX"
+    python -m pip install -r "$requirements_file" --extra-index-url "$CPU_INDEX"
   else
     printf 'Dependency check: requirements are unchanged and healthy.\n'
   fi
@@ -207,6 +233,10 @@ python -m pip check
 python -c "import bs4, chromadb, lxml, psutil, rank_bm25, requests, sentence_transformers, streamlit, torch"
 python -c "import torch; assert torch.version.cuda is None, 'CUDA-enabled torch is not supported on this CPU-only install'"
 printf '%s\n' "$requirements_hash" > "$requirements_stamp"
+if [ "$ENHANCED" -eq 1 ]; then
+  printf '%s\n' "$base_requirements_hash" > \
+    "$ROOT/.venv/.sui-slm-base-requirements.sha256"
+fi
 
 if [ "$OFFLINE" -eq 1 ]; then
   python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('$EMBED_MODEL', device='cpu', local_files_only=True)" ||
@@ -217,6 +247,66 @@ else
     fail "Could not cache embedding model $EMBED_MODEL."
 fi
 printf 'Embedding model check: %s is cached.\n' "$EMBED_MODEL"
+
+if [ "$ENHANCED" -eq 1 ]; then
+  if ! python - "$OFFLINE" <<'PY'
+import sys
+from pathlib import Path
+
+from app.backend import UserFacingBackendError
+from app.hybrid import (
+    RERANKER_MODEL,
+    RERANKER_REVISION,
+    _load_reranker,
+    cache_reranker_model,
+)
+
+
+offline = sys.argv[1] == "1"
+
+
+def ensure_cached(loader, verifier):
+    if offline:
+        assets = loader(local_files_only=True)
+        verifier()
+        return assets, "verified"
+    try:
+        assets = loader(local_files_only=True)
+        verifier()
+        return assets, "already cached"
+    except UserFacingBackendError:
+        assets = loader(local_files_only=False)
+        verifier()
+        return assets, "downloaded"
+
+
+def megabytes(path):
+    return sum(
+        item.stat().st_size
+        for item in Path(path).rglob("*")
+        if item.is_file()
+    ) / 1_000_000
+
+
+try:
+    reranker_path, reranker_status = ensure_cached(
+        cache_reranker_model,
+        lambda: _load_reranker(RERANKER_MODEL, RERANKER_REVISION, True),
+    )
+except UserFacingBackendError as error:
+    print(f"{type(error).__name__}: {error.user_message}", file=sys.stderr)
+    raise SystemExit(1) from None
+
+print(
+    f"Enhanced reranker: {reranker_status} "
+    f"({megabytes(reranker_path):.1f} MB)."
+)
+print("Enhanced model check: the reranker loaded with local files only.")
+PY
+  then
+    fail "Enhanced model cache setup failed."
+  fi
+fi
 
 base_model="${OLLAMA_MODEL:-qwen3.5:2b}"
 ensure_ollama_model "$base_model" pull
