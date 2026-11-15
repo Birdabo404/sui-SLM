@@ -1128,14 +1128,17 @@ def ram_split_html(record):
 _TICK_RE = re.compile(r"`([^`\n]+)`")
 
 
-def idk_card_html(record):
+def idk_card_html(record, note=""):
+    """The abstention as written, then `note`: why it abstained (nothing retrieved, or nothing close enough)."""
     _, answer = split_reasoning(record.get("answer") or "")
     body = _TICK_RE.sub(r"<code>\1</code>", escape(answer)).replace("\n", "<br>")
+    why = f'<p class="idk-why">{escape(note)}</p>' if note else ""
     return (
         '<div class="idk-body">'
         f'<span class="idk-star">{STAR_SVG}</span>'
         "<h4>No fix on this one</h4>"
         f"<p>{body}</p>"
+        f"{why}"
         "</div>"
         '<div class="polaris-idk-flag" hidden></div>'
     )
