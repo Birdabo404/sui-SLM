@@ -24,15 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from shared.prompt import ABSTAIN
-from app.backend import (
-    EmbeddingModelError,
-    IndexLoadError,
-    OllamaDisconnected,
-    OllamaModelMissing,
-    OllamaTimedOut,
-    RetrievalQueryError,
-)
-from app.streaming import LiveThroughput, retrieval_chart
+from app.streaming import LiveThroughput, OllamaStreamError, retrieval_chart
 from app.models import ComparePick, ModelOption, compare_picks, default_compare_ids, model_options, modes_for, pair_compare_ids
 from app.engine import (
     OllamaInfo,
@@ -426,7 +418,7 @@ class CompareTests(unittest.TestCase):
                       model_status_html(student, names, True))
         missing = model_status_html(q4, names, True)
         self.assertIn('class="side-note model-st err"', missing)
-        self.assertIn("<code>ollama create thesis-base-q4km -f /path/to/Modelfile-base</code>", missing)
+        self.assertIn("<code>ollama create thesis-base-q4km -f Modelfile-base</code>", missing)
         self.assertIn("can't check, Ollama is not running", model_status_html(q4, None, False))
 
         table = models_table_html((base, q4, student), names, True)
@@ -500,12 +492,7 @@ class CompareTests(unittest.TestCase):
             app_mod.st, "columns", return_value=(Col(), Col())
         ), patch.object(app_mod, "_answer_record", side_effect=answer):
             base = ModelOption("base", "qwen3.5:2b", "default base", "ollama pull qwen3.5:2b")
-            student = ModelOption(
-                "distilled",
-                "student:latest",
-                "KD student",
-                "ollama create student:latest -f /path/to/Modelfile",
-            )
+            student = ModelOption("distilled", "student:latest", "KD student", "ollama create student:latest -f Modelfile")
             monitor = MagicMock()
             (left, right), unanswered = app_mod._run_compare(
                 "q", ComparePick(base, "base"), ComparePick(student, "full"), None, "idx", monitor=monitor
@@ -1688,69 +1675,20 @@ class StopTests(unittest.TestCase):
         slot.empty.assert_called_once()
         self.assertTrue(answer.closed)
 
-    def test_a_missing_model_error_names_the_model_and_install_command(self):
+    def test_a_stream_error_hides_protocol_details_and_is_not_a_connection_failure(self):
         st, app_mod = self._app_with_mock_st()
         slot = MagicMock()
-        answer = _BlockingAnswer(error=OllamaModelMissing("private server detail"))
+        answer = _BlockingAnswer(error=OllamaStreamError("model 'm' not found"))
         with patch.object(app_mod, "stream_answer_question", return_value=answer), \
                 patch.object(app_mod, "_model_info", return_value=None):
             rec, run = self._answer(app_mod, slot)
         self.assertIsNone(rec)
         self.assertEqual(run["state"], "error")
         message = slot.error.call_args.args[0]
-        self.assertIn("m isn't installed in Ollama", message)
-        self.assertIn("ollama pull m", message)
-        self.assertNotIn("private server detail", message)
+        self.assertIn("response the app could not use", message)
+        self.assertNotIn("model 'm' not found", message)
         self.assertNotIn("Could not reach", message)
         self.assertTrue(answer.closed)
-
-    def test_timeout_disconnect_and_retrieval_errors_are_plain_and_distinct(self):
-        cases = (
-            (
-                OllamaTimedOut("private timeout"),
-                "took too long",
-                "private timeout",
-            ),
-            (
-                OllamaDisconnected("socket 9 reset"),
-                "disconnected before the answer finished",
-                "socket 9",
-            ),
-            (
-                RetrievalQueryError("sqlite page 4 corrupt"),
-                "index failed while searching",
-                "sqlite page",
-            ),
-        )
-        for error, expected, hidden in cases:
-            with self.subTest(error=type(error).__name__):
-                st, app_mod = self._app_with_mock_st()
-                slot = MagicMock()
-                answer = _BlockingAnswer(error=error)
-                with patch.object(app_mod, "stream_answer_question", return_value=answer), \
-                        patch.object(app_mod, "_model_info", return_value=None):
-                    rec, run = self._answer(app_mod, slot)
-                self.assertIsNone(rec)
-                self.assertEqual(run["state"], "error")
-                message = slot.error.call_args.args[0]
-                self.assertIn(expected, message)
-                self.assertNotIn(hidden, message)
-                self.assertTrue(answer.closed)
-
-    def test_index_and_embedding_load_messages_hide_internal_errors(self):
-        st, app_mod = self._app_with_mock_st()
-        index = app_mod.backend_error_text(
-            IndexLoadError("sqlite database disk image is malformed"),
-            index_dir="/tmp/index",
-        )
-        embedding = app_mod.backend_error_text(
-            EmbeddingModelError("cache/config.json missing"),
-            index_dir="/tmp/index",
-        )
-        self.assertIn("could not be opened", index)
-        self.assertIn("Run `bash install.sh` once while online", embedding)
-        self.assertNotIn("sqlite", index)
-        self.assertNotIn("config.json", embedding)
 
     def test_loader_is_sent_once_while_waiting_for_the_first_chunk(self):
         st, app_mod = self._app_with_mock_st()

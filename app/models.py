@@ -28,22 +28,10 @@ def model_options(base_model, distilled_model=""):
     options = [ModelOption("base", base_model, "default base", f"ollama pull {base_model}")]
     if MATCHED_BASE != base_model:
         options.append(
-            ModelOption(
-                "base",
-                MATCHED_BASE,
-                "Q4_K_M base",
-                f"ollama create {MATCHED_BASE} -f /path/to/Modelfile-base",
-            )
+            ModelOption("base", MATCHED_BASE, "Q4_K_M base", f"ollama create {MATCHED_BASE} -f Modelfile-base")
         )
     if student not in (o.name for o in options):
-        options.append(
-            ModelOption(
-                "distilled",
-                student,
-                "KD student",
-                f"ollama create {student} -f /path/to/Modelfile",
-            )
-        )
+        options.append(ModelOption("distilled", student, "KD student", f"ollama create {student} -f Modelfile"))
     return tuple(options)
 
 
@@ -85,15 +73,11 @@ def installed_names(host, timeout=1.0):
 
 
 def missing_text(option):
-    if option.create.startswith("ollama create"):
-        return (
-            f"{option.name} isn't installed in Ollama on this machine. "
-            "The exported GGUF and Modelfile are not included in this repository. "
-            f"Copy them to this machine, then run `{option.create}` with their actual path."
-        )
     return (
         f"{option.name} isn't installed in Ollama on this machine. "
-        f"Install it with `{option.create}`, then ask again."
+        f"Create it with `{option.create}`"
+        + (" from the KD export (kd/README.md)" if option.create.startswith("ollama create") else "")
+        + ", then ask again."
     )
 
 

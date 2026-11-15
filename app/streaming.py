@@ -16,11 +16,14 @@ from typing import Callable
 from urllib.parse import urlsplit
 
 from app.backend import (
+    AnswerStatus,
+    IndexMissingError,
     OllamaDisconnected,
     OllamaModelMissing,
     OllamaResponseError,
     OllamaTimedOut,
     OllamaUnavailable,
+    answer_status,
 )
 from app.engine import (
     K,
@@ -79,11 +82,18 @@ class RetrievalChart:
     rows: tuple[RetrievalScore, ...]
     dense_threshold: float
     weak: bool
+    uses_retrieval: bool = True
     notes: tuple[str, ...] = (
         "dense_cosine is the MiniLM cosine used by the abstain threshold",
         "rrf_rank_score is a reciprocal-rank fusion score, not confidence",
         "bm25_raw is query-relative and unbounded; it is not comparable to cosine or RRF",
     )
+
+    @property
+    def status(self) -> AnswerStatus:
+        if not self.uses_retrieval:
+            return AnswerStatus.COMPLETE
+        return answer_status(self.rows, self.weak)
 
 
 def _optional_float(value):
@@ -103,7 +113,7 @@ def _is_missing_model_error(detail):
     )
 
 
-def retrieval_chart(hits, threshold, weak=False):
+def retrieval_chart(hits, threshold, weak=False, uses_retrieval=True):
     rows = []
     for rank, hit in enumerate(hits or (), 1):
         label = str(hit.get("title") or hit.get("path") or hit.get("source") or f"hit {rank}")
@@ -117,7 +127,12 @@ def retrieval_chart(hits, threshold, weak=False):
                 bm25_raw=_optional_float(hit.get("bm25")),
             )
         )
-    return RetrievalChart(tuple(rows), float(threshold), bool(weak))
+    return RetrievalChart(
+        tuple(rows),
+        float(threshold),
+        bool(weak),
+        bool(uses_retrieval),
+    )
 
 
 def _terminal_result(text, payload):
@@ -419,7 +434,7 @@ class StreamingAnswer:
             self.chat.raise_if_cancelled()
             if uses_rag(self.mode):
                 if self.retriever is None:
-                    raise RuntimeError("RAG index is not loaded")
+                    raise IndexMissingError("RAG retriever was not provided")
                 query = self.question if self.context is None else self.context.retrieval_query
                 hits = self.retriever.retrieve(query, k=self.k, tldr_lane=True)
                 weak = is_weak(hits, threshold=self.threshold)
@@ -427,7 +442,12 @@ class StreamingAnswer:
             messages = self.messages_fn(self.question, hits, self.mode)
             if self.context is not None:
                 messages, context_turns = self.context.apply_with_count(messages)
-            self.retrieval = retrieval_chart(hits, self.threshold, weak)
+            self.retrieval = retrieval_chart(
+                hits,
+                self.threshold,
+                weak,
+                uses_retrieval=uses_rag(self.mode),
+            )
             self.chat.raise_if_cancelled()
             if self.on_retrieval is not None:
                 self.on_retrieval(self.retrieval)
@@ -490,6 +510,7 @@ class StreamingAnswer:
                 git_sha=self.git_sha,
                 model_info=self.model_info or OllamaInfo(),
             )
+            self._result["status"] = self.retrieval.status
             self._result["done_reason"] = None if weak else self.chat.done_reason
             complete = True
         finally:

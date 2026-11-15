@@ -19,11 +19,6 @@ import requests
 import streamlit as st
 
 from app.answer_format import app_messages, parse_answer, safe_markdown
-from app.backend import (
-    AppRetrievalError,
-    backend_error_text,
-    load_app_retriever,
-)
 from app.chat_memory import ChatStore, build_chat_context
 from app.engine import (
     BASE_MODEL,
@@ -117,13 +112,14 @@ from app.polaris import (
     warm_label,
 )
 from app.streaming import ChatCancelled, stream_answer_question
-from rag.query_hybrid import HybridRetriever
 from shared.frozen import format_threshold, load_frozen
 
 
 @st.cache_resource(show_spinner=False)
 def load_retriever(index_dir):
-    return load_app_retriever(index_dir, factory=HybridRetriever)
+    from rag.query_hybrid import HybridRetriever
+
+    return HybridRetriever(index_dir)
 
 
 @st.cache_data(ttl=15, show_spinner=False)
@@ -207,10 +203,7 @@ def run_legacy():
                 f"No index at {index_dir}. Fetch the corpus and run rag/build_index.py first."
             )
         else:
-            try:
-                retriever = load_retriever(index_dir)
-            except AppRetrievalError as error:
-                st.warning(backend_error_text(error, index_dir=index_dir))
+            retriever = load_retriever(index_dir)
 
     if "messages" not in st.session_state:
         st.session_state.messages = []
@@ -264,12 +257,10 @@ def run_legacy():
                     f"total {result['total_mb']:.0f} MB"
                     + (" (weak retrieval, abstained)" if weak else "")
                 )
-            except (requests.RequestException, AppRetrievalError) as error:
-                text = backend_error_text(
-                    error,
-                    host=OLLAMA_HOST,
-                    index_dir=index_dir,
-                    model=model,
+            except requests.RequestException as e:
+                text = (
+                    f"Could not reach Ollama at {OLLAMA_HOST}. "
+                    f"Start it with `ollama serve`.\n\n{e}"
                 )
                 hits, weak, stats = [], False, ""
                 failed = True
@@ -479,13 +470,7 @@ def _answer_turn(question, option, mode, compare_on, left, right, index_dir, *, 
             slot.error(message)
             st.session_state.messages.append({"role": "assistant", "error": message})
             return False
-        try:
-            retriever = _retriever_with_loader(index_dir, slot)
-        except AppRetrievalError as error:
-            message = backend_error_text(error, index_dir=index_dir)
-            slot.error(message)
-            st.session_state.messages.append({"role": "assistant", "error": message})
-            return False
+        retriever = _retriever_with_loader(index_dir, slot)
 
     if compare_on:
         slot.empty()
@@ -1036,6 +1021,12 @@ class _Monitor:
         self.slot.markdown(monitor_html(views, streaming=streaming), unsafe_allow_html=True)
 
 
+def _ollama_error_text(error):
+    if isinstance(error, requests.ConnectionError):
+        return f"Could not reach Ollama at {OLLAMA_HOST}. Start it with `ollama serve`.\n\n{error}"
+    return f"Ollama stopped this answer with an error.\n\n{error}"
+
+
 def _answer_record(
     question,
     mode,
@@ -1115,14 +1106,8 @@ def _answer_record(
         monitor.end(run, "stopped")
         slot.empty()
         return None, None
-    except (requests.RequestException, AppRetrievalError) as error:
-        message = backend_error_text(
-            error,
-            host=OLLAMA_HOST,
-            index_dir=index_dir,
-            model=option.name,
-            model_command=option.create,
-        )
+    except requests.RequestException as e:
+        message = _ollama_error_text(e)
         st.session_state.last_error = message
         monitor.end(run, "error")
         if show_error:
