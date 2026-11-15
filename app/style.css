@@ -587,7 +587,7 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 [data-testid="stSidebar"] .side-note{margin:0;font:400 var(--fs-meta)/var(--lh-ui) var(--f-ui);color:var(--c-text-3);text-wrap:pretty}
 [data-testid="stSidebar"] .side-note.err{color:var(--c-danger)}
 [data-testid="stSidebar"] .side-note .ok{color:var(--c-data)}
-[data-testid="stSidebar"] .side-note code{font-size:11.5px;overflow-wrap:anywhere}
+[data-testid="stSidebar"] .side-note code{display:inline-block;max-width:100%;font-size:11.5px;overflow-wrap:anywhere}
 
 /* the wordmark rides up into the sidebar's header row, beside the collapse control; the art sits under it.
    Streamlit shows that control only on hover and the wordmark's row covers it, so it stays shown and on top. */
