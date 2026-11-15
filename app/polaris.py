@@ -1230,7 +1230,7 @@ def evidence_panel_html(record):
     else:
         parts.append('<p class="no-sources">no hits</p>')
     parts.append(ram_split_html(record))
-    parts.append('<details class="dbg"><summary>Debug</summary>')
+    parts.append('<details class="dbg"><summary>Raw scores</summary>')
     parts.append(debug_rows_html(hits))
     parts.append("</details>")
     return "".join(parts)

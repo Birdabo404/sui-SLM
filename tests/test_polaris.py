@@ -572,6 +572,8 @@ class HtmlTests(unittest.TestCase):
         self.assertNotIn("tldr/common/tar.md", panel.split("<details", 1)[0])
         self.assertIn("app <b>420</b> MB", panel)
         self.assertIn("ollama <b>2100</b> MB", panel)
+        self.assertIn('<details class="dbg"><summary>Raw scores</summary>', panel)
+        self.assertNotIn("Debug", panel)
         dbg = debug_rows_html(hits)
         self.assertIn("rrf 0.0500", dbg)
         self.assertIn("bm25 6.200", dbg)
