@@ -499,6 +499,8 @@ class MockRunTests(unittest.TestCase):
         self.assertEqual(body["model"], "qwen3.5:2b")
         self.assertFalse(body["stream"])
         self.assertNotIn("keep_alive", body)
+        self.assertNotIn("num_predict", body["options"])
+        self.assertNotIn("repeat_penalty", body["options"])
 
     def test_keep_alive_setting_defaults_and_honors_env(self):
         self.assertEqual(keep_alive_setting({}), "30m")

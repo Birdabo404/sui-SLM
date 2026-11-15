@@ -45,10 +45,12 @@ from shared.prompt import ABSTAIN
 # app cap leaves several times that headroom while bounding a repetition loop.
 APP_NUM_PREDICT = 512
 APP_REPEAT_PENALTY = 1.1
+APP_THINK = False
 
 
 def _guarded_chat_body(*args, **kwargs):
     body = ollama_chat_body(*args, **kwargs)
+    body["think"] = APP_THINK
     body["options"].update(
         {
             "num_predict": APP_NUM_PREDICT,
