@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Phase 1 contracts for opt-in Enhanced retrieval and grounding."""
+"""Contracts for opt-in Enhanced retrieval."""
 import subprocess
 import sys
 import unittest
@@ -8,7 +8,6 @@ from unittest.mock import Mock, patch
 
 from app.backend import SafeRetriever
 from app.engine import is_weak
-from app.grounding import GroundingModelError, score
 from app.hybrid import (
     METHOD_LABEL,
     RERANKER_REVISION,
@@ -28,16 +27,6 @@ class _Reranker:
     def predict(self, pairs, show_progress_bar=False):
         self.pairs = tuple(pairs)
         return self.scores
-
-
-class _GroundingScorer:
-    def __init__(self, result):
-        self.result = result
-        self.pairs = ()
-
-    def predict(self, pairs):
-        self.pairs = tuple(pairs)
-        return self.result
 
 
 class _Encoded:
@@ -208,29 +197,6 @@ assert "app.grounding" not in sys.modules
             text=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
-
-
-class GroundingTests(unittest.TestCase):
-    def test_score_returns_consistency_and_label_information(self):
-        scorer = _GroundingScorer([0.8])
-        result = score("Supported answer.", ("first excerpt", "second excerpt"), scorer=scorer)
-
-        self.assertEqual(result.score, 0.8)
-        self.assertEqual(result.labels[0].label, "consistent")
-        self.assertEqual(result.labels[0].text, "Supported answer.")
-        self.assertEqual(
-            scorer.pairs,
-            (("first excerpt\n\nsecond excerpt", "Supported answer."),),
-        )
-
-    def test_grounding_failure_is_typed_and_hides_internal_detail(self):
-        class BrokenScorer:
-            def predict(self, pairs):
-                raise RuntimeError("private model failure")
-
-        with self.assertRaises(GroundingModelError) as caught:
-            score("answer", ("excerpt",), scorer=BrokenScorer())
-        self.assertNotIn("private model", str(caught.exception))
 
 
 class OfflineRerankerTests(unittest.TestCase):
