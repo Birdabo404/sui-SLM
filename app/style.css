@@ -417,6 +417,19 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 .issue.compact{gap:4px;padding:var(--s-2) var(--s-3)}
 .st-key-landing .issue{margin-top:var(--s-1)}
 
+.ck-sum{margin:0 0 var(--s-2);font:600 var(--fs-ui)/var(--lh-ui) var(--f-ui)}
+.ck-sum.ok{color:var(--c-data)}
+.ck-sum.bad{color:var(--c-danger)}
+.checks{list-style:none;margin:0 0 var(--s-2);padding:0;display:flex;flex-direction:column;gap:6px;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui)}
+.checks li{display:grid;grid-template-columns:28px 136px minmax(0,1fr);column-gap:var(--s-2);align-items:baseline;min-width:0}
+.checks .ck-m{font-size:var(--fs-meta);font-weight:600;color:var(--c-text-3)}
+.checks .ok .ck-m{color:var(--c-data)}
+.checks .bad .ck-m{color:var(--c-danger)}
+.checks .ck-l{color:var(--c-text-3);white-space:nowrap}
+.checks .ck-v{min-width:0;color:var(--c-text);overflow-wrap:anywhere}
+.checks .ck-fix{grid-column:3;justify-self:start;margin-top:2px;padding:1px 6px;border-radius:var(--r-xs);background:var(--c-raised);
+  font:400 var(--fs-meta)/var(--lh-ui) var(--f-mono);color:var(--c-text);overflow-wrap:anywhere;user-select:all}
+
 .chips{display:flex;flex-wrap:wrap;gap:var(--s-2)}
 .chip{display:inline-flex;align-items:center;gap:6px;max-width:100%;height:26px;padding:0 var(--s-2);border-radius:var(--r-pill);background:var(--c-raised);
   font:400 var(--fs-cap)/1 var(--f-ui);color:var(--c-text)}

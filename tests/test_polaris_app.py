@@ -792,6 +792,31 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.at.run()
         self.assertNotIn('class="issue', self._html())
 
+    # ---------- offline start check ----------
+
+    def test_settings_lists_the_offline_start_check(self):
+        with patch("app.engine.index_ok", return_value=True), patch("app.polaris.index_chunk_count", return_value=1234), \
+                patch("app.issues.hf_cached", return_value=True), patch("app.polaris.network_online", return_value=False):
+            self.at.run()
+            html = self._settings_html()
+        self.assertIn("Ready to answer offline", html)
+        for label, value in (("Ollama", f"running at {engine.OLLAMA_HOST}"), ("Model", "qwen3.5:2b installed"),
+                             ("Embedding model", "MiniLM cached locally")):
+            self.assertIn(f'<span class="ck-l">{label}</span><span class="ck-v">{value}</span>', html)
+        self.assertIn("1,234 chunks", html)
+        self.assertIn('<span class="ck-l">Network</span><span class="ck-v">offline, not needed</span>', html)
+        self.assertNotIn('class="ck-fix"', html)
+
+    def test_the_offline_check_names_each_fix(self):
+        with patch("app.engine.index_ok", return_value=False), patch("app.issues.hf_cached", return_value=False), \
+                patch("app.engine.ollama_reachable", return_value=False):
+            self.at.run()
+            html = self._settings_html()
+        self.assertIn("Needs attention: ollama, lab docs index, embedding model", html)
+        self.assertIn('<code class="ck-fix">ollama serve</code>', html)
+        self.assertIn('<code class="ck-fix">bash install.sh</code>', html)
+        self.assertIn("can&#x27;t check until Ollama runs", html)
+
     # ---------- chat history ----------
 
     def _rows(self):
