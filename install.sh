@@ -198,7 +198,6 @@ else
     # CPU torch first so the later -r install cannot replace it with a CUDA wheel.
     python -m pip install torch==2.9.1 --index-url "$CPU_INDEX"
     python -m pip install -r "$ROOT/requirements.txt" --extra-index-url "$CPU_INDEX"
-    printf '%s\n' "$requirements_hash" > "$requirements_stamp"
   else
     printf 'Dependency check: requirements are unchanged and healthy.\n'
   fi
@@ -207,6 +206,7 @@ fi
 python -m pip check
 python -c "import bs4, chromadb, lxml, psutil, rank_bm25, requests, sentence_transformers, streamlit, torch"
 python -c "import torch; assert torch.version.cuda is None, 'CUDA-enabled torch is not supported on this CPU-only install'"
+printf '%s\n' "$requirements_hash" > "$requirements_stamp"
 
 if [ "$OFFLINE" -eq 1 ]; then
   python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('$EMBED_MODEL', device='cpu', local_files_only=True)" ||
@@ -220,14 +220,11 @@ printf 'Embedding model check: %s is cached.\n' "$EMBED_MODEL"
 
 base_model="${OLLAMA_MODEL:-qwen3.5:2b}"
 ensure_ollama_model "$base_model" pull
-if [ -n "${OLLAMA_DISTILLED_MODEL:-}" ]; then
-  ensure_ollama_model \
-    "$OLLAMA_DISTILLED_MODEL" \
-    create \
-    "${OLLAMA_DISTILLED_MODELFILE:-$ROOT/Modelfile}"
-else
-  printf 'Distilled model check: skipped because OLLAMA_DISTILLED_MODEL is not set.\n'
-fi
+student_model="${OLLAMA_DISTILLED_MODEL:-thesis-student}"
+ensure_ollama_model \
+  "$student_model" \
+  create \
+  "${OLLAMA_DISTILLED_MODELFILE:-$ROOT/Modelfile}"
 
 install_launcher
 
@@ -246,7 +243,7 @@ chromadb 1.0.8 cannot read an index built with chromadb 0.6.3. Rebuild; do not r
   python rag/build_index.py --snap corpus/snapshot-YYYY-MM-DD --out rag/rag-index
   python rag/trim/make_trimmed_index.py --src rag/rag-index --snap corpus/snapshot-YYYY-MM-DD --out rag/rag-index-v2
 
-To verify a configured student model, set OLLAMA_DISTILLED_MODEL and OLLAMA_DISTILLED_MODELFILE before re-running.
+If thesis-student is missing, set OLLAMA_DISTILLED_MODELFILE to its exported Modelfile before re-running.
 Start Ollama if it is not running, then:
   sui-slm
 EOF

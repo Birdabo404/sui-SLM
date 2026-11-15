@@ -14,11 +14,9 @@ On Ubuntu, from this repo:
 bash install.sh
 ```
 
-That checks for at least 4 GiB of free disk, creates `.venv`, installs Python packages, checks for Ollama, pulls `qwen3.5:2b` when missing, and caches the embedding model. It then prints the commands to fetch the corpus and build the index. `install.sh` is safe to run again: unchanged healthy dependencies and installed Ollama models are reused.
+That creates `.venv`, installs Python packages, checks for Ollama, and pulls `qwen3.5:2b`. It then prints the commands to fetch the corpus and build the index. `install.sh` is safe to run again.
 
 Ollama is not installed by the script. Install it first from https://ollama.com/download/linux if `ollama` is missing.
-
-After one online setup, `bash install.sh --offline` verifies and reuses the existing environment without apt, pip, Hugging Face, or Ollama network calls. To verify or create the defense student model too, set `OLLAMA_DISTILLED_MODEL=thesis-student` and `OLLAMA_DISTILLED_MODELFILE=/path/to/Modelfile`; the Modelfile and exported GGUF are not stored in this repository.
 
 Fetch scripts: after `bash corpus/fetch_corpus.sh`, the man-page and GNOME scripts pick the newest `corpus/snapshot-*` folder. Set `SNAP=` to override.
 
