@@ -1675,7 +1675,7 @@ class StopTests(unittest.TestCase):
         slot.empty.assert_called_once()
         self.assertTrue(answer.closed)
 
-    def test_a_stream_error_is_shown_as_ollama_error_not_a_connection_failure(self):
+    def test_a_stream_error_hides_protocol_details_and_is_not_a_connection_failure(self):
         st, app_mod = self._app_with_mock_st()
         slot = MagicMock()
         answer = _BlockingAnswer(error=OllamaStreamError("model 'm' not found"))
@@ -1685,7 +1685,8 @@ class StopTests(unittest.TestCase):
         self.assertIsNone(rec)
         self.assertEqual(run["state"], "error")
         message = slot.error.call_args.args[0]
-        self.assertIn("model 'm' not found", message)
+        self.assertIn("response the app could not use", message)
+        self.assertNotIn("model 'm' not found", message)
         self.assertNotIn("Could not reach", message)
         self.assertTrue(answer.closed)
 

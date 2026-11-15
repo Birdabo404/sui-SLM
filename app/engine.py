@@ -11,6 +11,7 @@ from pathlib import Path
 import psutil
 import requests
 
+from app.backend import IndexMissingError
 from shared.frozen import format_threshold, load_frozen
 from shared.prompt import ABSTAIN, MODES, system_for_mode, user_msg
 
@@ -582,7 +583,7 @@ def answer_question(
     try:
         if uses_rag(mode):
             if retriever is None:
-                raise RuntimeError("RAG index is not loaded")
+                raise IndexMissingError("RAG retriever was not provided")
             retrieval_query = question if context is None else context.retrieval_query
             hits = retriever.retrieve(retrieval_query, k=k, tldr_lane=True)
             weak = is_weak(hits, threshold=threshold)

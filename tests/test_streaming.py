@@ -2,14 +2,24 @@
 """Ollama NDJSON streaming integration tests against a local fake server."""
 import csv
 import json
+import socket
 import tempfile
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest.mock import patch
 
 import requests
 
+from app.backend import (
+    AnswerStatus,
+    IndexMissingError,
+    OllamaDisconnected,
+    OllamaModelMissing,
+    OllamaTimedOut,
+    OllamaUnavailable,
+)
 from app.chat_memory import ChatContext, Turn
 from app.engine import OllamaInfo
 from app.streaming import (
@@ -19,6 +29,7 @@ from app.streaming import (
     retrieval_chart,
     stream_answer_question,
 )
+from shared.prompt import ABSTAIN
 
 
 def _line(payload):
@@ -139,6 +150,7 @@ class StreamingTests(unittest.TestCase):
         self.assertEqual(stream.result["prompt_eval_duration"], 500_000_000)
         self.assertEqual(stream.result["load_duration"], 100_000_000)
         self.assertEqual(stream.result["tok_s"], 10.0)
+        self.assertIs(stream.result["status"], AnswerStatus.COMPLETE)
         self.assertEqual(row["tok_s"], "10.0000")
         self.assertEqual((progress[-1].chunk_count, progress[-1].character_count), (2, 10))
         self.assertGreater(progress[-1].chunks_per_s, 0)
@@ -191,6 +203,7 @@ class StreamingTests(unittest.TestCase):
         self.assertEqual(stream.result["context_turns"], 1)
         chart = charts[0]
         self.assertFalse(chart.weak)
+        self.assertIs(chart.status, AnswerStatus.COMPLETE)
         self.assertEqual(chart.dense_threshold, 0.30)
         self.assertEqual(chart.rows[0].dense_cosine, 0.61)
         self.assertAlmostEqual(chart.rows[0].rrf_rank_score, 1 / 60)
@@ -317,13 +330,28 @@ class StreamingTests(unittest.TestCase):
 
     def test_protocol_and_http_errors_write_no_log_and_close(self):
         cases = (
-            ([b"not json\n"], 200, OllamaStreamError, "invalid NDJSON"),
-            ([_line({"message": {"content": "partial"}, "done": False})], 200, OllamaStreamError, "terminal"),
-            ([_line({"error": "model missing"})], 200, OllamaStreamError, "model missing"),
-            ([_line([])], 200, OllamaStreamError, "JSON object"),
-            ([_line({"message": {"content": 3}, "done": False})], 200, OllamaStreamError, "must be text"),
-            ([_line({"message": {"content": ""}, "done": 0})], 200, OllamaStreamError, "must be boolean"),
-            ([b"server exploded"], 500, requests.HTTPError, "HTTP 500"),
+            ([b"not json\n"], 200, OllamaStreamError, "response the app could not use"),
+            (
+                [_line({"message": {"content": "partial"}, "done": False})],
+                200,
+                OllamaDisconnected,
+                "disconnected before the answer finished",
+            ),
+            ([_line({"error": "model missing"})], 200, OllamaModelMissing, "not installed"),
+            ([_line([])], 200, OllamaStreamError, "response the app could not use"),
+            (
+                [_line({"message": {"content": 3}, "done": False})],
+                200,
+                OllamaStreamError,
+                "response the app could not use",
+            ),
+            (
+                [_line({"message": {"content": ""}, "done": 0})],
+                200,
+                OllamaStreamError,
+                "response the app could not use",
+            ),
+            ([b"server exploded"], 500, requests.RequestException, "response the app could not use"),
         )
         for index, (fragments, status, error_type, message) in enumerate(cases):
             with self.subTest(message=message), tempfile.TemporaryDirectory() as td:
@@ -343,6 +371,32 @@ class StreamingTests(unittest.TestCase):
                     list(stream)
                 self.assertFalse(log.exists())
                 self.assertIsNone(chat._conn)
+
+    def test_connection_refusal_and_timeout_are_distinct(self):
+        class TimedOutConnection:
+            auto_open = 0
+
+            def __init__(self, *args, **kwargs):
+                self.sock = None
+
+            def connect(self):
+                raise TimeoutError("private socket detail")
+
+            def close(self):
+                pass
+
+        with self.assertRaises(OllamaTimedOut) as caught, patch(
+            "app.streaming.http.client.HTTPConnection",
+            TimedOutConnection,
+        ):
+            CancellableChat("http://127.0.0.1:11434", timeout=0.01)([], "m")
+        self.assertNotIn("private socket detail", str(caught.exception))
+
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            dead = f"http://127.0.0.1:{probe.getsockname()[1]}"
+        with self.assertRaises(OllamaUnavailable):
+            CancellableChat(dead, timeout=0.2)([], "m")
 
     def test_cancelled_weak_retrieval_yields_nothing_and_writes_no_log(self):
         hits = [{
@@ -369,6 +423,52 @@ class StreamingTests(unittest.TestCase):
             with self.assertRaises(ChatCancelled):
                 list(stream)
             self.assertFalse(log.exists())
+        self.assertEqual(_StreamingOllama.bodies, [])
+
+    def test_missing_retriever_raises_typed_index_error_without_http(self):
+        with tempfile.TemporaryDirectory() as td:
+            stream = stream_answer_question(
+                "q",
+                "rag",
+                "m",
+                retriever=None,
+                chat=CancellableChat(self.host),
+                log_path=Path(td) / "answers.csv",
+            )
+            with self.assertRaises(IndexMissingError):
+                list(stream)
+        self.assertEqual(_StreamingOllama.bodies, [])
+
+    def test_empty_and_weak_retrieval_have_distinct_abstain_statuses(self):
+        cases = (
+            ([], AnswerStatus.ABSTAIN_EMPTY_RETRIEVAL),
+            (
+                [{
+                    "title": "unrelated",
+                    "path": "x.md",
+                    "text": "nothing",
+                    "dense": 0.10,
+                    "rrf": 1 / 60,
+                }],
+                AnswerStatus.ABSTAIN_WEAK_RETRIEVAL,
+            ),
+        )
+        for hits, expected in cases:
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as td:
+                charts = []
+                stream = stream_answer_question(
+                    "q",
+                    "rag",
+                    "m",
+                    retriever=_Retriever(hits),
+                    chat=CancellableChat(self.host),
+                    log_path=Path(td) / "answers.csv",
+                    git_sha="abc1234",
+                    on_retrieval=charts.append,
+                )
+                self.assertEqual(list(stream), [ABSTAIN])
+                self.assertIs(charts[0].status, expected)
+                self.assertIs(stream.result["status"], expected)
         self.assertEqual(_StreamingOllama.bodies, [])
 
     def test_chart_helper_does_not_normalize_incomparable_scores(self):

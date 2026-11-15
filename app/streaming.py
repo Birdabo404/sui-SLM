@@ -15,8 +15,16 @@ from dataclasses import dataclass
 from typing import Callable
 from urllib.parse import urlsplit
 
-import requests
-
+from app.backend import (
+    AnswerStatus,
+    IndexMissingError,
+    OllamaDisconnected,
+    OllamaModelMissing,
+    OllamaResponseError,
+    OllamaTimedOut,
+    OllamaUnavailable,
+    answer_status,
+)
 from app.engine import (
     K,
     OLLAMA_HOST,
@@ -38,7 +46,7 @@ class ChatCancelled(Exception):
     """The user stopped the answer before Ollama committed a result."""
 
 
-class OllamaStreamError(requests.RequestException):
+class OllamaStreamError(OllamaResponseError):
     """Ollama returned malformed or incomplete streaming data."""
 
 
@@ -74,11 +82,18 @@ class RetrievalChart:
     rows: tuple[RetrievalScore, ...]
     dense_threshold: float
     weak: bool
+    uses_retrieval: bool = True
     notes: tuple[str, ...] = (
         "dense_cosine is the MiniLM cosine used by the abstain threshold",
         "rrf_rank_score is a reciprocal-rank fusion score, not confidence",
         "bm25_raw is query-relative and unbounded; it is not comparable to cosine or RRF",
     )
+
+    @property
+    def status(self) -> AnswerStatus:
+        if not self.uses_retrieval:
+            return AnswerStatus.COMPLETE
+        return answer_status(self.rows, self.weak)
 
 
 def _optional_float(value):
@@ -90,7 +105,15 @@ def _optional_float(value):
         return None
 
 
-def retrieval_chart(hits, threshold, weak=False):
+def _is_missing_model_error(detail):
+    text = str(detail).lower()
+    return "model" in text and any(
+        phrase in text
+        for phrase in ("not found", "not installed", "missing", "pull the model")
+    )
+
+
+def retrieval_chart(hits, threshold, weak=False, uses_retrieval=True):
     rows = []
     for rank, hit in enumerate(hits or (), 1):
         label = str(hit.get("title") or hit.get("path") or hit.get("source") or f"hit {rank}")
@@ -104,7 +127,12 @@ def retrieval_chart(hits, threshold, weak=False):
                 bm25_raw=_optional_float(hit.get("bm25")),
             )
         )
-    return RetrievalChart(tuple(rows), float(threshold), bool(weak))
+    return RetrievalChart(
+        tuple(rows),
+        float(threshold),
+        bool(weak),
+        bool(uses_retrieval),
+    )
 
 
 def _terminal_result(text, payload):
@@ -179,7 +207,9 @@ class CancellableChat:
             conn.close()
             if self.cancelled:
                 raise ChatCancelled() from e
-            raise requests.ConnectionError(str(e)) from e
+            if isinstance(e, TimeoutError):
+                raise OllamaTimedOut("Ollama timed out while connecting") from e
+            raise OllamaUnavailable("Ollama could not be reached") from e
         with self._lock:
             if self.cancelled:
                 self._conn = None
@@ -192,7 +222,9 @@ class CancellableChat:
             except (OSError, ValueError, http.client.HTTPException) as e:
                 if self.cancelled:
                     raise ChatCancelled() from e
-                raise requests.ConnectionError(str(e)) from e
+                if isinstance(e, TimeoutError):
+                    raise OllamaTimedOut("Ollama timed out before responding") from e
+                raise OllamaUnavailable("Ollama could not start a response") from e
             yield response
         finally:
             with self._lock:
@@ -209,9 +241,12 @@ class CancellableChat:
         except (OSError, ValueError, http.client.HTTPException) as e:
             if self.cancelled:
                 raise ChatCancelled() from e
-            raise requests.ConnectionError(str(e)) from e
-        suffix = f": {detail}" if detail else ""
-        raise requests.HTTPError(f"Ollama returned HTTP {response.status}{suffix}")
+            if isinstance(e, TimeoutError):
+                raise OllamaTimedOut("Ollama timed out while reporting an error") from e
+            raise OllamaDisconnected("Ollama disconnected while reporting an error") from e
+        if _is_missing_model_error(detail):
+            raise OllamaModelMissing("the requested Ollama model is not installed")
+        raise OllamaResponseError(f"Ollama returned HTTP {response.status}")
 
     def __call__(self, messages, model):
         with self._response(self._body(messages, model, stream=False)) as response:
@@ -221,8 +256,13 @@ class CancellableChat:
             except (OSError, ValueError, http.client.HTTPException) as e:
                 if self.cancelled:
                     raise ChatCancelled() from e
-                raise requests.ConnectionError(str(e)) from e
-        return parse_ollama_chat_response(json.loads(data))
+                if isinstance(e, TimeoutError):
+                    raise OllamaTimedOut("Ollama timed out while answering") from e
+                raise OllamaDisconnected("Ollama disconnected while answering") from e
+        try:
+            return parse_ollama_chat_response(json.loads(data))
+        except (json.JSONDecodeError, KeyError, TypeError, UnicodeDecodeError) as e:
+            raise OllamaStreamError("Ollama returned an invalid response") from e
 
     def stream(self, messages, model):
         """Yield text deltas and return one terminal `OllamaChatResult`."""
@@ -235,7 +275,9 @@ class CancellableChat:
                 except (OSError, ValueError, http.client.HTTPException) as e:
                     if self.cancelled:
                         raise ChatCancelled() from e
-                    raise requests.ConnectionError(str(e)) from e
+                    if isinstance(e, TimeoutError):
+                        raise OllamaTimedOut("Ollama timed out while streaming") from e
+                    raise OllamaDisconnected("Ollama disconnected while streaming") from e
                 if not raw:
                     break
                 if not raw.strip():
@@ -247,7 +289,10 @@ class CancellableChat:
                 if not isinstance(payload, dict):
                     raise OllamaStreamError("Ollama stream event must be a JSON object")
                 if payload.get("error"):
-                    raise OllamaStreamError(str(payload["error"]))
+                    detail = str(payload["error"])
+                    if _is_missing_model_error(detail):
+                        raise OllamaModelMissing("the requested Ollama model is not installed")
+                    raise OllamaStreamError("Ollama reported a generation error")
                 message = payload.get("message")
                 if message is not None:
                     if not isinstance(message, dict) or not isinstance(message.get("content", ""), str):
@@ -264,7 +309,7 @@ class CancellableChat:
                     return _terminal_result("".join(pieces), payload)
                 if done is not False and done is not None:
                     raise OllamaStreamError("Ollama stream field 'done' must be boolean")
-        raise OllamaStreamError("Ollama stream ended without a terminal event")
+        raise OllamaDisconnected("Ollama disconnected before finishing the answer")
 
     def raise_if_cancelled(self):
         if self.cancelled:
@@ -389,7 +434,7 @@ class StreamingAnswer:
             self.chat.raise_if_cancelled()
             if uses_rag(self.mode):
                 if self.retriever is None:
-                    raise RuntimeError("RAG index is not loaded")
+                    raise IndexMissingError("RAG retriever was not provided")
                 query = self.question if self.context is None else self.context.retrieval_query
                 hits = self.retriever.retrieve(query, k=self.k, tldr_lane=True)
                 weak = is_weak(hits, threshold=self.threshold)
@@ -397,7 +442,12 @@ class StreamingAnswer:
             messages = self.messages_fn(self.question, hits, self.mode)
             if self.context is not None:
                 messages, context_turns = self.context.apply_with_count(messages)
-            self.retrieval = retrieval_chart(hits, self.threshold, weak)
+            self.retrieval = retrieval_chart(
+                hits,
+                self.threshold,
+                weak,
+                uses_retrieval=uses_rag(self.mode),
+            )
             self.chat.raise_if_cancelled()
             if self.on_retrieval is not None:
                 self.on_retrieval(self.retrieval)
@@ -460,6 +510,7 @@ class StreamingAnswer:
                 git_sha=self.git_sha,
                 model_info=self.model_info or OllamaInfo(),
             )
+            self._result["status"] = self.retrieval.status
             self._result["done_reason"] = None if weak else self.chat.done_reason
             complete = True
         finally:
