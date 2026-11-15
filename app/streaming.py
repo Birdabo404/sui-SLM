@@ -41,8 +41,8 @@ from app.engine import (
 )
 from shared.prompt import ABSTAIN
 
-# The longest normal answer fixture is 83 words / 458 characters. A 512-token
-# app cap leaves several times that headroom while bounding a repetition loop.
+# The longest assigned answer-format fixture is 149 Qwen3.5 tokens (83 words /
+# 458 characters). A 512-token app cap leaves over 3x that measured headroom.
 APP_NUM_PREDICT = 512
 APP_REPEAT_PENALTY = 1.1
 APP_THINK = False
