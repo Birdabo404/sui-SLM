@@ -1105,15 +1105,15 @@ def metrics_html(record):
     )
 
 
-CUT_OFF_TITLE = ("Ollama ended this answer with done_reason=length: generation hit a token or context limit, so the "
-                 "text may stop mid-way. The app shows everything Ollama sent.")
+CUT_OFF_TITLE = ("Ollama ended this answer with done_reason=length: it reached the app's token cap or the context "
+                 "window, so the text may stop mid-sentence. The app shows everything Ollama sent.")
 
 
 def cut_off_html(record):
     """Only when Ollama itself says it stopped at a limit; an answer that ended on its own says nothing here."""
     if record.get("done_reason") != "length":
         return ""
-    return f'<span class="stat warn" title="{escape(CUT_OFF_TITLE)}">cut off at a length limit</span>'
+    return f'<span class="stat warn" title="{escape(CUT_OFF_TITLE)}">answer cut off at the length limit</span>'
 
 
 def ram_split_html(record):
@@ -1561,6 +1561,7 @@ def compare_compact_html(left, right):
             + '<div class="cmp-top">'
             + card_head_html(mode, tag)
             + answer_stats_html(rec)
+            + cut_off_html(rec)
             + "</div>"
             + f'<p class="preview">{escape(preview)}</p>'
             + "</div>"

@@ -1818,13 +1818,24 @@ class HelperTests(unittest.TestCase):
         self.assertIn("I don&#x27;t know.", html)
 
     def test_cut_off_only_when_ollama_says_length(self):
-        self.assertIn("cut off at a length limit", cut_off_html({"done_reason": "length"}))
+        self.assertIn("answer cut off at the length limit", cut_off_html({"done_reason": "length"}))
         for reason in ("stop", None, ""):
             self.assertEqual(cut_off_html({"done_reason": reason}), "")
         self.assertIn("cut off", metrics_html({"done_reason": "length", "mode": "base"}))
         self.assertEqual(build_run_record({"done_reason": "length", "mode": "base"})["done_reason"], "length")
         self.assertIsNone(build_run_record({"mode": "base"})["done_reason"])
         self.assertIn("done_reason", EXPORT_FIELDS)
+        self.assertIn("token cap", cut_off_html({"done_reason": "length"}))
+
+    def test_compare_cards_say_which_side_was_cut_off(self):
+        html = compare_compact_html({"mode": "base", "answer": "Use `tar`.", "done_reason": "length"},
+                                    {"mode": "cot", "answer": "Use `tar -x`.", "done_reason": "stop"})
+        self.assertEqual(html.count("answer cut off at the length limit"), 1)
+
+    def test_an_abstention_says_why_under_the_unchanged_text(self):
+        html = idk_card_html({"answer": ABSTAIN}, "No documents were retrieved for this question.")
+        self.assertIn('<p class="idk-why">No documents were retrieved for this question.</p>', html)
+        self.assertNotIn("idk-why", idk_card_html({"answer": ABSTAIN}))
 
     def test_max_dense(self):
         self.assertIsNone(max_dense([]))
