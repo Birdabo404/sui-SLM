@@ -3,6 +3,7 @@
 import csv
 import json
 import os
+import socket
 import sqlite3
 import sys
 import tempfile
@@ -22,12 +23,15 @@ sys.path.insert(0, str(ROOT))
 import app.engine as engine
 import app.polaris as polaris
 import app.streaming as streaming
+from app import issues
 from app.answer_format import app_messages
 from app.chat_memory import ChatStore
 from app.engine import OllamaInfo
 from shared.prompt import ABSTAIN
+from tests import backend_fake
 
 REAL_STREAM = streaming.stream_answer_question
+BACKEND = backend_fake.module()
 
 # Imported while discovery loads modules, before other tests swap a MagicMock into sys.modules["streamlit"].
 try:
@@ -174,6 +178,31 @@ class _FakeStream:
         self.closed = True
 
 
+class _FailsAfter(_FakeStream):
+    """A stream that sends `text`, then raises `error`, the way app/backend.py's typed errors arrive mid-answer."""
+
+    text = ""
+    error = None
+
+    def _run(self):
+        if self.text:
+            self.pieces.append(self.text)
+            yield self.text
+        raise type(self).error
+
+
+class _StatusChart(streaming.RetrievalChart):
+    """A RetrievalChart carrying the backend's status, as PR #20's does."""
+
+    def __init__(self, chart, status):
+        super().__init__(chart.rows, chart.dense_threshold, chart.weak)
+        object.__setattr__(self, "_status", status)
+
+    @property
+    def status(self):
+        return self._status
+
+
 class PolarisRunLoopTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -210,6 +239,8 @@ class PolarisRunLoopTests(unittest.TestCase):
             patch("app.engine.warm_model", return_value=True),
             patch("app.models.installed_names", return_value=frozenset({"qwen3.5:2b"})),
             patch("app.polaris.flags_html", self.flags),
+            # The branch's own classification; tests that want app/backend.py's typed errors swap the fake in.
+            patch.object(issues, "backend", None),
             patch.object(self.streamlit, "rerun", side_effect=AssertionError("st.rerun() called")),
             # AppTest 1.45 reads a single-select st.pills with nothing picked as a multiselect and fails.
             patch.object(self.streamlit, "pills", return_value=None),
@@ -294,12 +325,17 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertEqual(self.at.session_state["messages"], [])
         self.assertIn('<span class="k">Answers</span><span class="v">0</span>', self._settings_html())
 
-    def test_a_turn_that_raises_still_clears_stop_and_releases_the_sky(self):
+    def test_a_turn_that_raises_shows_a_card_clears_stop_and_releases_the_sky(self):
         self.at.run()
         self.flags.reset_mock()
         with patch("app.engine.answer_question", side_effect=RuntimeError("engine failed")):
             self.at.chat_input(key="chat-landing").set_value("extract a .tar.gz file").run()
-        self.assertIn("engine failed", self.at.exception[0].message)
+        self.assertFalse(self.at.exception)
+        self.assertEqual(self.at.error, [])
+        html = self._html()
+        self.assertIn('data-kind="unexpected"', html)
+        self.assertIn("RuntimeError while answering", html)
+        self.assertNotIn("engine failed", html)
         self.assertEqual(self._generating_args(), [True, False])
         self.assertNotIn("stop-gen", [b.key for b in self.at.button])
 
@@ -588,7 +624,7 @@ class PolarisRunLoopTests(unittest.TestCase):
     def test_an_answer_cut_at_a_length_limit_says_so(self):
         self._ask_real("extract a .tar.gz file", _ndjson(["Use ", "`tar -x"], done_reason="length"))
         self.assertEqual(len(_NdjsonOllama.bodies), 1)
-        self.assertIn("cut off at a length limit", self._html())
+        self.assertIn("answer cut off at the length limit", self._html())
 
     def test_a_weak_retrieval_never_calls_the_model(self):
         deltas = self._record_deltas()
@@ -618,6 +654,332 @@ class PolarisRunLoopTests(unittest.TestCase):
         (row,) = list(csv.DictReader(log.open(encoding="utf-8")))
         self.assertEqual(row["tok_s"], "10.0000")
         self.assertEqual(self.store.load_chat(self._chat_id()).messages[1]["record"]["tok_s"], 10.0)
+
+    # ---------- failures: a card with the next step, never a traceback ----------
+
+    def _card(self):
+        self.assertFalse(self.at.exception)
+        self.assertEqual(self.at.error, [])
+        (card,) = [m.value for m in self.at.markdown if m.value.startswith('<div class="issue')]
+        return card
+
+    def _kept_issue(self):
+        reply = self.store.load_chat(self._chat_id()).messages[-1]
+        self.assertNotIn("record", reply)
+        return reply["issue"]
+
+    def _real_stream(self, host, timeout=None):
+        real_init = streaming.CancellableChat.__init__
+
+        def init(chat, *args, **kw):
+            real_init(chat, *args, **kw)
+            if timeout:
+                chat._timeout = timeout
+
+        return [patch("app.streaming.stream_answer_question", REAL_STREAM), patch("app.streaming.OLLAMA_HOST", host),
+                patch("app.engine.LOG_CSV", Path(tempfile.mkdtemp()) / "answers.csv"),
+                patch.object(streaming.CancellableChat, "__init__", init)]
+
+    def _ask_through(self, patches, question="extract a .tar.gz file"):
+        for p in patches:
+            self.enterContext(p)
+        self.at.run()
+        self.at.chat_input(key="chat-landing").set_value(question).run()
+
+    def test_ollama_not_running_says_to_start_it(self):
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        self._ask_through(self._real_stream(f"http://127.0.0.1:{port}"))
+        card = self._card()
+        self.assertIn('data-kind="ollama_unavailable"', card)
+        self.assertIn("Ollama isn&#x27;t running", card)
+        self.assertIn("<code>ollama serve</code>", card)
+        self.assertNotIn("Errno", card)
+        self.assertEqual(self._kept_issue()["fix"], "ollama serve")
+
+    def test_a_stream_that_drops_mid_answer_says_how_far_it_got(self):
+        host = self._ollama(_ndjson(["Use ", "`tar"])[:-1])
+        self._ask_through(self._real_stream(host))
+        card = self._card()
+        self.assertIn('data-kind="ollama_disconnected"', card)
+        self.assertIn("after 8 characters. The partial answer was not kept.", card)
+        self.assertIn("<code>ollama ps</code>", card)
+        self.assertNotIn("Use `tar", [m.value for m in self.at.markdown])
+
+    def test_a_reply_that_never_comes_is_a_timeout_not_ollama_down(self):
+        host = self._ollama()
+        _NdjsonOllama.pause = 1.0
+        self.addCleanup(setattr, _NdjsonOllama, "pause", 0.0)
+        self._ask_through(self._real_stream(host, timeout=0.2))
+        card = self._card()
+        self.assertIn('data-kind="ollama_timeout"', card)
+        self.assertIn("Ollama took too long", card)
+        self.assertNotIn("isn&#x27;t running", card)
+
+    def test_a_missing_index_says_how_to_build_it_before_and_after_asking(self):
+        self.at.session_state["mode"] = "full"
+        with patch("app.engine.index_ok", return_value=False):
+            self.at.run()
+            landing = self._card()
+            self.assertIn('class="issue compact"', landing)
+            self.assertIn("The lab docs index isn&#x27;t there", landing)
+            self._ask("extract a .tar.gz file", "landing")
+        card = self._card()
+        self.assertIn('data-kind="index_missing"', card)
+        self.assertIn("python rag/build_index.py --snap corpus/snapshot-YYYY-MM-DD --out rag/rag-index", card)
+        self.assertIn("BASE and +CoT still work", card)
+        self.assertIn("trim it into rag-index-v2", card)
+        self.assertEqual((self.calls, _FakeStream.made), ([], []))
+
+    def test_an_index_that_will_not_load_is_a_card_and_is_tried_again_next_time(self):
+        def broken(index_dir):
+            raise ValueError("Could not connect to tenant default_tenant")
+
+        self.at.session_state["mode"] = "full"
+        self.streamlit.cache_resource.clear()
+        with patch("app.engine.index_ok", return_value=True), \
+                patch.dict(sys.modules, {"rag.query_hybrid": MagicMock(HybridRetriever=broken)}):
+            self.at.run()
+            self._ask("extract a .tar.gz file", "landing")
+        card = self._card()
+        self.assertIn('data-kind="index_corrupt"', card)
+        self.assertIn("chromadb 0.6.3", card)
+        self.assertEqual(self.calls, [])
+        with patch("app.engine.index_ok", return_value=True), \
+                patch.dict(sys.modules, {"rag.query_hybrid": MagicMock(HybridRetriever=_Retriever)}):
+            self._ask("extract a .tar.gz file")
+        self.assertEqual([c["mode"] for c in self.calls], ["full"])
+
+    def test_an_embedding_model_missing_offline_names_it(self):
+        def offline(index_dir):
+            raise OSError("We couldn't connect to 'https://huggingface.co' to load sentence-transformers/all-MiniLM-L6-v2")
+
+        self.at.session_state["mode"] = "full"
+        self.streamlit.cache_resource.clear()
+        with patch("app.engine.index_ok", return_value=True), \
+                patch.dict(sys.modules, {"rag.query_hybrid": MagicMock(HybridRetriever=offline)}):
+            self.at.run()
+            self._ask("extract a .tar.gz file", "landing")
+        card = self._card()
+        self.assertIn('data-kind="embedding_model_missing"', card)
+        self.assertIn("sentence-transformers/all-MiniLM-L6-v2", card)
+
+    def test_a_search_that_raises_is_a_retrieval_card_and_the_model_is_not_asked(self):
+        host = self._ollama()
+
+        def search(*a, **k):
+            raise RuntimeError("Error executing plan: Internal error")
+
+        rag = MagicMock(HybridRetriever=lambda index_dir: MagicMock(retrieve=search))
+        self.streamlit.cache_resource.clear()
+        self.at.session_state["mode"] = "full"
+        self._ask_through([*self._real_stream(host), patch("app.engine.index_ok", return_value=True),
+                           patch.dict(sys.modules, {"rag.query_hybrid": rag})])
+        card = self._card()
+        self.assertIn('data-kind="index_query_failed"', card)
+        self.assertEqual(_NdjsonOllama.bodies, [])
+
+    def test_an_empty_retrieval_abstains_without_asking_the_model(self):
+        host = self._ollama()
+        rag = MagicMock(HybridRetriever=lambda index_dir: MagicMock(retrieve=lambda *a, **k: []))
+        self.streamlit.cache_resource.clear()
+        self.at.session_state["mode"] = "full"
+        self._ask_through([*self._real_stream(host), patch("app.engine.index_ok", return_value=True),
+                           patch.dict(sys.modules, {"rag.query_hybrid": rag})])
+        self.assertFalse(self.at.exception)
+        self.assertEqual(_NdjsonOllama.bodies, [])
+        html = self._html()
+        self.assertIn("No fix on this one", html)
+        self.assertNotIn('class="issue', html)
+
+    def test_a_failed_turn_and_an_old_error_string_both_replay_as_cards(self):
+        with patch("app.engine.answer_question", side_effect=requests.ConnectionError("refused")):
+            self.at.run()
+            self._ask("extract a .tar.gz file", "landing")
+        cid = self._chat_id()
+        old = self.store.new_chat().chat_id
+        self.store.save_chat(old, [
+            {"role": "user", "content": "list files"},
+            {"role": "assistant", "error": "Could not reach Ollama at http://x:1. Start it with `ollama serve`.\n\n"
+                                           "HTTPConnectionPool(host='x', port=1): Max retries exceeded"},
+        ])
+        self.at.button(key="new-chat").click().run()
+        self.at.button(key=f"hist-open-{cid}").click().run()
+        self.assertIn('data-kind="ollama_unavailable"', self._card())
+        self.at.button(key=f"hist-open-{old}").click().run()
+        card = self._card()
+        self.assertIn("Could not reach Ollama at http://x:1. Start it with ollama serve.", card)
+        self.assertNotIn("Max retries", card)
+
+    def test_ollama_down_is_said_on_the_landing_before_anything_is_asked(self):
+        with patch("app.engine.ollama_reachable", return_value=False):
+            self.at.run()
+        card = self._card()
+        self.assertIn('class="issue compact"', card)
+        self.assertIn("<code>ollama serve</code>", card)
+
+    def test_a_ready_machine_shows_no_card_on_the_landing(self):
+        self.at.run()
+        self.assertNotIn('class="issue', self._html())
+
+    # ---------- the same failures with app/backend.py's typed errors ----------
+
+    def _backend(self):
+        self.enterContext(patch.object(issues, "backend", BACKEND))
+        index = tempfile.mkdtemp()
+        self.enterContext(patch("app.engine.DEFAULT_INDEX", index))
+        return index
+
+    def _typed_failure(self, error, text=""):
+        failing = type("Failing", (_FailsAfter,), {"error": error, "text": text})
+        self.enterContext(patch("app.streaming.stream_answer_question", failing))
+        self.at.run()
+        self._ask("extract a .tar.gz file", "landing")
+        return self._card()
+
+    def test_with_the_backend_each_ollama_error_shows_its_user_message_exactly(self):
+        self._backend()
+        for cls, code, title in ((BACKEND.OllamaUnavailable, "ollama_unavailable", "Ollama isn&#x27;t running"),
+                                 (BACKEND.OllamaTimedOut, "ollama_timeout", "Ollama took too long"),
+                                 (BACKEND.OllamaResponseError, "ollama_response_error", "Ollama returned an error")):
+            with self.subTest(code):
+                self.at = self.AppTest.from_file(APP, default_timeout=20)
+                self.at.session_state["mode"] = "base"
+                card = self._typed_failure(cls("socket detail /private/path"))
+                self.assertIn(f'data-kind="{code}"', card)
+                self.assertIn(f'<p class="issue-t">{title}</p>', card)
+                message = issues._code_spans(cls().user_message)
+                self.assertIn(f'<p class="issue-d">{message}</p>', card)
+                self.assertNotIn("/private/path", card + json.dumps(self._kept_issue()))
+                self.assertNotIn("Traceback", card)
+
+    def test_with_the_backend_a_missing_model_adds_the_command_for_the_selected_model(self):
+        self._backend()
+        card = self._typed_failure(BACKEND.OllamaModelMissing("HTTP 404"))
+        self.assertIn('data-kind="ollama_model_missing"', card)
+        self.assertIn("qwen3.5:2b isn&#x27;t installed", card)
+        self.assertIn(BACKEND.OllamaModelMissing().user_message, card)
+        self.assertIn("<code>ollama pull qwen3.5:2b</code>", card)
+
+    def test_with_the_backend_a_disconnect_after_text_discards_the_partial_answer(self):
+        self._backend()
+        card = self._typed_failure(BACKEND.OllamaDisconnected("eof"), text="Use `tar -x")
+        self.assertIn('data-kind="ollama_disconnected"', card)
+        self.assertIn(BACKEND.OllamaDisconnected().user_message, card)
+        self.assertIn("The partial answer (11 characters) was discarded.", card)
+        self.assertNotIn("Use `tar -x", [m.value for m in self.at.markdown])
+        self.assertNotIn("Use `tar -x", json.dumps(self.store.load_chat(self._chat_id()).messages))
+
+    def test_with_the_backend_the_index_loads_through_its_loader_and_failures_are_typed(self):
+        def broken(index_dir):
+            raise ValueError("no such table: collections")
+
+        self._backend()
+        self.at.session_state["mode"] = "full"
+        self.streamlit.cache_resource.clear()
+        with patch("app.engine.index_ok", return_value=True), \
+                patch.dict(sys.modules, {"rag.query_hybrid": MagicMock(HybridRetriever=broken)}):
+            self.at.run()
+            self._ask("extract a .tar.gz file", "landing")
+        card = self._card()
+        self.assertIn('data-kind="index_corrupt"', card)
+        self.assertIn(BACKEND.IndexLoadError().user_message, card)
+        self.assertNotIn("collections", card)
+        self.assertEqual(self.calls, [])
+
+    def test_with_the_backend_an_embedding_model_missing_offline_uses_its_message(self):
+        def offline(index_dir):
+            raise OSError("We couldn't connect to 'https://huggingface.co'; local_files_only is set")
+
+        self._backend()
+        self.at.session_state["mode"] = "full"
+        self.streamlit.cache_resource.clear()
+        with patch("app.engine.index_ok", return_value=True), \
+                patch.dict(sys.modules, {"rag.query_hybrid": MagicMock(HybridRetriever=offline)}):
+            self.at.run()
+            self._ask("extract a .tar.gz file", "landing")
+        card = self._card()
+        self.assertIn('data-kind="embedding_model_missing"', card)
+        self.assertIn("Run <code>bash install.sh</code> once while online, then try again.", card)
+
+    def test_with_the_backend_a_missing_index_uses_its_message_before_and_after_asking(self):
+        self._backend()
+        self.at.session_state["mode"] = "full"
+        with patch("app.engine.index_ok", return_value=False):
+            self.at.run()
+            self.assertIn(BACKEND.IndexMissingError().user_message, self._card())
+            self._ask("extract a .tar.gz file", "landing")
+        card = self._card()
+        self.assertIn('data-kind="index_missing"', card)
+        self.assertIn("python rag/build_index.py", card)
+
+    def test_with_the_backend_a_weak_retrieval_abstains_with_its_status_message(self):
+        self._backend()
+        self._ask_real("what's the lab wi-fi password?", mode="full", dense=0.1)
+        html = self._html()
+        self.assertIn("No fix on this one", html)
+        self.assertIn(BACKEND.AnswerStatus("abstain_weak_retrieval").user_message, html)
+        self.assertEqual(self.store.load_chat(self._chat_id()).messages[1]["record"]["status"],
+                         "abstain_weak_retrieval")
+
+    def test_the_chart_status_decides_the_abstention_when_the_stream_gives_one(self):
+        real_chart = streaming.retrieval_chart
+
+        def chart(hits, threshold, weak):
+            return _StatusChart(real_chart(hits, threshold, weak), BACKEND.AnswerStatus.ABSTAIN_EMPTY_RETRIEVAL)
+
+        answer = _fake_answer([])
+
+        def abstaining(*args, **kw):
+            # Its hits alone would read as a weak retrieval; the backend's status says empty, and that is shown.
+            return dict(answer(*args, **kw), text=ABSTAIN, weak=True,
+                        status=BACKEND.AnswerStatus.ABSTAIN_EMPTY_RETRIEVAL)
+
+        self._backend()
+        self.enterContext(patch("app.streaming.retrieval_chart", chart))
+        self.enterContext(patch("app.engine.answer_question", side_effect=abstaining))
+        self.at.session_state["mode"] = "full"
+        self.streamlit.cache_resource.clear()
+        with patch("app.engine.index_ok", return_value=True), \
+                patch.dict(sys.modules, {"rag.query_hybrid": MagicMock(HybridRetriever=_Retriever)}):
+            self.at.run()
+            self._ask("what's the lab wi-fi password?", "landing")
+        html = self._html()
+        self.assertIn("No fix on this one", html)
+        self.assertIn(BACKEND.AnswerStatus("abstain_empty_retrieval").user_message, html)
+        self.assertNotIn(BACKEND.AnswerStatus("abstain_weak_retrieval").user_message, html)
+        self.assertEqual(self.store.load_chat(self._chat_id()).messages[1]["record"]["status"],
+                         "abstain_empty_retrieval")
+
+    def test_without_the_backend_an_abstention_says_why_in_the_apps_words(self):
+        self._ask_real("what's the lab wi-fi password?", mode="full", dense=0.1)
+        self.assertIn("No retrieved chunk reached cosine 0.30, so the model wasn&#x27;t asked.", self._html())
+
+    # ---------- offline start check ----------
+
+    def test_settings_lists_the_offline_start_check(self):
+        with patch("app.engine.index_ok", return_value=True), patch("app.polaris.index_chunk_count", return_value=1234), \
+                patch("app.issues.hf_cached", return_value=True), patch("app.polaris.network_online", return_value=False):
+            self.at.run()
+            html = self._settings_html()
+        self.assertIn("Ready to answer offline", html)
+        for label, value in (("Ollama", f"running at {engine.OLLAMA_HOST}"), ("Model", "qwen3.5:2b installed"),
+                             ("Embedding model", "MiniLM cached locally")):
+            self.assertIn(f'<span class="ck-l">{label}</span><span class="ck-v">{value}</span>', html)
+        self.assertIn("1,234 chunks", html)
+        self.assertIn('<span class="ck-l">Network</span><span class="ck-v">offline, not needed</span>', html)
+        self.assertNotIn('class="ck-fix"', html)
+
+    def test_the_offline_check_names_each_fix(self):
+        with patch("app.engine.index_ok", return_value=False), patch("app.issues.hf_cached", return_value=False), \
+                patch("app.engine.ollama_reachable", return_value=False):
+            self.at.run()
+            html = self._settings_html()
+        self.assertIn("Needs attention: ollama, lab docs index, embedding model", html)
+        self.assertIn('<code class="ck-fix">ollama serve</code>', html)
+        self.assertIn('<code class="ck-fix">bash install.sh</code>', html)
+        self.assertIn("can&#x27;t check until Ollama runs", html)
 
     # ---------- chat history ----------
 
@@ -776,8 +1138,10 @@ class PolarisRunLoopTests(unittest.TestCase):
         cid = self._chat_id()
         with patch("app.engine.answer_question", side_effect=RuntimeError("engine failed")):
             self.at.chat_input(key="chat-dock").set_value("and a .zip?").run()
-        self.assertIn("engine failed", self.at.exception[0].message)
-        self.assertEqual(self._stored(cid), ["extract a .tar.gz file", "Use `tar -xzf file.tar.gz`.", "and a .zip?"])
+        self.assertFalse(self.at.exception)
+        self.assertEqual(self._stored(cid),
+                         ["extract a .tar.gz file", "Use `tar -xzf file.tar.gz`.", "and a .zip?", None])
+        self.assertEqual(self.store.load_chat(cid).messages[-1]["issue"]["kind"], "unexpected")
 
     def test_turns_missed_while_history_is_unwritable_are_stored_with_the_next_one(self):
         self.at.run()
@@ -910,10 +1274,11 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertNotIn("last_error", self.at.session_state)
 
         def shown():
-            (error,) = self.at.error
-            self.assertIn("Could not reach Ollama", error.value)
-            self.assertIn("connection refused", error.value)
+            self.assertEqual(self.at.error, [])
             html = self._html()
+            self.assertEqual(html.count('class="issue compact"'), 1)
+            self.assertIn("Ollama isn&#x27;t running", html)
+            self.assertIn("<code>ollama serve</code>", html)
             # The failed side keeps its config head, so it's clear which one failed.
             self.assertIn('<span class="mode">BASE</span>', html)
             self.assertIn('<span class="mode">+CoT</span>', html)
@@ -926,12 +1291,13 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertEqual(reply["compare"][1]["mode"], "cot")
         failed, ok = reply["compare_unanswered"]
         self.assertEqual((failed["state"], failed["mode"], failed["model"], ok), ("error", "base", "qwen3.5:2b", None))
-        self.assertIn("connection refused", failed["error"])
+        self.assertEqual(failed["issue"]["kind"], "ollama_unavailable")
+        self.assertIn("Ollama isn't running", failed["error"])
 
         self.at.run()
         shown()
         self.at.button(key="new-chat").click().run()
-        self.assertEqual(self.at.error, [])
+        self.assertNotIn('class="issue', self._html())
         self.at.button(key=f"hist-open-{cid}").click().run()
         self.assertFalse(self.at.exception)
         shown()
@@ -1051,9 +1417,11 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertIn("not installed", html)
         self.assertIn("ollama create thesis-base-q4km -f Modelfile-base", html)
         self._ask("extract a .tar.gz file", "landing")
-        (error,) = self.at.error
-        self.assertIn("thesis-base-q4km isn't installed in Ollama on this machine", error.value)
-        self.assertIn("`ollama create thesis-base-q4km -f Modelfile-base`", error.value)
+        self.assertEqual(self.at.error, [])
+        card = self._html().split('<div class="issue"', 1)[1]
+        self.assertIn("thesis-base-q4km isn&#x27;t installed", card)
+        self.assertIn("<code>ollama create thesis-base-q4km -f Modelfile-base</code>", card)
+        self.assertIn("kd/README.md", card)
         # Never answered by another model in its place, never warmed, never pulled.
         self.assertEqual((self.calls, _FakeStream.made), ([], []))
         self.assertNotIn("thesis-base-q4km", [c.args[0] for c in warm.call_args_list])
