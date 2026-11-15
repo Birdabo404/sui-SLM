@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Offline launcher and desktop installation tests."""
+import importlib.util
 import json
 import os
 import subprocess
@@ -63,6 +64,8 @@ class LauncherTests(unittest.TestCase):
         self.assertIn("8765", command)
 
     def test_streamlit_script_entry_imports_every_app_module(self):
+        if importlib.util.find_spec("streamlit") is None:
+            self.skipTest("streamlit is not installed")
         entry = streamlit_command(sys.executable)[4]
         probe = """
 import importlib
