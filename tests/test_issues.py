@@ -17,7 +17,6 @@ from app.issues import (
     Issue,
     abstain_note,
     answer_status,
-    checks_html,
     checks_summary,
     hf_cached,
     index_missing,
@@ -307,7 +306,7 @@ class OfflineCheckTests(unittest.TestCase):
         self.assertEqual([c.label for c in checks], ["Ollama", "Model", "Lab docs index", "Embedding model", "Network"])
         self.assertIsNone(checks[-1].ok)
         self.assertEqual(checks[-1].value, "offline, not needed")
-        self.assertNotIn("ck-fix", checks_html(checks))
+        self.assertEqual([c.fix for c in checks], ["", "", "", "", ""])
 
     def test_each_failing_check_names_its_fix(self):
         checks = self._checks(installed=False, index_present=False, embed_cached=False)

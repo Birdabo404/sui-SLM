@@ -46,6 +46,7 @@ from app.polaris import (
     RAM_TITLE,
     REASONING_LABEL,
     REASONING_TITLE,
+    THEMES,
     RateTrace,
     config_summary_html,
     copy_feedback_html,
@@ -55,7 +56,6 @@ from app.polaris import (
     last_runs,
     model_choice_label,
     model_status_html,
-    models_table_html,
     monitor_html,
     rail_art_html,
     ram_html,
@@ -120,10 +120,7 @@ from app.polaris import (
     connection_html,
     flags_html,
     network_online,
-    SKY_LEVELS,
     side_logo_html,
-    sky_html,
-    sky_level,
     star_defs,
     stopped_html,
     thinking_html,
@@ -427,10 +424,6 @@ class CompareTests(unittest.TestCase):
         self.assertIn("<code>ollama create thesis-base-q4km -f Modelfile-base</code>", missing)
         self.assertIn("can't check, Ollama is not running", model_status_html(q4, None, False))
 
-        table = models_table_html((base, q4, student), names, True)
-        self.assertEqual(table.count('<li class="installed">'), 2)
-        self.assertEqual(table.count('<li class="not-installed">'), 1)
-        self.assertEqual(models_table_html((base, q4, student), None, False).count('<li class="unknown">'), 3)
 
     def test_run_compare_clears_waiting_before_right_starts(self):
         st = MagicMock()
@@ -899,11 +892,11 @@ class LoaderAndNamingTests(unittest.TestCase):
             self.assertNotRegex(hint.lower(), "think|reason")
 
     def test_ambient_motion_pauses_while_generating(self):
-        self.assertIn("polaris-generating", flags_html(1, generating=True))
-        self.assertNotIn("polaris-generating", flags_html(1))
+        self.assertIn("polaris-generating", flags_html("polaris", generating=True))
+        self.assertNotIn("polaris-generating", flags_html("polaris"))
         self.assertEqual(
-            flags_html(2, daylight=True, generating=True),
-            '<div class="polaris-flags polaris-sky-2 polaris-daylight polaris-generating"></div>',
+            flags_html("light", generating=True),
+            '<div class="polaris-flags polaris-theme-light polaris-calm polaris-generating"></div>',
         )
         css = style_path().read_text(encoding="utf-8")
         rules = [r for r in css.split("}") if ":root:has(.polaris-generating)" in r and "play-state" in r]
@@ -911,8 +904,8 @@ class LoaderAndNamingTests(unittest.TestCase):
         selector, body = rules[0].rsplit("{", 1)
         selector = selector.rsplit("*/", 1)[-1].strip()
         self.assertEqual(body, "animation-play-state:paused!important")
-        # Only the star and the sky: the loader and the one-shot entrances must keep running.
-        self.assertEqual(selector, ":root:has(.polaris-generating) :is(.band *,.sky)")
+        # Only the star: the loader and the one-shot entrances must keep running.
+        self.assertEqual(selector, ":root:has(.polaris-generating) .band *")
 
     def test_compare_answers_in_the_same_chat_shell(self):
         css = style_path().read_text(encoding="utf-8")
@@ -973,22 +966,15 @@ class LoaderAndNamingTests(unittest.TestCase):
 
     def test_html_avoids_inline_custom_properties(self):
         # Streamlit's sanitizer strips inline custom properties, which would void any CSS that reads them.
-        for html in (thinking_html("Searching the lab docs"), side_logo_html(True), empty_hero_html(), stopped_html(), sky_html()):
+        for html in (thinking_html("Searching the lab docs"), side_logo_html(True), empty_hero_html(), stopped_html()):
             self.assertNotIn('style="--', html)
 
-    def test_sky_is_one_raw_html_line_that_fades_per_question(self):
-        html = sky_html()
-        self.assertNotIn("\n", html)
-        self.assertNotIn("<pre", html)
-        self.assertTrue(html.startswith('<div class="sky" aria-hidden="true"><div class="sky-field">'))
-        self.assertEqual(html.count("<b>"), 7)
-        self.assertIs(sky_html(), html)
-        self.assertEqual([sky_level(n) for n in (-1, 0, 1, 2, 3, 4, 9)], [0, 0, 1, 2, 3, 4, 4])
+    def test_no_theme_draws_a_starfield_behind_the_chat(self):
         css = style_path().read_text(encoding="utf-8")
-        for level, opacity in enumerate(SKY_LEVELS[1:], 1):
-            rule = f':root:has(.polaris-sky-{level}) [data-testid="stMarkdownContainer"] .sky{{opacity:{opacity:g}'
-            self.assertIn(rule.replace("opacity:0.", "opacity:."), css)
-        self.assertIn("visibility:hidden", css.split(".polaris-sky-4", 1)[1].split("}", 1)[0])
+        self.assertNotRegex(css, r"\.sky\b|polaris-sky")
+        for theme in THEMES:
+            self.assertNotIn("sky", flags_html(theme))
+        self.assertNotIn("sky", (ROOT / "app" / "app.py").read_text(encoding="utf-8"))
 
     def test_status_widget_stays_hidden(self):
         css = style_path().read_text(encoding="utf-8")
@@ -1064,11 +1050,12 @@ class ReasoningStyleTests(unittest.TestCase):
         self.assertLess(size, float(re.search(r"--fs-body:([\d.]+)px", css).group(1)))
         self.assertIn(scope + " li::marker{color:var(--c-text-3)", css)
         self.assertIn(scope + " code{background:transparent;color:var(--c-text-2)", css)
-        # Light mode redefines the same tokens rather than restyling the reasoning
-        daylight = css.split(":root:has(.polaris-daylight){", 1)[1].split("}", 1)[0]
-        for token in ("--c-text-2:", "--c-text-3:", "--c-line:"):
-            self.assertIn(token, daylight)
-        self.assertNotIn("stExpanderDetails", "".join(line for line in css.splitlines() if "daylight" in line))
+        # Light and Dark redefine the same tokens rather than restyling the reasoning
+        for theme in ("light", "dark"):
+            tokens = css.split(f":root:has(.polaris-theme-{theme}){{", 1)[1].split("}", 1)[0]
+            for token in ("--c-text-2:", "--c-text-3:", "--c-line:"):
+                self.assertIn(token, tokens)
+        self.assertNotIn("stExpanderDetails", "".join(line for line in css.splitlines() if "polaris-theme-" in line))
 
 
 class AnswerStatsTests(unittest.TestCase):
@@ -1942,7 +1929,13 @@ class HelperTests(unittest.TestCase):
         self.assertIn("/app/static/UbuntuSans-Variable-Latin.woff2", css)
         self.assertTrue((style_path().parent / "static" / "UbuntuSans-Variable-Latin.woff2").is_file())
         self.assertTrue((style_path().parent / "static" / "UbuntuSans-UFL.txt").is_file())
-        self.assertNotIn("Inter", css)
+        # Polaris keeps Ubuntu Sans; Inter is bundled for Light and Dark only, at regular and medium.
+        self.assertIn('@font-face{font-family:"Inter";src:url("/app/static/Inter-Variable-Latin.woff2") format("woff2");'
+                      "font-weight:400 500;", css)
+        self.assertTrue((style_path().parent / "static" / "Inter-Variable-Latin.woff2").is_file())
+        self.assertTrue((style_path().parent / "static" / "Inter-OFL.txt").is_file())
+        self.assertNotIn("Inter", css.split(":root{", 1)[1].split("}", 1)[0])
+        self.assertIn('--f-sans:"Inter"', css.split(":root:has(.polaris-calm){", 1)[1].split("}", 1)[0])
         self.assertNotIn("fonts.googleapis.com", css)
         self.assertNotIn("cdn", css.lower())
         self.assertIn("--fs-body:14.5px", css)

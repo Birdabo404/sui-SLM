@@ -119,7 +119,7 @@ def index_missing(index_dir):
     return Issue(
         "index_missing",
         TITLES["index_missing"],
-        f"No index at {_short(index_dir)}, so +RAG and +RAG+CoT can't look anything up. BASE and +CoT still work.",
+        f"No index at {short_path(index_dir)}, so +RAG and +RAG+CoT can't look anything up. BASE and +CoT still work.",
         fix=INDEX_BUILD,
         hint=INDEX_TRIM_HINT,
     )
@@ -200,7 +200,7 @@ def _index_unreadable(index_dir, error):
     return Issue(
         "index_corrupt",
         TITLES["index_corrupt"],
-        f"{_short(index_dir)} is there but didn't load. An index built with chromadb 0.6.3 can't be read by 1.0.8.",
+        f"{short_path(index_dir)} is there but didn't load. An index built with chromadb 0.6.3 can't be read by 1.0.8.",
         fix=INDEX_BUILD,
         hint="Rebuild it rather than copying an old chroma/ folder. BASE and +CoT still work.",
     )
@@ -302,7 +302,7 @@ def offline_checks(*, host, ollama_up, model, installed, create, index_dir, inde
         checks.append(Check("Model", installed, f"{model} installed" if installed else f"{model} missing",
                             "" if installed else create))
     checks.append(Check("Lab docs index", index_present,
-                        f"{chunks:,} chunks · {_short(index_dir)}" if index_present else f"missing · {_short(index_dir)}",
+                        f"{chunks:,} chunks · {short_path(index_dir)}" if index_present else f"missing · {short_path(index_dir)}",
                         "" if index_present else INDEX_BUILD))
     checks.append(Check("Embedding model", embed_cached, "MiniLM cached locally" if embed_cached else "not cached",
                         "" if embed_cached else "bash install.sh"))
@@ -316,19 +316,6 @@ def checks_summary(checks):
         return "Ready to answer offline"
     names = ", ".join(c.label.lower() for c in failing)
     return f"Needs attention: {names}"
-
-
-def checks_html(checks):
-    rows = []
-    for c in checks:
-        state = {True: "ok", False: "bad", None: "na"}[c.ok]
-        mark = {True: "ok", False: "fix", None: "–"}[c.ok]
-        fix = f'<code class="ck-fix">{escape(c.fix)}</code>' if c.fix else ""
-        rows.append(f'<li class="{state}"><span class="ck-m">{mark}</span><span class="ck-l">{escape(c.label)}</span>'
-                    f'<span class="ck-v">{escape(c.value)}</span>{fix}</li>')
-    ready = all(c.ok is not False for c in checks)
-    return (f'<p class="ck-sum {"ok" if ready else "bad"}">{escape(checks_summary(checks))}</p>'
-            '<ul class="checks">' + "".join(rows) + "</ul>")
 
 
 def _causes(error):
@@ -357,7 +344,7 @@ def _first_line(text, limit=160):
     return line if len(line) <= limit else line[: limit - 1] + "…"
 
 
-def _short(path):
+def short_path(path):
     shown, home = str(path), str(Path.home())
     if shown == home or shown.startswith(home + os.sep):
         return "~" + shown[len(home):]
