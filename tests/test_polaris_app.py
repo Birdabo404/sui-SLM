@@ -1698,6 +1698,45 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.at.run()
         self.assertNotIn('class="set-title"', self._html())
 
+    def test_normalization_is_off_by_default_and_changes_only_the_retrieval_query(self):
+        rag = MagicMock(HybridRetriever=_Retriever)
+        question = "Could you please tell me how to extract a tar.gz file on my Ubuntu laptop?"
+        with patch("app.engine.index_ok", return_value=True), patch.dict(
+            sys.modules, {"rag.query_hybrid": rag}
+        ):
+            self.at.session_state["mode"] = "rag"
+            self.at.run()
+            self._settings_html("answers")
+            toggle = self.at.toggle(key="normalize-setting-off")
+            self.assertFalse(toggle.value)
+            self.at.run()
+            self._ask(question, "landing")
+            first = _FakeStream.made[-1]
+            self.assertEqual(first.question, question)
+            self.assertIsNone(first.kw["retrieval_query"])
+
+            self._settings_html("answers")
+            self.at.toggle(key="normalize-setting-off").set_value(True).run()
+            self.assertTrue(self.at.session_state["normalize_before_search"])
+            self.at.run()
+            self.at.button(key="new-chat").click().run()
+            self._ask(question, "landing")
+            second = _FakeStream.made[-1]
+
+        self.assertEqual(second.question, question)
+        self.assertEqual(second.kw["retrieval_query"], "how to extract a tar.gz file on Ubuntu")
+        prefs = json.loads((Path(os.environ["XDG_DATA_HOME"]) / "sui-slm" / "prefs.json").read_text())
+        self.assertTrue(prefs["normalize_question_before_search"])
+
+    def test_normalization_environment_override_forces_the_setting(self):
+        with patch.dict(os.environ, {"NORMALIZE_QUESTION_BEFORE_SEARCH": "1"}):
+            self.at.run()
+            self._settings_html("answers")
+            toggle = self.at.toggle(key="normalize-setting-on")
+        self.assertTrue(self.at.session_state["normalize_before_search"])
+        self.assertTrue(toggle.value)
+        self.assertTrue(toggle.disabled)
+
     # ---------- system check ----------
 
     def _diag_lines(self):

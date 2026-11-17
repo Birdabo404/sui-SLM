@@ -139,7 +139,15 @@ from app.polaris import (
     waiting_html,
     warm_label,
 )
-from app.prefs import save_theme, saved_theme
+from app.prefs import (
+    NORMALIZE_ENV,
+    normalization_env_override,
+    save_normalization,
+    save_theme,
+    saved_normalization,
+    saved_theme,
+)
+from app.query_normalization import normalize_retrieval_query
 from app.streaming import ChatCancelled, stream_answer_question
 from shared.frozen import format_threshold, load_frozen
 
@@ -346,6 +354,11 @@ def _init_session():
     st.session_state.setdefault("compare", False)
     st.session_state.setdefault("model_pick", BASE_MODEL)
     st.session_state.setdefault("chat", _chat_state())
+    override = normalization_env_override()
+    if override is None:
+        st.session_state.setdefault("normalize_before_search", saved_normalization())
+    else:
+        st.session_state["normalize_before_search"] = override
     if "theme" not in st.session_state:
         st.session_state["theme"] = saved_theme()
     _session_git_commit()
@@ -1018,6 +1031,11 @@ def _settings_sections(status):
         )),
         SettingSection("answers", "Retrieval & answers", "manage_search", (
             SettingCard("Retrieval", (
+                SettingRow(
+                    "Normalize question before search",
+                    f"Off by default; only retrieval changes. {NORMALIZE_ENV} overrides this setting",
+                    control="normalize",
+                ),
                 SettingRow("Index", Path(index_dir).name, f"{chunks:,} chunks" if loaded else "not loaded",
                            tone="" if loaded else "bad"),
                 SettingRow("Top-k", "Excerpts retrieved per question", str(status["frozen"]["k"])),
@@ -1057,6 +1075,28 @@ def _setting_control(row, section_key):
     records = st.session_state.get("run_records") or []
     if row.control == "theme":
         _theme_picker("theme-set", from_settings=True)
+    elif row.control == "normalize":
+        override = normalization_env_override()
+        enabled = override if override is not None else bool(st.session_state.get("normalize_before_search"))
+        key = f"normalize-setting-{'on' if enabled else 'off'}"
+        if override is None:
+            st.toggle(
+                "Normalize question before search",
+                value=enabled,
+                key=key,
+                label_visibility="collapsed",
+                on_change=_pick_normalization,
+                args=(key,),
+            )
+        else:
+            st.toggle(
+                "Normalize question before search",
+                value=enabled,
+                key=key,
+                label_visibility="collapsed",
+                disabled=True,
+                help=f"Set by {NORMALIZE_ENV}",
+            )
     elif row.control == "export":
         n = len(records)
         st.download_button("CSV", data=records_to_csv(records), file_name="polaris-runs.csv", mime="text/csv",
@@ -1068,6 +1108,12 @@ def _setting_control(row, section_key):
                                                  on_click=_open_system_check):
         # The click only reran the dialog; the page itself has to run to show the check.
         st.rerun()
+
+
+def _pick_normalization(key):
+    enabled = bool(st.session_state.get(key))
+    st.session_state.normalize_before_search = enabled
+    save_normalization(enabled)
 
 
 def _settings_card(card, section_key, index):
@@ -1321,6 +1367,10 @@ def _answer_record(
         _record_failure(missing, run, slot, monitor, show_error)
         return None, None
     events = queue.Queue()
+    retrieval_query = None
+    if uses_rag(mode) and st.session_state.get("normalize_before_search", False):
+        contextual_query = None if context is None else context.retrieval_query
+        retrieval_query = normalize_retrieval_query(question, contextual_query)
     answer = stream_answer_question(
         question,
         mode,
@@ -1331,6 +1381,7 @@ def _answer_record(
         git_sha=_session_git_commit(),
         model_info=_model_info(option.name),
         context=context,
+        retrieval_query=retrieval_query,
         messages_fn=partial(app_messages, step_note=context.note_for(side) if context is not None else ""),
         on_retrieval=lambda chart: events.put(("retrieval", chart)),
         on_progress=lambda live: events.put(("progress", live)),
