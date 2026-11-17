@@ -27,7 +27,9 @@ the owner's machine.
 that show how an excerpt leads to the answer. It separately trains `Answer:`
 as the concise one-to-four-sentence response shown to the student. Therefore:
 
-- `Steps:` followed by `Answer:` belongs under collapsed **Show reasoning**.
+- `Steps:` followed by `Answer:` belongs in the muted
+  **Reasoning (chain of thought)** panel above the answer. The panel is open by
+  default and the user can collapse it.
 - The concise `Answer:` is the complete trained answer, not a truncated stream.
 - Inline commands in a bare answer need copy boxes even when the model does not
   emit a fenced code block.
