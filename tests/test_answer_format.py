@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT))
 
 import shared.prompt as prompt
 from app.answer_format import (
+    abstain_answer,
     app_messages,
     compare_step_note,
     is_inline_command,
@@ -136,7 +137,7 @@ class ParseTests(unittest.TestCase):
         self.assertTrue(unlabelled.blocks[0].text.startswith("Some thoughts."))
 
     def test_a_labelled_draft_in_base_or_rag_streams_as_reasoning(self):
-        draft = prompt.ABSTAIN.replace("I don't know.", "Use `ls -l`.")
+        draft = "Reasoning:\n- I checked the excerpts.\n- `ls -l` lists them.\n\nAnswer:\n1. Run it:\n```bash\nls -l\n```"
         for mode in ("base", "rag"):
             head = draft[: draft.index("Answer:") + len("Answer:")]
             for prefix in prefixes(head):
@@ -146,6 +147,14 @@ class ParseTests(unittest.TestCase):
             self.assertNotIn("excerpts", canonical(final))
         steps = parse_answer("Steps:\n1. Open a terminal.\n2. Run `id`.", "base")
         self.assertEqual((steps.reasoning, len(steps.steps)), ("", 2))
+
+    def test_steps_before_answer_are_shown_in_every_mode(self):
+        for mode in ("base", "rag", "cot", "full"):
+            for streaming in (False, True):
+                parsed = parse_answer(prompt.ABSTAIN + "\n", mode, n_hits=1, streaming=streaming)
+                self.assertEqual(parsed.reasoning, "", (mode, streaming))
+                self.assertIn("I checked the excerpts", canonical(parsed), (mode, streaming))
+                self.assertIn("Answer: I don't know.", canonical(parsed), (mode, streaming))
 
     def test_a_labelled_lead_without_answer_is_reasoning_up_to_the_first_step(self):
         # qwen3.5:2b's +CoT reply to the sudo question had this shape: no Answer: line, bullets numbered "- 1.".
@@ -255,9 +264,9 @@ class StreamingTests(unittest.TestCase):
             self.assertEqual(parse_answer(text + "\n", mode, n_hits=2, streaming=True).blocks,
                              parse_answer(text, mode, n_hits=2).blocks)
 
-    def test_a_cot_reply_without_answer_is_held_until_it_ends_then_shown_whole(self):
+    def test_a_cot_reply_without_a_reasoning_label_streams_as_answer(self):
         live = parse_answer(SUDO + "\n", "full", n_hits=2, streaming=True)
-        self.assertEqual((live.blocks, live.reasoning_open), ((), True))
+        self.assertEqual((live.reasoning, live.reasoning_open, len(live.steps)), ("", False, 3))
         final = parse_answer(SUDO, "full", n_hits=2)
         self.assertEqual((final.reasoning, len(final.steps)), ("", 3))
 
@@ -291,6 +300,101 @@ class StreamingTests(unittest.TestCase):
         self.assertEqual([b.kind for b in parse_answer(text, streaming=True).blocks], ["md"])
         later = parse_answer(text + "2. Done here.\n", streaming=True).blocks
         self.assertEqual([(b.kind, b.derived) for b in later], [("md", False), ("code", True), ("md", False)])
+
+
+# The KD student's trained reply shape (kd/build_sft.py: "Steps:\n…\n\nAnswer: …\n\nSource: [n] title").
+STUDENT = ("Steps:\n1. Excerpt [2] is the useradd page, which creates a new account.\n"
+           "2. It says `sudo useradd -m {{username}}` also makes the home directory.\n"
+           "3. The password is then set with `sudo passwd {{username}}`.\n\n"
+           "Answer: Run `sudo useradd -m {{username}}` to create the account, then `sudo passwd {{username}}` to "
+           "set its password.\n\nSource: [2] useradd (tldr linux)")
+
+
+def shown(parsed):
+    return "\n".join(b.text for b in parsed.blocks)
+
+
+class StudentOutputTests(unittest.TestCase):
+    def test_the_students_steps_and_answer_are_all_shown(self):
+        for mode in ("full", "cot", "rag", "base"):
+            parsed = parse_answer(STUDENT, mode, n_hits=5)
+            self.assertEqual(parsed.reasoning, "", mode)
+            self.assertEqual([s.number for s in parsed.steps], [1, 2, 3], mode)
+            self.assertEqual([s.commands for s in parsed.steps],
+                             [(), ("sudo useradd -m <username>",), ("sudo passwd <username>",)], mode)
+            self.assertIn("Answer: Run `sudo useradd -m <username>`", shown(parsed), mode)
+        full = parse_answer(STUDENT, "full", n_hits=5)
+        self.assertEqual(full.cited, (2,))
+        self.assertTrue(full.blocks[-1].text.startswith("Answer:"))
+        self.assertIsNone(full.blocks[-1].step)
+        self.assertNotIn("Answer:", full.steps[-1].text)
+
+    def test_the_student_streams_into_the_answer_and_ends_as_the_final_card(self):
+        for prefix in prefixes(STUDENT):
+            parsed = parse_answer(prefix, "full", n_hits=5, streaming=True)
+            self.assertEqual((parsed.reasoning, parsed.reasoning_open), ("", False), prefix)
+        self.assertEqual(parse_answer(STUDENT + "\n", "full", n_hits=5, streaming=True).blocks,
+                         parse_answer(STUDENT, "full", n_hits=5).blocks)
+
+    def test_a_follow_up_step_is_the_students_shown_step(self):
+        self.assertIn("step 2 was shown as:\n2. It says `sudo useradd -m <username>`",
+                      step_note("explain step 2", STUDENT, "full"))
+        self.assertIn("Answer: Run", memory_text(STUDENT, "full"))
+
+    def test_template_tokens_are_removed_and_nothing_after_them_is_lost(self):
+        for raw in (STUDENT + "<|im_end|>", "<|im_start|>assistant\n" + STUDENT + "<|endoftext|>"):
+            self.assertEqual(parse_answer(raw, "full", n_hits=5).blocks, parse_answer(STUDENT, "full", n_hits=5).blocks)
+        runon = parse_answer("Run `df -h`.<|im_end|>\n<|im_start|>user\nAnd memory?", "full", n_hits=5)
+        self.assertEqual(shown(runon), "Run `df -h`.\n\nAnd memory?")
+        for prefix in prefixes("Use `id`.<|im_end|>"):
+            self.assertNotIn("<|", shown(parse_answer(prefix, "full", streaming=True)), prefix)
+
+    def test_a_think_block_is_reasoning_and_the_rest_is_the_answer(self):
+        parsed = parse_answer("<think>\nExcerpt [1] is apt.\n</think>\n\n1. Update:\n```bash\nsudo apt update\n```",
+                              "full", n_hits=1)
+        self.assertEqual(parsed.reasoning, "Excerpt [1] is apt.")
+        self.assertEqual(parsed.steps[0].commands, ("sudo apt update",))
+        empty = parse_answer("<think>\n\n</think>\n\nRun `df -h` to see free space.", "full")
+        self.assertEqual((empty.reasoning, shown(empty)), ("", "Run `df -h` to see free space."))
+        closed_only = parse_answer("Thinking about it.\n</think>\nRun `df -h`.", "full")
+        self.assertEqual((closed_only.reasoning, shown(closed_only)), ("Thinking about it.", "Run `df -h`."))
+
+    def test_an_unclosed_think_streams_as_reasoning_then_ends_as_the_answer(self):
+        raw = "<think>\nTo check disk space, use `df -h`. It lists **size**, used and available."
+        live = parse_answer(raw, "full", streaming=True)
+        self.assertEqual((live.blocks, live.reasoning_open), ((), True))
+        self.assertTrue(live.reasoning.startswith("To check disk space"))
+        final = parse_answer(raw, "full")
+        self.assertEqual((final.reasoning, shown(final)), ("", raw.removeprefix("<think>\n")))
+        for prefix in prefixes("<think>\nA thought.</think>"):
+            parsed = parse_answer(prefix, "full", streaming=True)
+            self.assertNotIn("<", parsed.reasoning + shown(parsed), prefix)
+
+    def test_only_reasoning_is_shown_as_the_answer(self):
+        for raw in ("<think>\nUse `chmod +x <file>`.\n</think>", "Reasoning:\n- `chmod +x <file>` makes it run.",
+                    "Reasoning:\n- `chmod +x <file>` makes it run.\n\nAnswer:"):
+            parsed = parse_answer(raw, "full")
+            self.assertEqual(parsed.reasoning, "", raw)
+            self.assertIn("chmod +x <file>", shown(parsed), raw)
+
+    def test_commands_never_hide_under_reasoning_when_the_answer_has_none(self):
+        raw = ("Reasoning:\n1. Excerpt [1] says `sudo passwd <username>` sets it.\n2. Then log in again.\n\n"
+               "Answer: Set the password, then log in.")
+        parsed = parse_answer(raw, "full", n_hits=1)
+        self.assertEqual(parsed.reasoning, "")
+        self.assertIn("sudo passwd <username>", shown(parsed))
+        kept = parse_answer(raw.replace("then log in.", "with `sudo passwd <username>`."), "full", n_hits=1)
+        self.assertTrue(kept.reasoning.startswith("1. Excerpt [1]"))
+
+    def test_plain_prose_streams_and_ends_as_one_paragraph(self):
+        raw = "You can change your password with the passwd command. It asks for the old one first."
+        self.assertEqual(shown(parse_answer(raw, "full")), raw)
+        self.assertFalse(parse_answer(raw + "\n", "full", streaming=True).reasoning_open)
+        self.assertEqual(shown(parse_answer("Answer: Run `id`.", "cot")), "Run `id`.")
+
+    def test_abstain_card_text_is_what_follows_answer(self):
+        self.assertTrue(abstain_answer(prompt.ABSTAIN).startswith("I don't know."))
+        self.assertEqual(abstain_answer("No label here."), "No label here.")
 
 
 class CommandPlacementTests(unittest.TestCase):

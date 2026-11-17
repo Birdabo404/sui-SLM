@@ -61,8 +61,14 @@ def normalize_placeholders(text):
 
 _ANSWER_MARK = re.compile(r"^[ \t]*(?:\*\*|__)?(?:final[ \t]+)?answer(?:\*\*|__)?[ \t]*:[ \t]*(?:\*\*|__)?[ \t]*",
                           re.IGNORECASE | re.MULTILINE)
-_REASON_LABEL = re.compile(r"^\s*(?:\*\*|__)?(?:reasoning|steps|thinking)(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*",
+# `Steps:` is not here: the KD student is trained to write its procedure as `Steps:` before a short `Answer:`.
+_REASON_LABEL = re.compile(r"^\s*(?:\*\*|__)?(?:reasoning|thinking)(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*",
                            re.IGNORECASE)
+_TURN_START = re.compile(r"<\|im_start\|>(?:[ \t]*(?:system|user|assistant)\b)?[ \t]*\n?")
+_TURN_END = re.compile(r"[ \t]*(?:<\|im_end\|>|<\|endoftext\|>)[ \t]*\n*")
+_PARTIAL_TAGS = ("<think>", "</think>", "<|im_start|>", "<|im_end|>", "<|endoftext|>")
+_THINK_OPEN = re.compile(r"^\s*<think>", re.IGNORECASE)
+_THINK_CLOSE = re.compile(r"</think>", re.IGNORECASE)
 _FENCE_OPEN = re.compile(r"^([ \t]*)(`{3,}|~{3,})[ \t]*([\w+.-]*)[^`]*$")
 _ITEM = re.compile(r"^ ?(?:[-*+][ \t]+)?(\*\*|__)?(\d{1,2})[.)](\*\*|__)?[ \t]+(.*)$")
 _STEP_HEAD = re.compile(r"^[ \t]*(?:#{1,4}[ \t]*)?(\*\*|__)?step[ \t]+(\d{1,2})[ \t]*[:.)\u2013-](\*\*|__)?[ \t]*(.*)$",
@@ -134,34 +140,82 @@ class Answer:
     loose: tuple[str, ...] = ()
 
 
-def split_reasoning(text, streaming=False):
-    """(reasoning, answer) for a +CoT or +RAG+CoT reply, which the app asks for as `Reasoning:` then `Answer:`, or
-    for any reply that opens with a `Reasoning:` or `Steps:` label.
+def strip_template_tokens(text, streaming=False):
+    """The reply without ChatML turn markers the model wrote as text (`<|im_start|>assistant`, `<|im_end|>`). Only
+    the markers go: words after an end-of-turn marker are still shown. While streaming, a marker or <think> tag
+    that is still arriving is held back so it never flashes on screen."""
+    out = _TURN_START.sub("", _TURN_END.sub("\n\n", text or ""))
+    if streaming:
+        for tag in _PARTIAL_TAGS:
+            cut = next((k for k in range(len(tag) - 1, 0, -1) if out.endswith(tag[:k])), 0)
+            if cut:
+                return out[:-cut]
+    return out
 
-    The `Answer:` line is the boundary. While streaming, nothing before it is answer: a reply can open with a
-    numbered draft ("1. The excerpts show ...") and only then write `Answer:`, so until that line arrives the text
-    is held as reasoning and the answer stays empty. A finished reply without `Answer:` hides only the block a
-    `Reasoning:` label opens (see _lead_end), and only when more follows it; without the label nothing is hidden,
-    so a procedure is never taken for reasoning. The same holds when the commands sit above `Answer:` and none
-    below it."""
-    body = text or ""
+
+def _split_think(body, streaming):
+    """(thought, rest) for a reply that opens a <think> block, or closes one its template opened. A block never
+    closed is the answer once the reply ends; while streaming it is still thought."""
+    opened = _THINK_OPEN.match(body)
+    start = opened.end() if opened else 0
+    closed = _THINK_CLOSE.search(body, start)
+    if closed is None:
+        if opened is None:
+            return "", body
+        return (body[start:].strip(), "") if streaming else ("", body[start:])
+    return body[start:closed.start()].strip(), body[closed.end():]
+
+
+def _has_command(text):
+    return "```" in text or any(is_inline_command(span) for span in _INLINE_CODE.findall(text))
+
+
+def _split_label(body, streaming):
+    """(reasoning, answer) by the `Reasoning:` label and the `Answer:` line. Without the label nothing is hidden,
+    so a procedure written before `Answer:` (the KD student's `Steps:`, a numbered draft) stays in the answer."""
+    label = _REASON_LABEL.match(body)
     mark = _ANSWER_MARK.search(body)
+    if label is None:
+        if mark is not None and not body[: mark.start()].strip():
+            return "", body[mark.end():].strip()
+        return "", body.strip()
     if mark is None:
         if streaming:
-            return _REASON_LABEL.sub("", body, count=1).strip(), ""
-        if not _REASON_LABEL.match(body):
-            return "", body.strip()
-        lines = _REASON_LABEL.sub("", body, count=1).split("\n")
+            return body[label.end():].strip(), ""
+        lines = body[label.end():].split("\n")
         end = _lead_end(lines)
         lead, rest = "\n".join(lines[:end]).strip(), "\n".join(lines[end:]).strip()
         return (lead, rest) if lead and rest else ("", body.strip())
-    head, tail = body[: mark.start()], body[mark.end():]
-    reasoning = _REASON_LABEL.sub("", head, count=1).strip()
-    if not tail.strip() and not streaming:
+    head, tail = body[label.end(): max(label.end(), mark.start())].strip(), body[mark.end():].strip()
+    if streaming:
+        return head, tail
+    if not tail or (_has_command(head) and not _has_command(tail)):
         return "", body.strip()
-    if "```" in head and "```" not in tail and not streaming:
-        return "", body.strip()
-    return reasoning, tail.strip()
+    return head, tail
+
+
+def split_reasoning(text, streaming=False):
+    """(reasoning, answer) for any reply. Only what the model marked as reasoning is put under Show reasoning: a
+    <think> block, or the block a `Reasoning:` (or `Thinking:`) label opens up to the `Answer:` line.
+
+    While a labelled reasoning block or a <think> block is still streaming the answer stays empty; everything
+    else streams as answer. A finished reply never has an empty answer: reasoning with nothing after it is shown
+    as the answer, and so is a reasoning block that holds commands when the part after `Answer:` has none."""
+    body = strip_template_tokens(text, streaming)
+    thought, body = _split_think(body, streaming)
+    if streaming and not body.strip():
+        return thought, ""
+    reasoning, answer = _split_label(body, streaming)
+    reasoning = "\n\n".join(part for part in (thought, reasoning) if part)
+    if not answer and not streaming:
+        return "", reasoning
+    return reasoning, answer
+
+
+def abstain_answer(text):
+    """The app's own abstention (shared/prompt.ABSTAIN) as its card shows it: what follows its `Answer:` line."""
+    mark = _ANSWER_MARK.search(text or "")
+    return (text[mark.end():] if mark else text or "").strip()
 
 
 def _settled(text, streaming):
@@ -251,14 +305,12 @@ def parse_answer(text, mode="", n_hits=0, streaming=False):
     was retrieved; BASE and +CoT retrieve nothing, so any [n] there is dropped rather than shown.
     """
     raw = normalize_placeholders(text)
-    # BASE and +RAG are not asked for reasoning, but a reply that opens with the label is still a draft.
-    split = mode in ("cot", "full") or _REASON_LABEL.match(raw)
-    reasoning, body = split_reasoning(raw, streaming=streaming) if split else ("", raw.strip())
+    reasoning, body = split_reasoning(raw, streaming=streaming)
     reasoning_open = streaming and not body and bool(reasoning)
     body = _settled(body, streaming)
     hits = n_hits if uses_rag(mode) else 0
     blocks = []
-    md, step_no = [], None
+    md, step_no, count = [], None, 0
     cited, dropped, source_line = [], [], False
 
     def flush_md():
@@ -299,10 +351,18 @@ def parse_answer(text, mode="", n_hits=0, streaming=False):
                 (cited if 1 <= n <= hits else dropped).append(n)
             i += 1
             continue
+        if _ANSWER_MARK.match(line):
+            # a summary after the steps (the KD student's `Answer:`) belongs to no step
+            flush_md()
+            step_no = None
+            md.append(line)
+            i += 1
+            continue
         item = _item(line)
         if item:
             flush_md()
-            step_no = (step_no or 0) + 1
+            count += 1
+            step_no = count
             md.append(f"{step_no}. {item[1]}")
         else:
             md.append(line)

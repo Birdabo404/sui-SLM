@@ -26,7 +26,7 @@ from app.engine import (
     mode_choices,
     uses_rag,
 )
-from app.answer_format import parse_answer, split_reasoning
+from app.answer_format import abstain_answer, parse_answer
 from app.models import is_installed
 from app.streaming import CancellableChat, ChatCancelled
 from shared.frozen import format_threshold
@@ -1130,7 +1130,7 @@ _TICK_RE = re.compile(r"`([^`\n]+)`")
 
 def idk_card_html(record, note=""):
     """The abstention as written, then `note`: why it abstained (nothing retrieved, or nothing close enough)."""
-    _, answer = split_reasoning(record.get("answer") or "")
+    answer = abstain_answer(record.get("answer") or "")
     body = _TICK_RE.sub(r"<code>\1</code>", escape(answer)).replace("\n", "<br>")
     why = f'<p class="idk-why">{escape(note)}</p>' if note else ""
     return (
