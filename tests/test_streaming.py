@@ -13,6 +13,9 @@ import requests
 from app.chat_memory import ChatContext, Turn
 from app.engine import OllamaInfo
 from app.streaming import (
+    APP_NUM_PREDICT,
+    APP_REPEAT_PENALTY,
+    APP_THINK,
     CancellableChat,
     ChatCancelled,
     OllamaStreamError,
@@ -146,9 +149,12 @@ class StreamingTests(unittest.TestCase):
         self.assertFalse(hasattr(progress[-1], "token_count"))
         body = _StreamingOllama.bodies[0]
         self.assertTrue(body["stream"])
-        self.assertFalse(body["think"])
+        self.assertIs(body["think"], APP_THINK)
+        self.assertFalse(APP_THINK)
         self.assertEqual(body["options"]["temperature"], 0)
         self.assertEqual(body["options"]["seed"], 42)
+        self.assertEqual(body["options"]["num_predict"], APP_NUM_PREDICT)
+        self.assertEqual(body["options"]["repeat_penalty"], APP_REPEAT_PENALTY)
         self.assertEqual(body["keep_alive"], "30m")
         self.assertEqual(list(stream), [])
 

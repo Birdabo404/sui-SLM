@@ -24,7 +24,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from shared.prompt import ABSTAIN
-from app.streaming import LiveThroughput, retrieval_chart
+from app.streaming import (
+    APP_NUM_PREDICT,
+    APP_REPEAT_PENALTY,
+    LiveThroughput,
+    retrieval_chart,
+)
 from tests.backend_fake import PlainStreamError
 from app.models import ComparePick, ModelOption, compare_picks, default_compare_ids, model_options, modes_for, pair_compare_ids
 from app.engine import (
@@ -1400,8 +1405,13 @@ class StopTests(unittest.TestCase):
                 log_commit=chat.commit,
             )
         self.assertEqual(out["text"], "use tar -xzf")
+        body = dict(_SlowOllama.bodies[0])
+        options = dict(body["options"])
+        self.assertEqual(options.pop("num_predict"), APP_NUM_PREDICT)
+        self.assertEqual(options.pop("repeat_penalty"), APP_REPEAT_PENALTY)
+        body["options"] = options
         self.assertEqual(
-            _SlowOllama.bodies[0],
+            body,
             ollama_chat_body(
                 build_messages("hi", [], "base"),
                 "qwen3.5:2b",
