@@ -61,9 +61,12 @@ def normalize_placeholders(text):
 
 _ANSWER_MARK = re.compile(r"^[ \t]*(?:\*\*|__)?(?:final[ \t]+)?answer(?:\*\*|__)?[ \t]*:[ \t]*(?:\*\*|__)?[ \t]*",
                           re.IGNORECASE | re.MULTILINE)
-# `Steps:` is not here: the KD student is trained to write its procedure as `Steps:` before a short `Answer:`.
 _REASON_LABEL = re.compile(r"^\s*(?:\*\*|__)?(?:reasoning|thinking)(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*",
                            re.IGNORECASE)
+# The KD student's own `Steps:` block. kd/teacher_generate.py asks the teacher for "short reasoning steps that show how
+# the excerpt leads to the answer" and kd/build_sft.py writes them as `Steps:` before `Answer:`, so for that shape
+# `Steps:` is reasoning, exactly like `Reasoning:`. Without an `Answer:` line after it, it is not.
+_STEPS_LABEL = re.compile(r"^\s*(?:\*\*|__)?steps(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*", re.IGNORECASE)
 _TURN_START = re.compile(r"<\|im_start\|>(?:[ \t]*(?:system|user|assistant)\b)?[ \t]*\n?")
 _TURN_END = re.compile(r"[ \t]*(?:<\|im_end\|>|<\|endoftext\|>)[ \t]*\n*")
 _PARTIAL_TAGS = ("<think>", "</think>", "<|im_start|>", "<|im_end|>", "<|endoftext|>")
@@ -171,10 +174,16 @@ def _has_command(text):
 
 
 def _split_label(body, streaming):
-    """(reasoning, answer) by the `Reasoning:` label and the `Answer:` line. Without the label nothing is hidden,
-    so a procedure written before `Answer:` (the KD student's `Steps:`, a numbered draft) stays in the answer."""
+    """(reasoning, answer) by a reasoning label and the `Answer:` line. `Reasoning:` or `Thinking:` always opens
+    reasoning; the KD student's `Steps:` does only when an `Answer:` line follows it (while streaming, until one
+    could still arrive), so a finished `Steps:` reply without `Answer:` stays in the answer. Without a label nothing
+    is hidden, so an unlabelled numbered draft before `Answer:` stays in the answer too."""
     label = _REASON_LABEL.match(body)
     mark = _ANSWER_MARK.search(body)
+    if label is None:
+        steps = _STEPS_LABEL.match(body)
+        if steps is not None and (steps.end() <= mark.start() if mark is not None else streaming):
+            label = steps
     if label is None:
         if mark is not None and not body[: mark.start()].strip():
             return "", body[mark.end():].strip()
@@ -196,7 +205,8 @@ def _split_label(body, streaming):
 
 def split_reasoning(text, streaming=False):
     """(reasoning, answer) for any reply. Only what the model marked as reasoning is put under Show reasoning: a
-    <think> block, or the block a `Reasoning:` (or `Thinking:`) label opens up to the `Answer:` line.
+    <think> block, or the block a `Reasoning:` (or `Thinking:`) label, or the KD student's `Steps:`, opens up to the
+    `Answer:` line.
 
     While a labelled reasoning block or a <think> block is still streaming the answer stays empty; everything
     else streams as answer. A finished reply never has an empty answer: reasoning with nothing after it is shown
@@ -370,7 +380,7 @@ def parse_answer(text, mode="", n_hits=0, streaming=False):
     flush_md()
     if not streaming:
         blocks = _place_trailing_commands(blocks)
-    blocks = _lift_inline_commands(blocks, open_step=step_no if streaming else None)
+    blocks = _lift_inline_commands(blocks, open_step=step_no if streaming else None, streaming=streaming)
     return Answer(
         reasoning=reasoning,
         blocks=tuple(blocks),
@@ -452,18 +462,22 @@ def is_inline_command(span):
     return bool(args) or words[0] == "sudo"
 
 
-def _lift_inline_commands(blocks, open_step=None):
+def _lift_inline_commands(blocks, open_step=None, streaming=False):
     """A step with no fenced command but a whole command written inline gets that command, byte for byte, as a copy
-    box under its text. The sentence is left as written; nothing is lifted from text outside numbered steps.
+    box under its text. The sentence is left as written. Outside numbered steps nothing is lifted, except in a
+    finished bare answer (prose only: no steps, no fences, like the KD student's `Answer:`), where each distinct
+    whole command gets one box under the paragraph it first appears in.
     `open_step` is the step still streaming: its own fence may be on the way, so it gets no box yet."""
     fenced = {b.step for b in blocks if b.kind == "code" and b.step is not None} | {open_step}
-    out = []
+    bare = not streaming and all(b.kind == "md" and b.step is None for b in blocks)
+    seen, out = set(), []
     for block in blocks:
         out.append(block)
-        if block.kind != "md" or block.step is None or block.step in fenced:
+        if block.kind != "md" or (block.step is None and not bare) or (block.step is not None and block.step in fenced):
             continue
         for span in _INLINE_CODE.findall(block.text):
-            if is_inline_command(span):
+            if is_inline_command(span) and not (bare and span in seen):
+                seen.add(span)
                 out.append(Block("code", span, block.step, "bash", derived=True))
     return out
 

@@ -508,22 +508,27 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertEqual(self.store.load_chat(self._chat_id()).messages[1]["record"]["done_reason"], "stop")
         self.assertNotIn("cut off", self._html())
 
-    def test_the_students_steps_answer_shape_is_shown_whole_as_markdown(self):
-        # kd/build_sft.py's target shape, streamed in 7-character chunks and ending with the ChatML end marker.
-        raw = ("Steps:\n1. Excerpt [1] is the useradd page, which creates a new account.\n"
-               "2. It says `sudo useradd -m <username>` also makes the home directory.\n"
-               "3. The password is then set with `sudo passwd <username>`.\n\n"
-               "Answer: Run `sudo useradd -m <username>` to create the account, then `sudo passwd <username>` "
-               "to set its password.\n\nSource: [1] useradd (tldr linux)<|im_end|>")
-        self._ask_real("add a user", _ndjson([raw[i:i + 7] for i in range(0, len(raw), 7)]), mode="full")
-        self.assertEqual(self.at.expander, [])
-        shown = [m.value for m in self.at.markdown]
-        self.assertIn("1. Excerpt [1] is the useradd page, which creates a new account.", shown)
-        self.assertIn("3. The password is then set with `sudo passwd <username>`.", shown)
-        self.assertIn("Answer: Run `sudo useradd -m <username>` to create the account, then `sudo passwd <username>` "
-                      "to set its password.", shown)
-        self.assertEqual([c.value for c in self.at.code], ["sudo useradd -m <username>", "sudo passwd <username>"])
-        self.assertNotIn("im_end", self._html())
+    def test_the_real_students_h1_answer_folds_its_steps_and_boxes_its_command(self):
+        # The real thesis-student's H1 reply, streamed in 7-character chunks and ending with the ChatML end marker.
+        raw = ("Steps:\n"
+               "1. The excerpt shows that adding a new user requires using the 'adduser' command...\n"
+               "2. It specifies that this action creates a default home directory and prompts for a password...\n"
+               "3. By substituting 'juan' into the provided syntax, we can construct the exact command...\n\n"
+               "Answer: To create a new user named juan on Ubuntu, run `sudo adduser juan`. This will set up their "
+               "account with a default home directory and ask you to choose a password...\n\nSource: [1]<|im_end|>")
+        self._ask_real("add a user named juan", _ndjson([raw[i:i + 7] for i in range(0, len(raw), 7)]), mode="full")
+        (reasoning,) = self.at.expander
+        self.assertEqual(reasoning.label, "Show reasoning")
+        self.assertFalse(reasoning.proto.expanded)
+        self.assertIn("By substituting 'juan'", reasoning.markdown[0].value)
+        answer = [m.value for m in self.at.markdown if m not in reasoning.markdown]
+        self.assertIn("To create a new user named juan on Ubuntu, run `sudo adduser juan`. This will set up their "
+                      "account with a default home directory and ask you to choose a password...", answer)
+        self.assertFalse([m for m in answer if "excerpt shows" in m or "substituting" in m])
+        self.assertEqual([c.value for c in self.at.code], ["sudo adduser juan"])
+        html = self._html()
+        self.assertIn('<p class="src-line">Source <b>[1]</b>', html)
+        self.assertNotIn("im_end", html)
 
     def _record_deltas(self):
         """Every element the runs send from here on, in order, as (delta path, element type, text)."""
@@ -1770,7 +1775,8 @@ class PolarisRunLoopTests(unittest.TestCase):
         (reasoning,) = self.at.expander
         self.assertEqual(reasoning.label, "Show reasoning")
         self.assertFalse(reasoning.proto.expanded)
-        self.assertEqual([c.value for c in self.at.code], list(SUDO_COMMANDS))
+        # the BASE side's bare one-line answer gets a box for its whole inline command
+        self.assertEqual([c.value for c in self.at.code], ["sudo adduser <username>", *SUDO_COMMANDS])
         self.assertIn("No documents in +CoT", self._html())
 
         def compact():

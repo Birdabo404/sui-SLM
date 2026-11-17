@@ -148,13 +148,24 @@ class ParseTests(unittest.TestCase):
         steps = parse_answer("Steps:\n1. Open a terminal.\n2. Run `id`.", "base")
         self.assertEqual((steps.reasoning, len(steps.steps)), ("", 2))
 
-    def test_steps_before_answer_are_shown_in_every_mode(self):
+    def test_steps_before_answer_are_reasoning_in_every_mode(self):
         for mode in ("base", "rag", "cot", "full"):
             for streaming in (False, True):
                 parsed = parse_answer(prompt.ABSTAIN + "\n", mode, n_hits=1, streaming=streaming)
-                self.assertEqual(parsed.reasoning, "", (mode, streaming))
-                self.assertIn("I checked the excerpts", canonical(parsed), (mode, streaming))
-                self.assertIn("Answer: I don't know.", canonical(parsed), (mode, streaming))
+                self.assertEqual(parsed.reasoning,
+                                 "1. I checked the excerpts I was given.\n2. None of them covers this question.",
+                                 (mode, streaming))
+                self.assertNotIn("excerpts", canonical(parsed), (mode, streaming))
+                self.assertTrue(canonical(parsed).startswith("I don't know."), (mode, streaming))
+                self.assertEqual(parsed.steps, (), (mode, streaming))
+
+    def test_steps_without_answer_stream_as_reasoning_and_end_visible(self):
+        text = "Steps:\n1. Open a terminal.\n2. Run `id`."
+        live = parse_answer(text, "full", streaming=True)
+        self.assertEqual((live.blocks, live.reasoning_open), ((), True))
+        final = parse_answer(text, "full")
+        self.assertEqual([s.text for s in final.steps], ["Open a terminal.", "Run `id`."])
+        self.assertEqual(final.reasoning, "")
 
     def test_a_labelled_lead_without_answer_is_reasoning_up_to_the_first_step(self):
         # qwen3.5:2b's +CoT reply to the sudo question had this shape: no Answer: line, bullets numbered "- 1.".
@@ -302,50 +313,84 @@ class StreamingTests(unittest.TestCase):
         self.assertEqual([(b.kind, b.derived) for b in later], [("md", False), ("code", True), ("md", False)])
 
 
-# The KD student's trained reply shape (kd/build_sft.py: "Steps:\n…\n\nAnswer: …\n\nSource: [n] title").
-STUDENT = ("Steps:\n1. Excerpt [2] is the useradd page, which creates a new account.\n"
-           "2. It says `sudo useradd -m {{username}}` also makes the home directory.\n"
-           "3. The password is then set with `sudo passwd {{username}}`.\n\n"
-           "Answer: Run `sudo useradd -m {{username}}` to create the account, then `sudo passwd {{username}}` to "
-           "set its password.\n\nSource: [2] useradd (tldr linux)")
+# The real thesis-student's reply to H1 (sui's GGUF and Modelfile under Ollama, CPU). Its shape is kd/build_sft.py's
+# "Steps:\n…\n\nAnswer: …\n\nSource: [n]", and its steps are the teacher's reasoning (kd/teacher_generate.py).
+H1 = ("Steps:\n"
+      "1. The excerpt shows that adding a new user requires using the 'adduser' command...\n"
+      "2. It specifies that this action creates a default home directory and prompts for a password...\n"
+      "3. By substituting 'juan' into the provided syntax, we can construct the exact command...\n\n"
+      "Answer: To create a new user named juan on Ubuntu, run `sudo adduser juan`. This will set up their account "
+      "with a default home directory and ask you to choose a password...\n\n"
+      "Source: [1]")
+H1_STEPS = ("1. The excerpt shows that adding a new user requires using the 'adduser' command...\n"
+            "2. It specifies that this action creates a default home directory and prompts for a password...\n"
+            "3. By substituting 'juan' into the provided syntax, we can construct the exact command...")
+H1_ANSWER = ("To create a new user named juan on Ubuntu, run `sudo adduser juan`. This will set up their account "
+             "with a default home directory and ask you to choose a password...")
 
 
 def shown(parsed):
-    return "\n".join(b.text for b in parsed.blocks)
+    return "\n".join(b.text for b in parsed.blocks if b.kind == "md")
+
+
+def boxes(parsed):
+    return [b.text for b in parsed.blocks if b.kind == "code"]
 
 
 class StudentOutputTests(unittest.TestCase):
-    def test_the_students_steps_and_answer_are_all_shown(self):
+    def test_h1_steps_are_reasoning_and_the_answer_gets_its_command_box(self):
         for mode in ("full", "cot", "rag", "base"):
-            parsed = parse_answer(STUDENT, mode, n_hits=5)
-            self.assertEqual(parsed.reasoning, "", mode)
-            self.assertEqual([s.number for s in parsed.steps], [1, 2, 3], mode)
-            self.assertEqual([s.commands for s in parsed.steps],
-                             [(), ("sudo useradd -m <username>",), ("sudo passwd <username>",)], mode)
-            self.assertIn("Answer: Run `sudo useradd -m <username>`", shown(parsed), mode)
-        full = parse_answer(STUDENT, "full", n_hits=5)
-        self.assertEqual(full.cited, (2,))
-        self.assertTrue(full.blocks[-1].text.startswith("Answer:"))
-        self.assertIsNone(full.blocks[-1].step)
-        self.assertNotIn("Answer:", full.steps[-1].text)
+            parsed = parse_answer(H1, mode, n_hits=5)
+            self.assertEqual(parsed.reasoning, H1_STEPS, mode)
+            self.assertEqual(shown(parsed), H1_ANSWER, mode)
+            self.assertEqual(boxes(parsed), ["sudo adduser juan"], mode)
+            self.assertTrue(parsed.blocks[-1].derived, mode)
+            self.assertIsNone(parsed.blocks[-1].step, mode)
+            self.assertEqual(parsed.steps, (), mode)
+            self.assertTrue(parsed.source_line, mode)
+        self.assertEqual(parse_answer(H1, "full", n_hits=5).cited, (1,))
 
-    def test_the_student_streams_into_the_answer_and_ends_as_the_final_card(self):
-        for prefix in prefixes(STUDENT):
+    def test_h1_streams_its_steps_as_reasoning_and_gets_its_box_when_it_ends(self):
+        cut = H1.index("Answer:")
+        for prefix in prefixes(H1):
             parsed = parse_answer(prefix, "full", n_hits=5, streaming=True)
-            self.assertEqual((parsed.reasoning, parsed.reasoning_open), ("", False), prefix)
-        self.assertEqual(parse_answer(STUDENT + "\n", "full", n_hits=5, streaming=True).blocks,
-                         parse_answer(STUDENT, "full", n_hits=5).blocks)
+            self.assertNotIn("excerpt", shown(parsed), prefix)
+            self.assertNotIn("substituting", shown(parsed), prefix)
+            self.assertEqual(boxes(parsed), [], prefix)
+            if len(prefix) <= cut:
+                self.assertEqual(parsed.blocks, (), prefix)
+                self.assertEqual(parsed.reasoning_open, bool(parsed.reasoning), prefix)
+        final = parse_answer(H1, "full", n_hits=5)
+        live = parse_answer(H1 + "\n", "full", n_hits=5, streaming=True)
+        self.assertEqual(live.blocks, tuple(b for b in final.blocks if not b.derived))
+        self.assertEqual(live.reasoning, final.reasoning)
 
-    def test_a_follow_up_step_is_the_students_shown_step(self):
-        self.assertIn("step 2 was shown as:\n2. It says `sudo useradd -m <username>`",
-                      step_note("explain step 2", STUDENT, "full"))
-        self.assertIn("Answer: Run", memory_text(STUDENT, "full"))
+    def test_a_follow_up_step_never_points_at_a_reasoning_line(self):
+        for n in (1, 2, 3):
+            note = step_note(f"explain step {n}", H1, "full")
+            self.assertIn(f"it had no numbered steps, so there is no step {n}", note)
+            for line in ("excerpt shows", "default home directory and prompts", "substituting"):
+                self.assertNotIn(line, note)
+            self.assertEqual(step_query(f"explain step {n}", H1, "full"), "")
+        both = compare_step_note("explain step 2", [("Left", H1, "full"), ("Right", H1, "full")])
+        self.assertNotIn("substituting", both)
+        self.assertEqual(both.count("it had no numbered steps, so there is no step 2"), 2)
+        self.assertEqual(memory_text(H1, "full"), H1_ANSWER)
+
+    def test_a_bare_answer_gets_one_box_per_distinct_whole_command(self):
+        text = ("Run `sudo adduser juan`, then `sudo usermod -aG sudo juan`.\n\n"
+                "If it fails, run `sudo adduser juan` again. The `adduser` name alone is not a command.")
+        parsed = parse_answer(text, "full")
+        self.assertEqual(boxes(parsed), ["sudo adduser juan", "sudo usermod -aG sudo juan"])
+        self.assertTrue(all(b.derived and b.step is None for b in parsed.blocks if b.kind == "code"))
+        self.assertEqual(shown(parsed), text)
+        self.assertEqual(boxes(parse_answer(text, "full", streaming=True)), [])
 
     def test_template_tokens_are_removed_and_nothing_after_them_is_lost(self):
-        for raw in (STUDENT + "<|im_end|>", "<|im_start|>assistant\n" + STUDENT + "<|endoftext|>"):
-            self.assertEqual(parse_answer(raw, "full", n_hits=5).blocks, parse_answer(STUDENT, "full", n_hits=5).blocks)
+        for raw in (H1 + "<|im_end|>", "<|im_start|>assistant\n" + H1 + "<|endoftext|>"):
+            self.assertEqual(parse_answer(raw, "full", n_hits=5), parse_answer(H1, "full", n_hits=5))
         runon = parse_answer("Run `df -h`.<|im_end|>\n<|im_start|>user\nAnd memory?", "full", n_hits=5)
-        self.assertEqual(shown(runon), "Run `df -h`.\n\nAnd memory?")
+        self.assertEqual((shown(runon), boxes(runon)), ("Run `df -h`.\n\nAnd memory?", ["df -h"]))
         for prefix in prefixes("Use `id`.<|im_end|>"):
             self.assertNotIn("<|", shown(parse_answer(prefix, "full", streaming=True)), prefix)
 
@@ -365,17 +410,17 @@ class StudentOutputTests(unittest.TestCase):
         self.assertEqual((live.blocks, live.reasoning_open), ((), True))
         self.assertTrue(live.reasoning.startswith("To check disk space"))
         final = parse_answer(raw, "full")
-        self.assertEqual((final.reasoning, shown(final)), ("", raw.removeprefix("<think>\n")))
+        self.assertEqual((final.reasoning, shown(final), boxes(final)), ("", raw.removeprefix("<think>\n"), ["df -h"]))
         for prefix in prefixes("<think>\nA thought.</think>"):
             parsed = parse_answer(prefix, "full", streaming=True)
             self.assertNotIn("<", parsed.reasoning + shown(parsed), prefix)
 
     def test_only_reasoning_is_shown_as_the_answer(self):
         for raw in ("<think>\nUse `chmod +x <file>`.\n</think>", "Reasoning:\n- `chmod +x <file>` makes it run.",
-                    "Reasoning:\n- `chmod +x <file>` makes it run.\n\nAnswer:"):
-            parsed = parse_answer(raw, "full")
+                    "Reasoning:\n- `chmod +x <file>` makes it run.\n\nAnswer:", "Steps:\n1. Excerpt [1] covers it.\n\nAnswer:"):
+            parsed = parse_answer(raw, "full", n_hits=1)
             self.assertEqual(parsed.reasoning, "", raw)
-            self.assertIn("chmod +x <file>", shown(parsed), raw)
+            self.assertTrue(shown(parsed), raw)
 
     def test_commands_never_hide_under_reasoning_when_the_answer_has_none(self):
         raw = ("Reasoning:\n1. Excerpt [1] says `sudo passwd <username>` sets it.\n2. Then log in again.\n\n"
@@ -428,8 +473,12 @@ class CommandPlacementTests(unittest.TestCase):
         self.assertEqual(quoted, ('tar -xzf "my file.tar.gz"',))
 
     def test_inline_commands_are_not_lifted_outside_steps_or_beside_fences(self):
-        prose = parse_answer("Run `sudo usermod -aG sudo <username>`, then log in again.")
-        self.assertEqual([b.kind for b in prose.blocks], ["md"])
+        bare = parse_answer("Run `sudo usermod -aG sudo <username>`, then log in again.")
+        self.assertEqual([(b.kind, b.derived) for b in bare.blocks], [("md", False), ("code", True)])
+        intro = parse_answer("Run `sudo usermod -aG sudo <username>` first.\n\n1. Log out.\n2. Log in again.")
+        self.assertFalse(any(b.derived for b in intro.blocks))
+        beside = parse_answer("Run `ls -l <path>` to look.\n\n```bash\nls -l <path>\n```")
+        self.assertFalse(any(b.derived for b in beside.blocks))
         fenced = parse_answer("1. Add it with `usermod`:\n```bash\nsudo usermod -aG sudo x\n```\n"
                               "2. Check with `groups x`.\n```bash\ngroups x\n```")
         self.assertFalse(any(b.derived for b in fenced.blocks))
