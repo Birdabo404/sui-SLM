@@ -319,6 +319,7 @@ class StreamingAnswer:
         git_sha=None,
         model_info=None,
         context=None,
+        retrieval_query=None,
         messages_fn=None,
         on_retrieval: Callable[[RetrievalChart], None] | None = None,
         on_progress: Callable[[LiveThroughput], None] | None = None,
@@ -340,6 +341,7 @@ class StreamingAnswer:
         self.git_sha = git_sha
         self.model_info = model_info
         self.context = context
+        self.retrieval_query = retrieval_query
         # (question, hits, mode) -> messages. The app passes its format overlay; the default is the thesis prompt.
         self.messages_fn = messages_fn or build_messages
         self.on_retrieval = on_retrieval
@@ -390,7 +392,9 @@ class StreamingAnswer:
             if uses_rag(self.mode):
                 if self.retriever is None:
                     raise RuntimeError("RAG index is not loaded")
-                query = self.question if self.context is None else self.context.retrieval_query
+                query = self.retrieval_query
+                if query is None:
+                    query = self.question if self.context is None else self.context.retrieval_query
                 hits = self.retriever.retrieve(query, k=self.k, tldr_lane=True)
                 weak = is_weak(hits, threshold=self.threshold)
                 self.chat.raise_if_cancelled()

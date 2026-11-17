@@ -41,7 +41,7 @@ On the T14, with Ubuntu and Python 3.12, 3.13 or 3.14 (`install.sh` checks and e
 `sui-slm` (or `python -m app.launcher` from `.venv`) does the following:
 
 - sets offline defaults (`HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, no telemetry) without overriding values already set;
-- uses `OLLAMA_HOST` (default `http://127.0.0.1:11434`), `OLLAMA_MODEL` (default `qwen3.5:2b`) and `RAG_INDEX` (default `rag/rag-index-v2`);
+- uses `OLLAMA_HOST` (default `http://127.0.0.1:11434`), `OLLAMA_MODEL` (default `qwen3.5:2b`) and `RAG_INDEX` (default `rag/rag-index-v2`); `NORMALIZE_QUESTION_BEFORE_SEARCH=1` forces the optional retrieval-query normalizer on (`0` forces it off);
 - starts `ollama serve` if Ollama isn't answering on a local address, and exits with "Ollama is not available. Install it or start `ollama serve`." if it still isn't;
 - starts Streamlit on 127.0.0.1:8501 without file watching (`--port` picks another port) and opens it in the browser; if the app is already running, it just opens the browser.
 
@@ -57,7 +57,7 @@ On the T14, with Ubuntu and Python 3.12, 3.13 or 3.14 (`install.sh` checks and e
 | +RAG+CoT | +RAG with the step-by-step prompt. The default. |
 | Compare | Runs any two model and mode pairs one after the other and shows them side by side. |
 
-Every request sends `think: false` and `temperature` 0.2. Models: `qwen3.5:2b` (default base, `OLLAMA_MODEL`), `thesis-base-q4km`, and the KD student `thesis-student` (or `OLLAMA_DISTILLED_MODEL`), which runs +RAG+CoT only. The two thesis models are built with `ollama create` from the KD export (`kd/README.md`); the app never downloads, builds or substitutes a model.
+Every request sends `think: false` and `temperature` 0.2. Models: `qwen3.5:2b` (default base, `OLLAMA_MODEL`), `thesis-base-q4km`, and the KD student `thesis-student` (or `OLLAMA_DISTILLED_MODEL`), which runs +RAG+CoT only. The two thesis models are built with `ollama create` from the KD export (`kd/README.md`); the app never downloads, builds or substitutes a model. Settings → Retrieval & answers can optionally strip a fixed list of polite filler from the retrieval query. It is off by default, makes no model call, and never changes the question sent to Ollama.
 
 ## Troubleshooting
 

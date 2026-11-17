@@ -162,6 +162,7 @@ for found in pkgutil.iter_modules([str(root / "app")]):
         env = os.environ.copy()
         env.pop("OLLAMA_MODEL", None)
         env.pop("RAG_INDEX", None)
+        env["NORMALIZE_QUESTION_BEFORE_SEARCH"] = "1"
         env["SUI_SLM_TEST_SECRET"] = "do-not-print"
         result = subprocess.run(
             [str(python), "-m", "app.launcher", "--dry-run"],
@@ -173,6 +174,7 @@ for found in pkgutil.iter_modules([str(root / "app")]):
         self.assertEqual(result.returncode, 0, result.stderr)
         plan = json.loads(result.stdout)
         self.assertEqual(plan["environment"]["OLLAMA_MODEL"], "qwen3.5:2b")
+        self.assertEqual(plan["environment"]["NORMALIZE_QUESTION_BEFORE_SEARCH"], "1")
         self.assertIn("--server.fileWatcherType", plan["command"])
         self.assertNotIn("SUI_SLM_TEST_SECRET", plan["environment"])
         self.assertNotIn("do-not-print", result.stdout)

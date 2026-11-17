@@ -200,6 +200,57 @@ class StreamingTests(unittest.TestCase):
         sent = _StreamingOllama.bodies[0]["messages"]
         self.assertEqual([message["content"] for message in sent[1:3]], ["previous question", "previous answer"])
 
+    def test_default_off_retrieves_with_the_original_question(self):
+        _StreamingOllama.fragments = [_line(_terminal())]
+        original = "Could you please tell me how to install Python on my Ubuntu laptop?"
+        retriever = _Retriever([{
+            "title": "Install Python",
+            "path": "python.md",
+            "source": "docs",
+            "text": "Install Python with apt.",
+            "dense": 0.61,
+        }])
+        with tempfile.TemporaryDirectory() as td:
+            stream = stream_answer_question(
+                original,
+                "rag",
+                "qwen3.5:2b",
+                retriever=retriever,
+                chat=CancellableChat(self.host),
+                log_path=Path(td) / "answers.csv",
+            )
+            list(stream)
+
+        self.assertEqual(retriever.calls, [(original, 5, True)])
+
+    def test_retrieval_override_does_not_rewrite_the_model_question(self):
+        _StreamingOllama.fragments = [_line(_terminal())]
+        original = "Could you please tell me how to install Python on my Ubuntu laptop?"
+        normalized = "how to install Python on Ubuntu"
+        retriever = _Retriever([{
+            "title": "Install Python",
+            "path": "python.md",
+            "source": "docs",
+            "text": "Install Python with apt.",
+            "dense": 0.61,
+        }])
+        with tempfile.TemporaryDirectory() as td:
+            stream = stream_answer_question(
+                original,
+                "rag",
+                "qwen3.5:2b",
+                retriever=retriever,
+                retrieval_query=normalized,
+                chat=CancellableChat(self.host),
+                log_path=Path(td) / "answers.csv",
+            )
+            list(stream)
+
+        self.assertEqual(retriever.calls, [(normalized, 5, True)])
+        sent_question = _StreamingOllama.bodies[0]["messages"][-1]["content"]
+        self.assertIn(f"Question: {original}", sent_question)
+        self.assertNotIn(f"Question: {normalized}", sent_question)
+
     def test_fragmented_utf8_and_terminal_without_newline(self):
         event = json.dumps(
             {"message": {"role": "assistant", "content": "café"}, "done": False},
