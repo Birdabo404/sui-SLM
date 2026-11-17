@@ -3,6 +3,7 @@
 import csv
 import json
 import os
+import re
 import socket
 import sqlite3
 import sys
@@ -23,7 +24,7 @@ sys.path.insert(0, str(ROOT))
 import app.engine as engine
 import app.polaris as polaris
 import app.streaming as streaming
-from app import issues
+from app import diagnostics, issues
 from app.answer_format import app_messages
 from app.chat_memory import ChatStore
 from app.engine import OllamaInfo
@@ -257,11 +258,18 @@ class PolarisRunLoopTests(unittest.TestCase):
     def _html(self):
         return "\n".join(m.value for m in self.at.markdown if not m.value.startswith("<style>"))
 
-    def _settings_html(self):
-        """Open the Settings dialog and return what it shows."""
+    def _settings_html(self, section="general"):
+        """Open the Settings dialog on one section and return what it shows."""
+        self.at.session_state["set-nav"] = section
         self.at.button(key="settings").click().run()
         self.assertFalse(self.at.exception)
         return self._html()
+
+    @staticmethod
+    def _setting(html, label):
+        """The value a settings row shows on its right, or None when no row has that label."""
+        found = re.search(rf'<span class="set-l">{re.escape(label)}</span>.*?<span class="set-v[^"]*">([^<]*)</span>', html)
+        return found and found.group(1)
 
     def _flags(self):
         (flags,) = [m.value for m in self.at.markdown if m.value.startswith('<div class="polaris-flags')]
@@ -290,13 +298,12 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertEqual(self.calls, [{"question": "extract a .tar.gz file", "mode": "base", "retriever": None}])
         # Paused for the answer, released in the same run once it lands.
         self.assertEqual(self._generating_args(), [True, False])
-        self.assertEqual(self._flags(), '<div class="polaris-flags polaris-sky-1"></div>')
+        self.assertEqual(self._flags(), '<div class="polaris-flags polaris-theme-polaris"></div>')
         self.assertIn('<span class="mode">BASE</span><span class="sub">Plain model, no documents</span>', html)
         self.assertIn("English questions only", html)
-        self.assertNotIn('<span class="k">Answers</span>', html)
-        settings = self._settings_html()
-        self.assertIn('<span class="k">Answers</span><span class="v">1</span>', settings)
-        self.assertIn('<span class="k">Warm-up</span><span class="v">ready</span>', settings)
+        self.assertNotIn('<span class="set-l">Answers</span>', html)
+        self.assertEqual(self._setting(self._settings_html(), "Answers"), "1")
+        self.assertEqual(self._setting(self._settings_html("answers"), "Warm-up"), "ready")
 
     def test_second_question_refreshes_the_sidebar_without_duplicate_keys(self):
         self.at.run()
@@ -307,8 +314,8 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 2)
         html = self._html()
         self.assertEqual(html.count('class="q"'), 2)
-        self.assertEqual(self._flags(), '<div class="polaris-flags polaris-sky-2"></div>')
-        self.assertIn('<span class="k">Answers</span><span class="v">2</span>', self._settings_html())
+        self.assertEqual(self._flags(), '<div class="polaris-flags polaris-theme-polaris"></div>')
+        self.assertEqual(self._setting(self._settings_html(), "Answers"), "2")
 
         self.at.run()
         self.assertFalse(self.at.exception)
@@ -323,7 +330,7 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.rerun.assert_not_called()
         self.assertIn('class="hero"', self._html())
         self.assertEqual(self.at.session_state["messages"], [])
-        self.assertIn('<span class="k">Answers</span><span class="v">0</span>', self._settings_html())
+        self.assertEqual(self._setting(self._settings_html(), "Answers"), "0")
 
     def test_a_turn_that_raises_shows_a_card_clears_stop_and_releases_the_sky(self):
         self.at.run()
@@ -1017,23 +1024,25 @@ class PolarisRunLoopTests(unittest.TestCase):
         with patch("app.engine.index_ok", return_value=True), patch("app.polaris.index_chunk_count", return_value=1234), \
                 patch("app.issues.hf_cached", return_value=True), patch("app.polaris.network_online", return_value=False):
             self.at.run()
-            html = self._settings_html()
-        self.assertIn("Ready to answer offline", html)
+            html = self._settings_html("system")
+        self.assertIn('<p class="set-card-h">Offline check · Ready to answer offline</p>', html)
         for label, value in (("Ollama", f"running at {engine.OLLAMA_HOST}"), ("Model", "qwen3.5:2b installed"),
-                             ("Embedding model", "MiniLM cached locally")):
-            self.assertIn(f'<span class="ck-l">{label}</span><span class="ck-v">{value}</span>', html)
-        self.assertIn("1,234 chunks", html)
-        self.assertIn('<span class="ck-l">Network</span><span class="ck-v">offline, not needed</span>', html)
-        self.assertNotIn('class="ck-fix"', html)
+                             ("Embedding model", "MiniLM cached locally"), ("Network", "offline, not needed")):
+            self.assertEqual(self._setting(html, label), value)
+        self.assertIn("1,234 chunks", self._setting(html, "Lab docs index"))
+        self.assertNotIn('class="set-fix"', html)
+        self.assertIn("System check", html)
+        self.assertIsNotNone(self.at.button(key="syscheck-run-system"))
 
     def test_the_offline_check_names_each_fix(self):
         with patch("app.engine.index_ok", return_value=False), patch("app.issues.hf_cached", return_value=False), \
                 patch("app.engine.ollama_reachable", return_value=False):
             self.at.run()
-            html = self._settings_html()
-        self.assertIn("Needs attention: ollama, lab docs index, embedding model", html)
-        self.assertIn('<code class="ck-fix">ollama serve</code>', html)
-        self.assertIn('<code class="ck-fix">bash install.sh</code>', html)
+            html = self._settings_html("system")
+        self.assertIn("Offline check · Needs attention: ollama, lab docs index, embedding model", html)
+        self.assertIn('<code class="set-fix">ollama serve</code>', html)
+        self.assertIn('<code class="set-fix">bash install.sh</code>', html)
+        self.assertEqual(self._setting(html, "Ollama"), f"not running at {engine.OLLAMA_HOST}")
         self.assertIn("can&#x27;t check until Ollama runs", html)
 
     # ---------- chat history ----------
@@ -1088,7 +1097,7 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertEqual(len(self.at.session_state["run_records"]), 1)
         self.assertTrue(self.at.button(key=f"hist-open-{first}").disabled)
         self.assertFalse(self.at.button(key=f"hist-open-{second}").disabled)
-        self.assertIn('<span class="k">Answers</span><span class="v">1</span>', self._settings_html())
+        self.assertEqual(self._setting(self._settings_html(), "Answers"), "1")
 
         # The restored chat carries on: the next turn sees the earlier one and is saved back to the same chat.
         self._ask("what about .zip?")
@@ -1238,20 +1247,51 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertIsNone(self._chat_id())
         self.assertEqual(self._rows(), [])
 
-    def test_the_theme_toggle_says_light_mode_and_keeps_the_stored_key(self):
+    def _theme_flags(self, at=None):
+        return next(m.value for m in (at or self.at).markdown if m.value.startswith('<div class="polaris-flags'))
+
+    def test_the_rail_picks_light_dark_or_polaris_and_the_choice_outlives_the_session(self):
         self.at.run()
-        toggle = self.at.toggle(key="daylight")
-        self.assertEqual(toggle.label, "Light mode")
+        picker = self.at.radio(key="theme-rail-polaris")
+        self.assertEqual(picker.options, ["Light", "Dark", "Polaris"])
+        self.assertEqual(picker.value, "polaris")
+        self.assertEqual(self._theme_flags(), '<div class="polaris-flags polaris-theme-polaris"></div>')
 
-        def flags():
-            return next(m.value for m in self.at.markdown if m.value.startswith('<div class="polaris-flags'))
+        picker.set_value("dark").run()
+        self.assertFalse(self.at.exception)
+        self.rerun.assert_not_called()
+        self.assertEqual(self._theme_flags(), '<div class="polaris-flags polaris-theme-dark polaris-calm"></div>')
+        self.assertEqual(self.at.radio(key="theme-rail-dark").value, "dark")
+        prefs = json.loads((Path(os.environ["XDG_DATA_HOME"]) / "sui-slm" / "prefs.json").read_text())
+        self.assertEqual(prefs, {"theme": "dark"})
 
-        self.assertNotIn("polaris-daylight", flags())
-        toggle.set_value(True).run()
-        self.assertTrue(self.at.session_state["daylight"])
-        self.assertIn("polaris-daylight", flags())
-        shown = [t.label for t in self.at.toggle] + [m.value for m in self.at.markdown if "<style" not in m.value]
-        self.assertFalse(any("Daylight" in s for s in shown))
+        again = self.AppTest.from_file(APP, default_timeout=20)
+        again.run()
+        self.assertEqual(again.session_state["theme"], "dark")
+        self.assertIn("polaris-theme-dark", self._theme_flags(again))
+
+    def test_a_theme_picked_in_settings_repaints_the_page_and_keeps_settings_open(self):
+        self.rerun.side_effect = None
+        self.at.run()
+        self._settings_html("appearance")
+        self.at.radio(key="theme-set-polaris").set_value("light").run()
+        self.assertFalse(self.at.exception)
+        self.assertEqual(self.at.session_state["theme"], "light")
+        self.assertIn("polaris-theme-light polaris-calm", self._theme_flags())
+        # Still open, on the same section, with both pickers drawn fresh on the new theme.
+        self.assertIn('<p class="set-title">Appearance</p>', self._html())
+        self.assertEqual(self.at.radio(key="theme-set-light").value, "light")
+        self.assertEqual(self.at.radio(key="theme-rail-light").value, "light")
+        self.at.run()
+        self.assertNotIn('<p class="set-title">', self._html())
+
+    def test_a_broken_prefs_file_falls_back_to_polaris(self):
+        folder = Path(os.environ["XDG_DATA_HOME"]) / "sui-slm"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "prefs.json").write_text('{"theme": "sepia"')
+        self.at.run()
+        self.assertFalse(self.at.exception)
+        self.assertEqual(self.at.session_state["theme"], "polaris")
 
     # ---------- compare ----------
 
@@ -1634,24 +1674,101 @@ class PolarisRunLoopTests(unittest.TestCase):
 
     def test_settings_shows_the_run_settings_and_every_model(self):
         self.at.run()
-        self.assertNotIn('class="dlg-h"', self._html())
+        self.assertNotIn('class="set-title"', self._html())
         html = self._settings_html()
-        for k, v in (
-            ("Model", "qwen3.5:2b"),
-            ("Ollama", "running 0.12.0"),
-            ("Keep alive", "30m"),
-            ("Context", "4,096 tokens"),
-            ("IDK threshold", "cos 0.30"),
-            ("Top-k", "5"),
-            ("Answers", "0"),
-        ):
-            self.assertIn(f'<span class="k">{k}</span><span class="v">{v}</span>', html)
-        self.assertIn("ollama create thesis-student -f Modelfile", html)
-        self.assertIn("ollama create thesis-base-q4km -f Modelfile-base", html)
-        self.assertIn(polaris.RATE_NOTE.split(".")[0], html)
+        self.assertEqual(self.at.radio(key="set-nav").options,
+                         [":material/tune: General", ":material/palette: Appearance", ":material/memory: Model",
+                          ":material/manage_search: Retrieval & answers", ":material/monitor_heart: System",
+                          ":material/info: About"])
+        self.assertIn('<p class="set-title">General</p>', html)
+        self.assertEqual(self._setting(html, "Answers"), "0")
+        self.assertEqual(self._setting(html, "Export runs"), "nothing yet")
+        model = self._settings_html("model")
+        for label, value in (("Model", "qwen3.5:2b"), ("Ollama", "running 0.12.0"), ("Keep alive", "30m"),
+                             ("Context", "4,096 tokens"), ("Digest", "sha256:abc"), ("qwen3.5:2b", "installed"),
+                             ("thesis-student", "not installed")):
+            self.assertEqual(self._setting(model, label), value)
+        self.assertIn("ollama create thesis-student -f Modelfile", model)
+        self.assertIn("ollama create thesis-base-q4km -f Modelfile-base", model)
+        answers = self._settings_html("answers")
+        for label, value in (("IDK threshold", "cos 0.30"), ("Top-k", "5"), ("Thinking", "off")):
+            self.assertEqual(self._setting(answers, label), value)
+        self.assertIn(polaris.RATE_NOTE.split(".")[0], answers)
         # A run without the click closes it again.
         self.at.run()
-        self.assertNotIn('class="dlg-h"', self._html())
+        self.assertNotIn('class="set-title"', self._html())
+
+    # ---------- system check ----------
+
+    def _diag_lines(self):
+        return [line for m in self.at.markdown for line in re.findall(r'<div class="diag-line ([a-z]+)">.*?'
+                                                                       r'<span class="diag-l">([^<]*)</span>', m.value)]
+
+    def test_the_system_check_replaces_the_chat_line_by_line_and_goes_back(self):
+        tags = [{"name": "qwen3.5:2b", "size": 2 * 1024 ** 3, "details": {"parameter_size": "2.3B"}}]
+        with patch.object(diagnostics, "PACE_S", 0), patch("app.diagnostics.ollama_tags", return_value=tags), \
+                patch("app.engine.ollama_version", return_value="0.12.0"), \
+                patch("app.engine.index_ok", return_value=True), patch("app.polaris.index_chunk_count", return_value=12), \
+                patch("app.issues.hf_cached", return_value=True), patch("app.polaris.network_online", return_value=False):
+            self.at.run()
+            self._ask("extract a .tar.gz file", "landing")
+            self.at.button(key="syscheck-open").click().run()
+            self.assertFalse(self.at.exception)
+            self.rerun.assert_not_called()
+            html = self._html()
+            self.assertIn('<p class="diag-title">System check</p>', html)
+            self.assertNotIn('class="q"', html)
+            lines = self._diag_lines()
+            self.assertEqual([label for _, label in lines][:9],
+                             ["OS", "Kernel", "CPU", "RAM", "GPU", "Disk", "Python", "Streamlit", "Ollama"])
+            self.assertEqual(len(lines), 17)
+            self.assertIn("qwen3.5:2b · 2.0 GB · 2.3B · default base", html)
+            self.assertIn("OFFLINE · no route out, none needed", html)
+            self.assertIn("12 chunks", html)
+            self.assertIn('<p class="diag-sum', html)
+            self.assertEqual(self.at.session_state["syscheck"]["probes"][-1].label, "Warm-up")
+            warmups = []
+            # Another run redraws the result rather than loading the model again.
+            with patch("app.engine.warm_model", side_effect=lambda *a, **k: warmups.append(a) or True):
+                self.at.run()
+                self.assertEqual(warmups, [])
+                self.assertEqual(len(self._diag_lines()), 17)
+                self.at.button(key="syscheck-again").click().run()
+                self.assertEqual(len(warmups), 1)
+            self.at.button(key="syscheck-back").click().run()
+        self.assertFalse(self.at.exception)
+        html = self._html()
+        self.assertNotIn("diag-title", html)
+        self.assertIn(">extract a .tar.gz file<", html)
+
+    def test_settings_opens_the_system_check(self):
+        with patch.object(diagnostics, "PACE_S", 0):
+            self.at.run()
+            self._settings_html("system")
+            self.at.button(key="syscheck-run-system").click().run()
+        self.assertFalse(self.at.exception)
+        self.assertEqual(self.at.session_state["view"], "system")
+        self.assertIn('<p class="diag-title">System check</p>', self._html())
+        self.assertEqual(len(self._diag_lines()), 17)
+
+    def test_settings_search_finds_rows_across_sections(self):
+        self.at.run()
+        self.at.session_state["set-search"] = "ollama"
+        html = self._settings_html()
+        self.assertIn('<p class="set-title">Search</p>', html)
+        self.assertIn('<p class="set-card-h">Model · Ollama</p>', html)
+        self.assertIn('<p class="set-card-h">System · Offline check · ', html)
+        self.assertNotIn('<span class="set-l">Saved chats</span>', html)
+        self.at.session_state["set-search"] = "zebra"
+        self.assertIn("Nothing matches “zebra”", self._settings_html())
+
+    def test_settings_exports_runs_once_there_are_answers(self):
+        self.at.run()
+        self._ask("extract a .tar.gz file", "landing")
+        self._settings_html()
+        self.assertEqual(self._setting(self._html(), "Export runs"), None)
+        buttons = [e for e in self.at.get("download_button") if e.proto.id]
+        self.assertEqual(sorted(b.proto.label for b in buttons), ["CSV", "JSON"])
 
     # ---------- monitor ----------
 
@@ -1796,7 +1913,7 @@ class PolarisRunLoopTests(unittest.TestCase):
             self._ask(SUDO_QUESTION, "landing")
         self.assertEqual(len(loaders()), 1)
         self.assertEqual(len(self.at.code), 5)
-        self.at.toggle(key="daylight").set_value(True).run()
+        self.at.radio(key="theme-rail-polaris").set_value("light").run()
         self.assertEqual(len(loaders()), 1)
 
     def test_compare_folds_reasoning_on_the_side_that_wrote_it(self):

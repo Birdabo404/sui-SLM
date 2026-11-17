@@ -4,7 +4,9 @@
  * fonts: JetBrains Mono (interface, questions, readouts) + Ubuntu Sans (answer prose only) · motion: CSS only
  *
  * style.css — Polaris. Inject once with star-orbit.css. Fonts also declared in .streamlit/config.toml.
- * NIGHT = :root. LIGHT MODE when the app renders <div class="polaris-flags polaris-daylight">.
+ * Three themes, all through the tokens below. POLARIS (the night terminal) = :root. LIGHT and DARK when the app
+ * renders <div class="polaris-flags polaris-theme-light polaris-calm"> (or -dark): one quiet layout in warm neutrals,
+ * hairlines instead of shadows, Inter at regular and medium weights only, inverted between the two.
  * No JS, no images, no network fonts: this runs on 8 GB lab ThinkPads while Ollama holds the CPU, so every
  * animation is a transform/opacity keyframe the compositor can run without the main thread, and the live
  * meter is redrawn by the server at most twice a second rather than animated.
@@ -12,6 +14,7 @@
  * data (retrieval scores, the stream trace). Everything else is the navy ramp. */
 
 @font-face{font-family:"Ubuntu Sans";src:url("/app/static/UbuntuSans-Variable-Latin.woff2") format("woff2");font-weight:300 700;font-style:normal;font-display:swap}
+@font-face{font-family:"Inter";src:url("/app/static/Inter-Variable-Latin.woff2") format("woff2");font-weight:400 500;font-style:normal;font-display:swap}
 @font-face{font-family:"JetBrains Mono";src:url("/app/static/JetBrainsMono-Regular.woff2") format("woff2");font-weight:400;font-style:normal;font-display:swap}
 @font-face{font-family:"JetBrains Mono";src:url("/app/static/JetBrainsMono-SemiBold.woff2") format("woff2");font-weight:600;font-style:normal;font-display:swap}
 
@@ -33,7 +36,12 @@
   --c-ok:var(--c-data);                   /* retrieval cleared the threshold */
   --c-idk:oklch(0.7 0.03 258);            /* abstained */
   --c-danger:oklch(0.72 0.14 25);
-  --c-star:#F5B942;                       /* the star's own gold, same in both themes */
+  --c-star:#F5B942;                       /* the star's own gold, the same in every theme */
+  --c-line-soft:var(--c-line);            /* card edges; Light and Dark draw them a step fainter than hairlines */
+  --c-hover:var(--c-raised);
+  --c-warn:var(--c-accent);
+  --c-dot:transparent;                    /* Light and Dark's one accent: the dot on New chat */
+  --w-strong:600;                         /* the heaviest weight a theme uses; Light and Dark stop at medium */
   --h-text:var(--c-text); --h-text-2:var(--c-text-2); --h-accent:var(--c-star);
   --shadow-float:0 1px 0 oklch(1 0 0 / 0.04) inset,0 10px 30px -12px oklch(0.08 0.04 260 / 0.7);
 
@@ -57,24 +65,61 @@
   --dur-micro:120ms; --dur-short:200ms;
 }
 
-:root:has(.polaris-daylight){
-  --c-bg:oklch(0.985 0.002 264);
-  --c-surface:oklch(1 0 0);
-  --c-raised:oklch(0.955 0.005 264);
-  --c-thumb:oklch(1 0 0);
-  --c-line:oklch(0.905 0.007 264);
-  --c-line-strong:oklch(0.8 0.01 264);
-  --c-text:oklch(0.235 0.02 264);
-  --c-text-2:oklch(0.43 0.02 264);
-  --c-text-3:oklch(0.535 0.018 264);
-  --c-accent:oklch(0.6 0.14 62);          /* 4.1:1, used for the ring and the send icon, never for text */
-  --c-on-accent:oklch(1 0 0);
-  --c-data:oklch(0.5 0.11 240);
-  --c-data-dim:oklch(0.5 0.11 240 / 0.14);
-  --c-ok:var(--c-data);
-  --c-idk:oklch(0.5 0.02 264);
-  --c-danger:oklch(0.55 0.17 27);
-  --shadow-float:0 1px 2px oklch(0 0 0 / 0.04),0 8px 24px -12px oklch(0 0 0 / 0.12);
+:root:has(.polaris-theme-light){
+  /* sampled from grok.com's light theme: warm off-white, low-contrast neutrals, near-black ink */
+  --c-bg:#f9f8f7;                         /* page and rail */
+  --c-surface:#fefefc;                    /* composer, cards, dialog */
+  --c-raised:#f0eeeb;                     /* chips, tracks, selected rows */
+  --c-hover:#edece8;
+  --c-thumb:#fefefc;
+  --c-line:#dddcd9;                       /* hairlines */
+  --c-line-soft:#efeeeb;                  /* card edges */
+  --c-line-strong:#c9c8c4;                /* control edges, toggle off */
+  --c-text:#2c2c2b;                       /* 13.4:1 on bg */
+  --c-text-2:#5e5e5d;                     /* 6.4:1 on bg */
+  --c-text-3:#6b6a68;                     /* 5.0:1 on bg, 4.6:1 on raised */
+  --c-accent:#2c2c2b;                     /* send, toggle on, focus: ink, not a hue */
+  --c-on-accent:#fefefc;
+  --c-data:#4a4a49;                       /* measured data stays ink: the dot is the only colour at rest */
+  --c-data-dim:rgb(44 44 43 / 0.07);
+  --c-ok:var(--c-text-2);
+  --c-warn:#8a5d0f;
+  --c-idk:#8a8986;
+  --c-danger:#b54334;
+  --c-dot:#3b82f6;
+  --c-scrim:rgb(0 0 0 / 0.21);            /* lands near #c4c3c3 over the page */
+  --shadow-float:none;
+}
+:root:has(.polaris-theme-dark){
+  /* the same language inverted: warm dark neutrals, so it never reads as Polaris's navy */
+  --c-bg:#1a1a19;
+  --c-surface:#232322;
+  --c-raised:#2c2c2a;
+  --c-hover:#30302e;
+  --c-thumb:#3a3a37;
+  --c-line:#333331;
+  --c-line-soft:#2c2c2a;
+  --c-line-strong:#4a4a46;
+  --c-text:#ecebe8;                       /* 13.9:1 on surface */
+  --c-text-2:#9b9a97;                     /* 5.8:1 on surface */
+  --c-text-3:#8c8b87;                     /* 4.7:1 on surface */
+  --c-accent:#ecebe8;
+  --c-on-accent:#1a1a19;
+  --c-data:#cfcecb;
+  --c-data-dim:rgb(236 235 232 / 0.08);
+  --c-ok:var(--c-text-2);
+  --c-warn:#d9a648;
+  --c-idk:#8c8b87;
+  --c-danger:#e07a6a;
+  --c-dot:#5b9bff;
+  --c-scrim:rgb(0 0 0 / 0.5);
+  --shadow-float:none;
+}
+:root:has(.polaris-calm){
+  --f-sans:"Inter",system-ui,sans-serif; --f-ui:var(--f-sans);
+  --w-strong:500;
+  --fs-q:15px;
+  --r-md:10px; --r-lg:12px; --r-xl:16px;
 }
 
 /* ---------- Streamlit chrome ---------- */
@@ -86,6 +131,8 @@ html,body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;o
 [data-testid="stHeader"]{background:transparent;pointer-events:none}
 [data-testid="stHeader"] :is(button,a){pointer-events:auto}
 [data-testid="stDecoration"]{display:none}
+/* keeps the sticky tab strip's layer inside the main column, so it can't paint over the sidebar's wordmark */
+[data-testid="stMainBlockContainer"]{position:relative;z-index:0}
 /* the composer's stop button replaces Streamlit's "Running… Stop" widget */
 [data-testid="stStatusWidget"]{display:none!important}
 [data-testid="stMainBlockContainer"]{max-width:var(--main-max);padding:calc(56px + var(--s-4)) var(--s-5) 0}
@@ -188,25 +235,6 @@ html,body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;o
 .composer-conn{display:flex;align-items:center;gap:var(--s-3);min-width:0}
 .composer-note{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:400 var(--fs-cap)/1.2 var(--f-ui);color:var(--c-text-3)}
 
-/* ---------- sky: an ASCII starfield behind an empty chat, one step fainter per question ---------- */
-[data-testid="stMainBlockContainer"]{position:relative;z-index:0}
-[data-testid="stElementContainer"]:has(> [data-testid="stMarkdown"] .sky){position:absolute;width:0;height:0;overflow:visible}
-[data-testid="stMarkdownContainer"] .sky{--sky-cx:50%;position:fixed;inset:0;z-index:-1;display:flex;align-items:center;justify-content:center;
-  margin:0;padding:0;border:0;border-radius:0;background:none;overflow:hidden;pointer-events:none;user-select:none;
-  font:400 13px/1.55 var(--f-mono);letter-spacing:0;color:color-mix(in oklch,var(--c-text-3) 80%,transparent);
-  -webkit-mask-image:radial-gradient(ellipse 30% 36% at var(--sky-cx) 48%,transparent 20%,#000 90%);
-  mask-image:radial-gradient(ellipse 30% 36% at var(--sky-cx) 48%,transparent 20%,#000 90%);
-  opacity:1;visibility:visible;animation:polaris-sky-in 1.6s var(--ease-out) backwards;
-  transition:opacity 2.4s var(--ease-in-out),visibility 0s linear 0s}
-:root:has([data-testid="stSidebar"][aria-expanded="true"]) [data-testid="stMarkdownContainer"] .sky{--sky-cx:calc(50% + 132px)}
-.sky-field{flex:none;white-space:pre}
-.sky b{font-weight:400;color:var(--c-text-2)}
-:root:has(.polaris-sky-1) [data-testid="stMarkdownContainer"] .sky{opacity:.55}
-:root:has(.polaris-sky-2) [data-testid="stMarkdownContainer"] .sky{opacity:.3}
-:root:has(.polaris-sky-3) [data-testid="stMarkdownContainer"] .sky{opacity:.12}
-:root:has(.polaris-sky-4) [data-testid="stMarkdownContainer"] .sky{opacity:0;visibility:hidden;transition:opacity 2.4s var(--ease-in-out),visibility 0s linear 2.4s}
-@keyframes polaris-sky-in{from{opacity:0}}
-
 /* ---------- landing: one centered column, the star is the only loud thing ---------- */
 .st-key-landing{min-height:calc(100dvh - 56px - var(--s-4));justify-content:center;gap:var(--s-4);padding-bottom:12vh}
 .hero{--k:2.5;display:flex;flex-direction:column;align-items:center;gap:var(--s-2);margin-bottom:var(--s-4)}
@@ -257,7 +285,7 @@ html,body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;o
 [class*="st-key-composer-"] [data-testid="stColumn"]:first-child{flex:1 1 0;width:auto}
 [class*="st-key-composer-"] [data-testid="stColumn"]:last-child{display:flex;justify-content:flex-end;flex:0 1 auto;width:auto}
 p.composer-cmp{margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right;font:400 var(--fs-ui)/32px var(--f-ui);color:var(--c-text-3)}
-.composer-cmp b{font-weight:600;color:var(--c-text)}
+.composer-cmp b{font-weight:var(--w-strong);color:var(--c-text)}
 .composer-cmp .m{font:400 var(--fs-cap)/1 var(--f-mono);color:var(--c-text-3)}
 .composer-cmp .vs{margin:0 var(--s-2);color:var(--c-text-3)}
 
@@ -295,9 +323,9 @@ div:has(> .st-key-composer-dock){position:sticky;bottom:0;z-index:110;padding:va
 .q,.thinking,p.stopped,.cmp-compact,.card{animation:polaris-rise .32s var(--ease-out) both}
 .st-key-composer-dock{animation:polaris-rise .32s var(--ease-out) both}
 p.stopped{margin:0;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
-.q{position:relative;margin:var(--s-8) 0 var(--s-1);padding-left:1.4em;font:600 var(--fs-q)/var(--lh-tight) var(--f-ui);color:var(--c-text);text-wrap:balance;overflow-wrap:anywhere}
+.q{position:relative;margin:var(--s-8) 0 var(--s-1);padding-left:1.4em;font:var(--w-strong) var(--fs-q)/var(--lh-tight) var(--f-ui);color:var(--c-text);text-wrap:balance;overflow-wrap:anywhere}
 /* the question is the input line, so it carries the prompt mark a lab terminal would */
-.q::before{content:"›"/"";position:absolute;left:0;top:0;color:var(--c-accent);font-weight:600}
+.q::before{content:"›"/"";position:absolute;left:0;top:0;color:var(--c-accent);font-weight:var(--w-strong)}
 .st-key-thread [data-testid="stElementContainer"]:first-child .q{margin-top:var(--s-4)}
 
 :is([class*="st-key-answer"],[class*="st-key-live-"]){gap:var(--s-3);padding:0 0 0 1.4em;background:transparent;border:0}
@@ -305,11 +333,11 @@ p.stopped{margin:0;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-
 :is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stMarkdownContainer"] li{font:400 var(--fs-body)/var(--lh-body) var(--f-sans);color:var(--c-text);max-width:68ch}
 :is([class*="st-key-answer"],[class*="st-key-live-"]):has(.polaris-idk-flag){border:1px dashed var(--c-idk);border-radius:var(--r-lg);padding:var(--s-4)}
 .card-head{display:flex;align-items:center;gap:var(--s-2);min-width:0;font:400 var(--fs-cap)/1 var(--f-ui);color:var(--c-text-3)}
-.card-head .mode{flex:none;padding:4px 7px;border:1px solid var(--c-line-strong);border-radius:var(--r-xs);background:var(--c-raised);color:var(--c-text);font-weight:600}
+.card-head .mode{flex:none;padding:4px 7px;border:1px solid var(--c-line-strong);border-radius:var(--r-xs);background:var(--c-raised);color:var(--c-text);font-weight:var(--w-strong)}
 .card-head .model{flex:0 1 auto;min-width:0;max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--f-mono);color:var(--c-text-2)}
 .card-head .sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
-/* Command boxes stay a dark terminal in both themes: a command reads the same wherever it is pasted from.
+/* In Polaris command boxes are a dark terminal: a command reads the same wherever it is pasted from.
    Phosphor palette, one meaning per ink: command names green, strings and $variables amber, flags sand where
    Prism marks them (its bash grammar leaves most plain), arguments and paths plain, operators, redirections and
    the <placeholder> brackets dim. Prism only knows command names from a list, so a group named sudo is green
@@ -321,13 +349,18 @@ p.stopped{margin:0;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-
   --term-dim:oklch(0.66 0.03 254)}   /* 6.3:1 */
 [data-testid="stCode"] pre{background:var(--term-bg)!important;border:1px solid var(--term-line);border-radius:var(--r-sm);padding:var(--s-3) calc(var(--s-4) + 32px) var(--s-3) var(--s-4)!important}
 [data-testid="stCode"] code{font:400 var(--fs-ui)/1.55 var(--f-mono)!important;color:var(--term-text)}
-[data-testid="stCode"] pre code :is(.token.function,.token.builtin,.token.class-name,.token.keyword,.token.selector){color:var(--term-cmd);font-weight:600}
+[data-testid="stCode"] pre code :is(.token.function,.token.builtin,.token.class-name,.token.keyword,.token.selector){color:var(--term-cmd);font-weight:var(--w-strong)}
 [data-testid="stCode"] pre code :is(.token.parameter,.token.attr-name,.token.property){color:var(--term-flag);font-weight:400}
 [data-testid="stCode"] pre code :is(.token.string,.token.char,.token.attr-value,.token.variable:not(.parameter),.token.environment){color:var(--term-str)}
 [data-testid="stCode"] pre code :is(.token.operator,.token.punctuation,.token.file-descriptor,.token.entity){color:var(--term-dim)}
 [data-testid="stCode"] pre code :is(.token.number,.token.boolean,.token.constant,.token.symbol,.token.regex,.token.url,.token.assign-left){color:var(--term-text)}
 [data-testid="stCode"] pre code :is(.token.comment,.token.prolog,.token.shebang){color:var(--term-dim);font-style:italic;font-weight:400}
-:root:has(.polaris-daylight) [data-testid="stCode"] pre{border-color:transparent}
+:root:has(.polaris-theme-light) [data-testid="stCode"]{--term-bg:#f4f3f0;--term-line:#e6e5e1;--term-text:#2c2c2b;
+  --term-cmd:#3f6a4a;--term-flag:#6e5f3a;--term-str:#8c5a2b;--term-dim:#6f6e6b}   /* 5.6, 5.6, 5.3, 4.6:1 */
+:root:has(.polaris-theme-dark) [data-testid="stCode"]{--term-bg:#1e1e1d;--term-line:#333331;--term-text:#e6e5e1;
+  --term-cmd:#a9c7a0;--term-flag:#cfc3a0;--term-str:#dcb48c;--term-dim:#8f8e8a}
+/* Light and Dark: a light (or warm dark) box with the theme's own muted palette, and no bold command names */
+:root:has(.polaris-calm) [data-testid="stCode"] pre code :is(.token.function,.token.builtin,.token.class-name,.token.keyword,.token.selector){font-weight:500}
 /* Streamlit's copy button only shows on hover; keep it visible so touch screens and keyboards can find it. */
 /* The control's layer covers the box; its right 40px are the box's own ink, so a long command scrolled sideways
    passes under the button instead of showing round it. A pre's end padding doesn't scroll, so the code carries the
@@ -338,11 +371,11 @@ p.stopped{margin:0;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-
 [data-testid="stCodeCopyButton"]{width:28px!important;height:28px!important;display:flex!important;align-items:center;justify-content:center;
   transform:none!important;color:var(--term-dim)!important;background:transparent!important;border-radius:var(--r-xs)}
 [data-testid="stCodeCopyButton"]:is(:hover,:focus-visible){color:var(--term-text)!important}
-/* For 1.5 s after a click (copy-feedback.js) the icon gives way to a check and "Copied". The box is a dark terminal
-   in both themes, so the chip is drawn in its inks and looks the same in Light mode. */
+/* For 1.5 s after a click (copy-feedback.js) the icon gives way to a check and "Copied", drawn in the box's own
+   inks, so it matches the box in every theme. */
 [data-testid="stCodeCopyButton"][data-copied]{width:auto!important;gap:5px;padding:0 9px!important;
   color:var(--term-cmd)!important;background:var(--term-bg)!important;box-shadow:inset 0 0 0 1px var(--term-line);
-  font:600 var(--fs-cap)/1 var(--f-mono);white-space:nowrap;
+  font:var(--w-strong) var(--fs-cap)/1 var(--f-mono);white-space:nowrap;
   --check:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3 8.5l3 3 7-7' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")}
 [data-testid="stCodeCopyButton"][data-copied] svg{display:none}
 [data-testid="stCodeCopyButton"][data-copied]::before{content:"";flex:none;width:14px;height:14px;background:currentColor;
@@ -357,7 +390,7 @@ p.stopped{margin:0;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-
 :is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stMarkdownContainer"] p.cmd-loose{margin:.2em 0 0;font:400 var(--fs-cap)/var(--lh-ui) var(--f-mono);color:var(--c-text-3)}
 :is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stMarkdownContainer"] ol{margin-bottom:0}
 :is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stMarkdownContainer"] p.src-line{margin:0;font:400 var(--fs-meta)/var(--lh-ui) var(--f-mono);color:var(--c-text-3)}
-.src-line b{font-weight:600;color:var(--c-text-2)}
+.src-line b{font-weight:var(--w-strong);color:var(--c-text-2)}
 [data-testid="stMarkdownContainer"] code{font-family:var(--f-mono);font-size:.875em;padding:.1em .35em;border-radius:var(--r-xs);background:var(--c-raised);color:var(--c-text)}
 
 /* "Reasoning (chain of thought)": open by default above the answer, secondary and never styled like a step: muted
@@ -389,13 +422,13 @@ p.best-panel,p.best{margin:0;font:400 var(--fs-cap)/var(--lh-ui) var(--f-ui);col
 .best code{font-size:var(--fs-cap)}
 .ev{list-style:none;margin:var(--s-2) 0 0;padding:0}
 .ev li{display:grid;grid-template-columns:20px auto minmax(0,1fr) auto;column-gap:var(--s-2);align-items:baseline;padding:var(--s-2) 0;border-top:1px solid var(--c-line)}
-.ev .rank{font:600 var(--fs-cap)/1 var(--f-ui);color:var(--c-text-3);font-variant-numeric:tabular-nums}
+.ev .rank{font:var(--w-strong) var(--fs-cap)/1 var(--f-ui);color:var(--c-text-3);font-variant-numeric:tabular-nums}
 .ev .src{font:400 var(--fs-cap)/1 var(--f-mono);color:var(--c-text-3)}
 .ev .title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--c-text)}
 .ev .sc{font-size:var(--fs-cap);color:var(--c-text-3);font-variant-numeric:tabular-nums;white-space:nowrap}
 .ev p.snip{grid-column:3 / -1;margin:var(--s-1) 0 0;font-size:var(--fs-ui);line-height:var(--lh-ui);color:var(--c-text-2)}
 p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
-.ram-split b{font-weight:600;color:var(--c-text-2);font-variant-numeric:tabular-nums}
+.ram-split b{font-weight:var(--w-strong);color:var(--c-text-2);font-variant-numeric:tabular-nums}
 .dbg > summary{cursor:pointer;width:fit-content}
 .dbg-ev{list-style:none;margin:var(--s-1) 0 0;padding:0}
 .dbg-ev li{padding:var(--s-1) 0;font-family:var(--f-mono)}
@@ -403,13 +436,13 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 
 .metrics{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s-1) var(--s-4);padding-top:var(--s-3);margin-top:var(--s-1);border-top:1px solid var(--c-line);
   font:400 var(--fs-meta)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
-.metrics b{font-weight:600;color:var(--c-text-2);font-variant-numeric:tabular-nums}
+.metrics b{font-weight:var(--w-strong);color:var(--c-text-2);font-variant-numeric:tabular-nums}
 /* response time and tok/s: the two numbers people compare, so they sit first, as readout cells. tok/s is always
    there: Ollama's own eval_count / eval_duration, or a dashed cell that says why there is no number. */
 .stats{display:inline-flex;flex-wrap:wrap;flex:none;gap:var(--s-1)}
 .stat{display:inline-flex;align-items:baseline;gap:4px;height:22px;padding:0 7px;border:1px solid var(--c-line);border-radius:var(--r-xs);background:var(--c-raised);
   font:400 var(--fs-meta)/20px var(--f-ui);color:var(--c-text-3);white-space:nowrap;cursor:default}
-.stat b{font-size:var(--fs-cap);font-weight:600;color:var(--c-text);font-variant-numeric:tabular-nums}
+.stat b{font-size:var(--fs-cap);font-weight:var(--w-strong);color:var(--c-text);font-variant-numeric:tabular-nums}
 .stat.calc{border-color:transparent;background:transparent;padding:0 2px;font-variant-numeric:tabular-nums}
 .stat.na{border-style:dashed;border-color:var(--c-line-strong);background:transparent}
 .stat.warn{border-color:color-mix(in oklch,var(--c-danger) 55%,transparent);background:transparent;color:var(--c-danger)}
@@ -419,7 +452,7 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 .idk-star{grid-column:1;grid-row:1;padding-top:2px}
 .idk-star svg{width:18px;height:18px;fill:none;stroke:var(--c-idk);stroke-width:1.5;animation:none}
 .idk-body h4,.idk-body p{grid-column:2;margin:0}
-.idk-body h4{font:600 var(--fs-body)/var(--lh-tight) var(--f-ui);color:var(--c-text)}
+.idk-body h4{font:var(--w-strong) var(--fs-body)/var(--lh-tight) var(--f-ui);color:var(--c-text)}
 .idk-body p{font:400 var(--fs-body)/var(--lh-body) var(--f-sans);color:var(--c-text-2)}
 .idk-body p.idk-why{font:400 var(--fs-meta)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
 
@@ -427,7 +460,7 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 .issue{display:flex;flex-direction:column;gap:6px;padding:var(--s-3) var(--s-4);border:1px solid var(--c-line);border-left:2px solid var(--c-danger);
   border-radius:var(--r-md);background:var(--c-surface);font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-text-2)}
 .issue p{margin:0}
-.issue .issue-t{font-weight:600;color:var(--c-text)}
+.issue .issue-t{font-weight:var(--w-strong);color:var(--c-text)}
 .issue .issue-t::before{content:"";display:inline-block;width:6px;height:6px;margin:0 8px 2px 0;border-radius:50%;background:var(--c-danger);vertical-align:middle}
 .issue .issue-d{text-wrap:pretty}
 .issue .issue-fix code{display:block;width:fit-content;max-width:100%;padding:3px 8px;border-radius:var(--r-xs);background:var(--c-raised);
@@ -435,19 +468,6 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 .issue .issue-hint{font-size:var(--fs-meta);color:var(--c-text-3);text-wrap:pretty}
 .issue.compact{gap:4px;padding:var(--s-2) var(--s-3)}
 .st-key-landing .issue{margin-top:var(--s-1)}
-
-.ck-sum{margin:0 0 var(--s-2);font:600 var(--fs-ui)/var(--lh-ui) var(--f-ui)}
-.ck-sum.ok{color:var(--c-data)}
-.ck-sum.bad{color:var(--c-danger)}
-.checks{list-style:none;margin:0 0 var(--s-2);padding:0;display:flex;flex-direction:column;gap:6px;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui)}
-.checks li{display:grid;grid-template-columns:28px 136px minmax(0,1fr);column-gap:var(--s-2);align-items:baseline;min-width:0}
-.checks .ck-m{font-size:var(--fs-meta);font-weight:600;color:var(--c-text-3)}
-.checks .ok .ck-m{color:var(--c-data)}
-.checks .bad .ck-m{color:var(--c-danger)}
-.checks .ck-l{color:var(--c-text-3);white-space:nowrap}
-.checks .ck-v{min-width:0;color:var(--c-text);overflow-wrap:anywhere}
-.checks .ck-fix{grid-column:3;justify-self:start;margin-top:2px;padding:1px 6px;border-radius:var(--r-xs);background:var(--c-raised);
-  font:400 var(--fs-meta)/var(--lh-ui) var(--f-mono);color:var(--c-text);overflow-wrap:anywhere;user-select:all}
 
 .chips{display:flex;flex-wrap:wrap;gap:var(--s-2)}
 .chip{display:inline-flex;align-items:center;gap:6px;max-width:100%;height:26px;padding:0 var(--s-2);border-radius:var(--r-pill);background:var(--c-raised);
@@ -485,17 +505,17 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 .spark .line.r{stroke:var(--c-text-2);stroke-dasharray:3 2}
 .mon-cfg{display:flex;align-items:center;gap:6px;min-width:0;margin-top:2px!important;color:var(--c-text-2)}
 .mon-cfg .m{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--f-mono)}
-.mon-cfg .md{flex:none;margin-left:auto;font-weight:600;color:var(--c-text)}
-.mon .side{flex:none;display:inline-block;width:16px;margin-right:2px;border-radius:3px;text-align:center;font:600 11px/16px var(--f-ui)}
+.mon-cfg .md{flex:none;margin-left:auto;font-weight:var(--w-strong);color:var(--c-text)}
+.mon .side{flex:none;display:inline-block;width:16px;margin-right:2px;border-radius:3px;text-align:center;font:var(--w-strong) 11px/16px var(--f-ui)}
 .mon .side.l{background:var(--c-data);color:var(--c-on-accent)}
 .mon .side.r{box-shadow:inset 0 0 0 1px var(--c-text-2);color:var(--c-text-2)}
 .mon-cells{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px var(--s-2)}
-.mon-cells b{font-weight:600;color:var(--c-text);font-variant-numeric:tabular-nums}
+.mon-cells b{font-weight:var(--w-strong);color:var(--c-text);font-variant-numeric:tabular-nums}
 .mon-cells .stats{gap:var(--s-1)}
 .mon-cells .stat.calc{display:none}
 .mon-cells.dim b{color:var(--c-text-2)}
 .mon-note{opacity:.85;text-wrap:pretty}
-.mon-best b{font-weight:600;color:var(--c-text);font-variant-numeric:tabular-nums}
+.mon-best b{font-weight:var(--w-strong);color:var(--c-text);font-variant-numeric:tabular-nums}
 .mon-best{min-height:20px}
 /* scores: the cosine bar runs under each title, so a 232px rail still fits rank, title and three raw numbers */
 .sc-cols,.sc-rows li{display:grid;grid-template-columns:1.5ch minmax(0,1fr) 4ch 5ch 5ch;column-gap:6px;align-items:baseline}
@@ -573,7 +593,6 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 .queued-label{color:var(--c-text-3)}
 .thinking.queued{color:var(--c-text-3)}
 @media (prefers-reduced-motion:reduce){
-  [data-testid="stMarkdownContainer"] .sky{animation:none;transition-duration:.15s}
   .q,.thinking,p.stopped,.cmp-compact,.card,.st-key-composer-dock,.st-key-stop-gen{animation:polaris-fade-in .15s linear both!important}
   .cube-reel{animation:none;will-change:auto}
   .thinking-note{animation-duration:1ms}
@@ -582,9 +601,9 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 
 /* ---------- while an answer generates, ambient motion holds still so the CPU stays with Ollama ----------
  * The star (including the sidebar's first wrap, which waits at its rest frame and plays when the answer lands)
- * and the sky pause. The loader and the one-shot entrances keep running: a paused entrance would sit on its
+ * pauses. The loader and the one-shot entrances keep running: a paused entrance would sit on its
  * first, invisible frame. */
-:root:has(.polaris-generating) :is(.band *,.sky){animation-play-state:paused!important}
+:root:has(.polaris-generating) .band *{animation-play-state:paused!important}
 
 /* ---------- rail: one viewport tall when it fits, scrolling when it doesn't ----------
  * Top to bottom: wordmark + dither art, run controls, the monitor (takes what height is left), settings.
@@ -601,7 +620,7 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 [data-testid="stSidebar"] [data-testid="stVerticalBlockBorderWrapper"]:has(> .st-key-rail-mon){flex:1 0 auto;display:flex;flex-direction:column}
 .st-key-rail-mon{flex:1 0 auto;gap:var(--s-2)}
 /* rail ranks: section title in small capitals, field label, then the control's own value at 13 */
-[data-testid="stSidebar"] .side-h{margin:0;font:600 var(--fs-label)/22px var(--f-ui);color:var(--c-text-3);letter-spacing:.08em;text-transform:uppercase}
+[data-testid="stSidebar"] .side-h{margin:0;font:var(--w-strong) var(--fs-label)/22px var(--f-ui);color:var(--c-text-3);letter-spacing:.08em;text-transform:uppercase}
 [data-testid="stSidebar"] .side-note{margin:0;font:400 var(--fs-meta)/var(--lh-ui) var(--f-ui);color:var(--c-text-3);text-wrap:pretty}
 [data-testid="stSidebar"] .side-note.err{color:var(--c-danger)}
 [data-testid="stSidebar"] .side-note .ok{color:var(--c-data)}
@@ -638,17 +657,17 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 [data-testid="stSidebar"] [data-baseweb="select"] svg{color:var(--c-text-3)}
 [class*="st-key-model-select"] + [data-testid="stElementContainer"]{margin-top:-4px}
 /* mode: a four-way segmented control (one segment for the student, which only runs +RAG+CoT) */
-[class*="st-key-mode-pick"] [role="radiogroup"]{display:flex;flex-wrap:nowrap;gap:2px;padding:2px;border-radius:var(--r-sm);background:var(--c-raised)}
-[class*="st-key-mode-pick"] label[data-baseweb="radio"]{flex:1 1 auto;justify-content:center;margin:0;padding:0 4px;min-height:26px;border-radius:var(--r-xs);cursor:pointer;
+:is([class*="st-key-mode-pick"],[class*="st-key-theme-"]) [role="radiogroup"]{display:flex;flex-wrap:nowrap;gap:2px;padding:2px;border-radius:var(--r-sm);background:var(--c-raised)}
+:is([class*="st-key-mode-pick"],[class*="st-key-theme-"]) label[data-baseweb="radio"]{flex:1 1 auto;justify-content:center;margin:0;padding:0 4px;min-height:26px;border-radius:var(--r-xs);cursor:pointer;
   transition:background-color var(--dur-micro) var(--ease-out)}
-[class*="st-key-mode-pick"] label[data-baseweb="radio"] > div:first-child{display:none}
-[class*="st-key-mode-pick"] label[data-baseweb="radio"] > div:last-child{padding:0}
-[class*="st-key-mode-pick"] label[data-baseweb="radio"] p{font:500 var(--fs-cap)/26px var(--f-ui)!important;color:var(--c-text-3);white-space:nowrap}
-[class*="st-key-mode-pick"] label[data-baseweb="radio"]:hover p{color:var(--c-text)}
-[class*="st-key-mode-pick"] label[data-baseweb="radio"]:has(input:checked){background:var(--c-thumb);box-shadow:0 1px 0 oklch(1 0 0 / 0.05) inset}
-[class*="st-key-mode-pick"] label[data-baseweb="radio"]:has(input:checked) p{font-weight:600!important;color:var(--c-text)}
-[class*="st-key-mode-pick"] label[data-baseweb="radio"]:has(input:focus-visible){outline:2px solid var(--c-accent);outline-offset:1px}
-[class*="st-key-mode-pick"] [role="radiogroup"]:has(input:disabled){opacity:.7}
+:is([class*="st-key-mode-pick"],[class*="st-key-theme-"]) label[data-baseweb="radio"] > div:first-child{display:none}
+:is([class*="st-key-mode-pick"],[class*="st-key-theme-"]) label[data-baseweb="radio"] > div:last-child{padding:0}
+:is([class*="st-key-mode-pick"],[class*="st-key-theme-"]) label[data-baseweb="radio"] p{font:500 var(--fs-cap)/26px var(--f-ui)!important;color:var(--c-text-3);white-space:nowrap}
+:is([class*="st-key-mode-pick"],[class*="st-key-theme-"]) label[data-baseweb="radio"]:hover p{color:var(--c-text)}
+:is([class*="st-key-mode-pick"],[class*="st-key-theme-"]) label[data-baseweb="radio"]:has(input:checked){background:var(--c-thumb);box-shadow:0 1px 0 oklch(1 0 0 / 0.05) inset}
+:is([class*="st-key-mode-pick"],[class*="st-key-theme-"]) label[data-baseweb="radio"]:has(input:checked) p{font-weight:var(--w-strong)!important;color:var(--c-text)}
+:is([class*="st-key-mode-pick"],[class*="st-key-theme-"]) label[data-baseweb="radio"]:has(input:focus-visible){outline:2px solid var(--c-accent);outline-offset:1px}
+:is([class*="st-key-mode-pick"],[class*="st-key-theme-"]) [role="radiogroup"]:has(input:disabled){opacity:.7}
 [data-testid="stCheckbox"] label[data-baseweb="checkbox"] > div:first-child{background:var(--c-line-strong)!important}
 [data-testid="stCheckbox"] label[data-baseweb="checkbox"]:has(input:checked) > div:first-child{background:var(--c-accent)!important}
 [data-testid="stCheckbox"] label[data-baseweb="checkbox"] > div:first-child > div{background:oklch(1 0 0)!important}
@@ -663,6 +682,24 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 [class*="st-key-settings"] button{min-height:30px;padding:0 var(--s-2);border:0;border-radius:var(--r-sm);background:transparent;color:var(--c-text-2)}
 [class*="st-key-settings"] button p{font:500 var(--fs-ui)/1 var(--f-ui)}
 [class*="st-key-settings"] button:hover:not(:disabled){background:var(--c-raised);color:var(--c-text)}
+/* Streamlit tints a clicked button with its primary colour; the calm themes keep it ink */
+:root:has(.polaris-calm) :is([class*="st-key-settings"],.st-key-syscheck-open) button:is(:focus,:active):not(:hover){color:var(--c-text-2)}
+.st-key-syscheck-open{margin-right:auto}
+.st-key-syscheck-open button{width:30px;min-height:30px;padding:0;border:0;border-radius:var(--r-sm);background:transparent;color:var(--c-text-2)}
+.st-key-syscheck-open button p{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.st-key-syscheck-open button:hover{background:var(--c-raised);color:var(--c-text)}
+/* the rail's theme switch: three icons (sun, moon, the star) on one track; the names stay for screen readers */
+[class*="st-key-theme-rail"] label[data-baseweb="radio"]{flex:none!important;width:28px;padding:0!important}
+[class*="st-key-theme-rail"] label[data-baseweb="radio"] p{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+[class*="st-key-theme-rail"] label[data-baseweb="radio"] > div:last-child{display:flex;align-items:center;justify-content:center;width:100%;height:26px}
+[class*="st-key-theme-rail"] label[data-baseweb="radio"] > div:last-child::before{content:"";width:15px;height:15px;background:var(--c-text-3);
+  -webkit-mask:var(--icon) center/contain no-repeat;mask:var(--icon) center/contain no-repeat}
+[class*="st-key-theme-rail"] label[data-baseweb="radio"]:hover > div:last-child::before{background:var(--c-text)}
+[class*="st-key-theme-rail"] label[data-baseweb="radio"]:has(input:checked) > div:last-child::before{background:var(--c-text)}
+[class*="st-key-theme-rail"] label[data-baseweb="radio"]:nth-child(1){--icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round'%3E%3Ccircle cx='12' cy='12' r='4'/%3E%3Cpath d='M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4'/%3E%3C/svg%3E")}
+[class*="st-key-theme-rail"] label[data-baseweb="radio"]:nth-child(2){--icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linejoin='round'%3E%3Cpath d='M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z'/%3E%3C/svg%3E")}
+[class*="st-key-theme-rail"] label[data-baseweb="radio"]:nth-child(3){--icon:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 1.5l2.3 8.2 8.2 2.3-8.2 2.3-2.3 8.2-2.3-8.2-8.2-2.3 8.2-2.3z' fill='black'/%3E%3C/svg%3E")}
+[class*="st-key-theme-rail"] label[data-baseweb="radio"]:nth-child(3):has(input:checked) > div:last-child::before{background:var(--c-star)}
 
 /* compact heights: notes go first, then the art */
 /* the monitor's notes also live in Settings, so only tall screens keep them in the rail */
@@ -769,36 +806,142 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
   [class*="st-key-hist-no-"] button:hover{background:var(--c-thumb)}
 }
 
-/* ---------- settings: session, models and system details in one modal ---------- */
-[data-testid="stDialog"] [role="dialog"]{background:var(--c-surface);border:1px solid var(--c-line);border-radius:var(--r-xl);box-shadow:var(--shadow-float);color:var(--c-text)}
+/* ---------- settings: a left nav (search, then sections) and grouped cards on the right ----------
+ * Every row is a label, a muted one-line note and, right-aligned, its value or its control. Cards are 1px hairlines
+ * on the dialog's own surface; nothing in here casts a shadow. */
+[data-testid="stDialog"] [role="dialog"]{width:min(920px,calc(100vw - 32px))!important;max-width:none!important;background:var(--c-surface);
+  border:1px solid var(--c-line);border-radius:var(--r-xl);box-shadow:var(--shadow-float);color:var(--c-text)}
+/* Polaris keeps Streamlit's own backdrop; Light and Dark get one flat scrim */
+:root:has(.polaris-calm) [data-testid="stDialog"]{background:var(--c-scrim)!important}
+:root:has(.polaris-calm) div:has(> [data-testid="stDialog"]){background:transparent!important}
 /* Streamlit 1.45 renders the dialog title as the dialog's first div, in the dark theme's ink, not as an h2 */
-[data-testid="stDialog"] [role="dialog"] > div:first-child{font:600 var(--fs-q)/1.3 var(--f-ui)!important;color:var(--c-text)!important}
+[data-testid="stDialog"] [role="dialog"] > div:first-child{font:var(--w-strong) var(--fs-body)/1.3 var(--f-ui)!important;color:var(--c-text)!important}
 [data-testid="stDialog"] [role="dialog"] button[aria-label="Close"]{color:var(--c-text-2)}
 [data-testid="stDialog"] [role="dialog"] button[aria-label="Close"]:hover{color:var(--c-text)}
-p.dlg-h{margin:var(--s-3) 0 var(--s-1);padding-bottom:var(--s-2);border-bottom:1px solid var(--c-line);font:600 var(--fs-cap)/1 var(--f-ui);color:var(--c-text-3);letter-spacing:.02em}
-p.dlg-note{margin:0 0 var(--s-2);font:400 var(--fs-cap)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
-.kv-list{display:flex;flex-direction:column;gap:6px;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui)}
-.kv{display:flex;justify-content:space-between;align-items:baseline;gap:var(--s-3);min-width:0}
-.kv .k{flex:none;color:var(--c-text-3)}
-.kv .v{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right;color:var(--c-text);font-variant-numeric:tabular-nums}
-.models{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui)}
-.models li{display:grid;grid-template-columns:minmax(0,1fr) auto;column-gap:var(--s-3);padding:6px 0;margin:0;border-bottom:1px solid var(--c-line)}
-.models .n{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--f-mono);color:var(--c-text)}
-.models .r{grid-row:2;font-size:var(--fs-cap);color:var(--c-text-3)}
-.models .s{grid-column:2;grid-row:1 / 3;align-self:center;font-size:var(--fs-cap);color:var(--c-text-3)}
-.models .installed .s{color:var(--c-data)}
-.models .not-installed .s{color:var(--c-danger)}
-.models code{grid-column:1 / -1;margin-top:4px;justify-self:start;font-size:11.5px;overflow-wrap:anywhere}
-[data-testid="stDialog"] [data-testid="stDownloadButton"] button{min-height:32px;border:1px solid var(--c-line);border-radius:var(--r-sm);background:transparent;color:var(--c-text-2)}
-[data-testid="stDialog"] [data-testid="stDownloadButton"] button p{white-space:nowrap;font-size:var(--fs-ui)}
-[data-testid="stDialog"] [data-testid="stDownloadButton"] button:hover{background:var(--c-raised);color:var(--c-text);border-color:var(--c-line-strong)}
+[data-testid="stDialog"] [data-testid="stHorizontalBlock"]:has(> [data-testid="stColumn"] .st-key-set-nav-box){align-items:flex-start}
+/* nav: search at the top, then one row per section */
+[data-testid="stDialog"] [data-testid="stTextInput"] [data-baseweb="input"]{min-height:34px;border:1px solid var(--c-line)!important;border-radius:var(--r-md);background:var(--c-bg)!important}
+[data-testid="stDialog"] [data-testid="stTextInput"] :is([data-baseweb="base-input"],[data-baseweb="input"] > div){background:transparent!important}
+[data-testid="stDialog"] [data-testid="stTextInput"] input{font:400 var(--fs-ui)/1.3 var(--f-ui);color:var(--c-text);caret-color:var(--c-accent)}
+[data-testid="stDialog"] [data-testid="stTextInput"] input::placeholder{color:var(--c-text-3);opacity:1}
+[data-testid="stDialog"] [data-testid="stTextInput"] [data-baseweb="input"]:focus-within{border-color:var(--c-line-strong)!important}
+[data-testid="stDialog"] [data-testid="stTextInput"] [data-testid="stIconMaterial"]{color:var(--c-text-3);font-size:18px}
+.st-key-set-nav-box{margin-top:var(--s-2)}
+.st-key-set-nav-box [role="radiogroup"]{gap:2px}
+.st-key-set-nav-box label[data-baseweb="radio"]{width:100%;margin:0;padding:0 var(--s-2);min-height:34px;align-items:center;border-radius:var(--r-md);cursor:pointer;
+  transition:background-color var(--dur-micro) var(--ease-out)}
+.st-key-set-nav-box label[data-baseweb="radio"] > div:first-child{display:none}
+.st-key-set-nav-box label[data-baseweb="radio"] > div:last-child{padding:0}
+.st-key-set-nav-box label[data-baseweb="radio"] p{display:flex;align-items:center;gap:10px;font:400 var(--fs-ui)/1 var(--f-ui)!important;color:var(--c-text-2)}
+.st-key-set-nav-box label[data-baseweb="radio"] [data-testid="stIconMaterial"]{font-size:17px;color:var(--c-text-3)}
+.st-key-set-nav-box label[data-baseweb="radio"]:hover{background:var(--c-hover)}
+.st-key-set-nav-box label[data-baseweb="radio"]:has(input:checked){background:var(--c-raised)}
+.st-key-set-nav-box label[data-baseweb="radio"]:has(input:checked) p{color:var(--c-text);font-weight:var(--w-strong)!important}
+.st-key-set-nav-box label[data-baseweb="radio"]:has(input:checked) [data-testid="stIconMaterial"]{color:var(--c-text)}
+.st-key-set-nav-box label[data-baseweb="radio"]:has(input:focus-visible){outline:2px solid var(--c-accent);outline-offset:-2px}
+/* the right side: a title, then the cards */
+.st-key-set-body{gap:var(--s-3);min-height:420px;max-height:min(68vh,620px);overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;padding-right:2px}
+.set-head{margin-bottom:var(--s-1)}
+p.set-title{margin:0;font:var(--w-strong) var(--fs-body)/1.3 var(--f-ui);color:var(--c-text)}
+p.set-sub{margin:2px 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
+p.set-card-h{margin:var(--s-2) 0 calc(-1 * var(--s-1)) 2px;font:var(--w-strong) var(--fs-meta)/1.3 var(--f-ui);color:var(--c-text-3)}
+[class*="st-key-set-card-"]{gap:0;padding:0 var(--s-4);border:1px solid var(--c-line-soft);border-radius:var(--r-lg);background:var(--c-surface)}
+[class*="st-key-set-card-"] > * + *{border-top:1px solid var(--c-line-soft)}
+.set-row{display:flex;align-items:center;justify-content:space-between;gap:var(--s-4);min-height:52px;padding:var(--s-2) 0}
+.set-text{display:flex;flex-direction:column;gap:2px;min-width:0}
+.set-l{font:var(--w-strong) var(--fs-ui)/1.35 var(--f-ui);color:var(--c-text)}
+.set-d{font:400 var(--fs-meta)/1.4 var(--f-ui);color:var(--c-text-3);text-wrap:pretty}
+.set-v{flex:0 1 auto;min-width:0;max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right;
+  font:400 var(--fs-ui)/1.3 var(--f-ui);color:var(--c-text-2);font-variant-numeric:tabular-nums}
+.set-v.mono{font-family:var(--f-mono);font-size:var(--fs-cap)}
+.set-v.ok{color:var(--c-ok)}
+.set-v.bad{color:var(--c-danger)}
+code.set-fix{display:block;width:fit-content;max-width:100%;margin-top:4px;padding:1px 6px;border-radius:var(--r-xs);background:var(--c-raised);
+  font:400 var(--fs-meta)/var(--lh-ui) var(--f-mono);color:var(--c-text);overflow-wrap:anywhere;user-select:all}
+[class*="st-key-set-row-"]{flex-direction:row;align-items:center;justify-content:space-between;gap:var(--s-4);min-height:52px;padding:var(--s-2) 0}
+[class*="st-key-set-row-"] > *{width:auto!important;min-width:0}
+[class*="st-key-set-row-"] > :first-child{flex:1 1 auto}
+[class*="st-key-set-ctl-"]{flex:0 0 auto;flex-direction:row;align-items:center;justify-content:flex-end;gap:var(--s-2);width:auto!important}
+[class*="st-key-set-ctl-"] > *{width:auto!important}
+[data-testid="stDialog"] :is([data-testid="stDownloadButton"],[class*="st-key-syscheck-run"]) button{min-height:30px;padding:0 var(--s-3);border:1px solid var(--c-line);border-radius:var(--r-md);
+  background:var(--c-surface);color:var(--c-text)}
+[data-testid="stDialog"] :is([data-testid="stDownloadButton"],[class*="st-key-syscheck-run"]) button p{white-space:nowrap;font:400 var(--fs-ui)/1 var(--f-ui)}
+[data-testid="stDialog"] :is([data-testid="stDownloadButton"],[class*="st-key-syscheck-run"]) button:hover{background:var(--c-hover);border-color:var(--c-line-strong);color:var(--c-text)}
+@media (max-width:720px){
+  [data-testid="stDialog"] [data-testid="stHorizontalBlock"]:has(.st-key-set-nav-box){flex-direction:column}
+  .st-key-set-nav-box [role="radiogroup"]{flex-direction:row;flex-wrap:wrap}
+  .st-key-set-nav-box label[data-baseweb="radio"]{width:auto}
+  .st-key-set-body{max-height:none;min-height:0}
+}
+
+/* ---------- system check: a boot log, one measured line per check ----------
+ * Monospace grid, so marks, labels, values and timings line up: [MARK] label value time. A line holds a small
+ * spinner while it runs, then its mark; one summary line closes the run. */
+.st-key-syscheck{gap:var(--s-3);padding-top:var(--s-4)}
+/* the page ends at the check; anything after it is the chat's last run, still drawn until this run finishes */
+[data-testid="stMainBlockContainer"] :is(.st-key-syscheck,div:has(> .st-key-syscheck)) ~ *{display:none}
+.diag-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:var(--s-1) var(--s-3)}
+p.diag-title{margin:0;font:var(--w-strong) var(--fs-q)/1.3 var(--f-ui);color:var(--c-text)}
+p.diag-sub{flex:1 1 100%;order:3;margin:0;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
+.diag-when{margin-left:auto;font:400 var(--fs-meta)/1 var(--f-mono);color:var(--c-text-3)}
+.st-key-diag-lines{gap:0;padding:var(--s-3) var(--s-4);border:1px solid var(--c-line-soft);border-radius:var(--r-lg);background:var(--c-surface)}
+.diag-line{display:grid;grid-template-columns:6ch 15ch minmax(0,1fr) 8ch;column-gap:var(--s-3);align-items:baseline;padding:3px 0;
+  font:400 var(--fs-cap)/1.6 var(--f-mono);color:var(--c-text);font-variant-numeric:tabular-nums;animation:polaris-fade-in .18s var(--ease-out) both}
+.diag-m{display:flex;justify-content:center;font-weight:var(--w-strong);white-space:nowrap}
+.diag-line:not(.run) .diag-m::before{content:"["}
+.diag-line:not(.run) .diag-m::after{content:"]"}
+.diag-line.pass .diag-m{color:var(--c-ok)}
+.diag-line.warn .diag-m{color:var(--c-warn)}
+.diag-line.fail .diag-m{color:var(--c-danger)}
+.diag-l{color:var(--c-text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.diag-v{min-width:0;overflow-wrap:anywhere}
+.diag-line.run .diag-v{color:var(--c-text-3)}
+.diag-line.run .diag-v::after{content:"…"}
+.diag-t{text-align:right;color:var(--c-text-3);white-space:nowrap}
+.diag-spin{display:inline-block;width:9px;height:9px;margin-top:4px;border:1.5px solid var(--c-line-strong);border-top-color:var(--c-text);border-radius:50%;
+  animation:diag-spin .7s linear infinite}
+@keyframes diag-spin{to{transform:rotate(360deg)}}
+code.diag-fix{grid-column:3 / -1;justify-self:start;margin:2px 0 4px;padding:1px 6px;border-radius:var(--r-xs);background:var(--c-raised);
+  font:400 var(--fs-meta)/var(--lh-ui) var(--f-mono);color:var(--c-text);overflow-wrap:anywhere;user-select:all}
+p.diag-sum{margin:0;padding:var(--s-2) var(--s-4);border-radius:var(--r-md);background:var(--c-raised);font:var(--w-strong) var(--fs-cap)/var(--lh-ui) var(--f-mono)}
+p.diag-sum.pass{color:var(--c-ok)}
+p.diag-sum.warn{color:var(--c-warn)}
+p.diag-sum.fail{color:var(--c-danger)}
+.st-key-diag-actions{flex-direction:row;gap:var(--s-2)}
+.st-key-diag-actions > *{width:auto!important}
+.st-key-diag-actions button{min-height:32px;padding:0 var(--s-3);border:1px solid var(--c-line);border-radius:var(--r-md);background:var(--c-surface);color:var(--c-text)}
+.st-key-diag-actions button p{font:400 var(--fs-ui)/1 var(--f-ui)}
+.st-key-diag-actions button:hover{background:var(--c-hover);border-color:var(--c-line-strong);color:var(--c-text)}
+@media (max-width:640px){
+  .diag-line{grid-template-columns:6ch minmax(0,1fr) auto}
+  .diag-l{grid-column:2}
+  .diag-v{grid-column:2 / -1;grid-row:2}
+  .diag-t{grid-column:3;grid-row:1}
+}
+@media (prefers-reduced-motion:reduce){.diag-line{animation:none}.diag-spin{animation-duration:2.4s}}
+
+/* ---------- Light and Dark: the same parts without the terminal ----------
+ * No prompt mark or terminal indent on the question, plain-case rail titles, no dither art, and the one accent: a
+ * small dot on New chat. */
+:root:has(.polaris-calm) .q{padding-left:0;font-weight:var(--w-strong)}
+:root:has(.polaris-calm) .q::before{content:none}
+:root:has(.polaris-calm) :is([class*="st-key-answer"],[class*="st-key-live-"]){padding-left:0}
+:root:has(.polaris-calm) .st-key-cmp :is([class*="st-key-answer"],[class*="st-key-live-"]),
+:root:has(.polaris-calm) [class*="st-key-cmp-hist"] [class*="st-key-answer"]{padding:var(--s-4)}
+:root:has(.polaris-calm) [data-testid="stSidebar"] .side-h{font:var(--w-strong) var(--fs-meta)/22px var(--f-ui);letter-spacing:0;text-transform:none}
+:root:has(.polaris-calm) .rail-art{display:none}
+:root:has(.polaris-calm) .st-key-side-top{margin-bottom:var(--s-2)}
+:root:has(.polaris-calm) .st-key-new-chat button{position:relative}
+:root:has(.polaris-calm) .st-key-new-chat button::after{content:"";position:absolute;top:5px;right:4px;width:6px;height:6px;border-radius:50%;
+  background:var(--c-dot);box-shadow:0 0 0 2px var(--c-bg)}
+:root:has(.polaris-calm) .card-head .mode{background:transparent;border-color:var(--c-line)}
+:root:has(.polaris-calm) .stat{background:transparent}
+:root:has(.polaris-calm) :is(.cmp-compact .cmp-cell,.issue,.card){border-color:var(--c-line-soft)}
 
 /* ---------- focus and small screens ---------- */
 button:focus-visible,[role="radio"]:focus-visible,summary:focus-visible,a:focus-visible{outline:2px solid var(--c-accent)!important;outline-offset:2px}
 @media (max-width:640px){
   [data-testid="stMainBlockContainer"]{padding-left:var(--s-4);padding-right:var(--s-4)}
-  [data-testid="stMarkdownContainer"] .sky{-webkit-mask-image:radial-gradient(ellipse 62% 30% at 50% 46%,transparent 35%,#000 95%);
-    mask-image:radial-gradient(ellipse 62% 30% at 50% 46%,transparent 35%,#000 95%)}
   .hero{--k:1.9}
   .conn span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
   .conn{padding:0 7px}

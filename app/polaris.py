@@ -10,8 +10,8 @@ import io
 import json
 import math
 import os
-import random
 import re
+from dataclasses import dataclass
 from html import escape
 from itertools import groupby
 from pathlib import Path
@@ -146,47 +146,6 @@ SOURCE_KEY_RULES = (
 )
 
 
-SKY_COLS, SKY_ROWS = 220, 56
-SKY_LEVELS = (1.0, 0.55, 0.3, 0.12, 0.0)
-# The Little Dipper, Polaris at the tip of the handle: (col, row) offsets, two columns per unit for the
-# monospace cell's aspect ratio, and the glyph for each star by rough brightness.
-LITTLE_DIPPER = (
-    (0, 0, "*"), (5, 2, "."), (9, 4, "'"), (13, 6, "."), (15, 9, "."), (22, 9, "+"), (20, 6, "*"),
-)
-
-
-def ascii_sky(cols=SKY_COLS, rows=SKY_ROWS, seed=7):
-    """A sparse ASCII starfield, the same every time, with the Little Dipper up and to the right."""
-    rng = random.Random(seed)
-    grid = [[" "] * cols for _ in range(rows)]
-    for r in range(rows):
-        for c in range(cols):
-            if rng.random() < 0.011:
-                grid[r][c] = rng.choices(".'+*", weights=(70, 14, 9, 7))[0]
-    c0, r0 = int(cols * 0.66), int(rows * 0.14)
-    bright = set()
-    for dc, dr, glyph in LITTLE_DIPPER:
-        grid[r0 + dr][c0 + dc] = glyph
-        bright.add((r0 + dr, c0 + dc))
-    lines = []
-    for r, row in enumerate(grid):
-        end = len("".join(row).rstrip())
-        cells = (
-            f"<b>{escape(ch, quote=False)}</b>" if (r, c) in bright else escape(ch, quote=False)
-            for c, ch in enumerate(row[:end])
-        )
-        lines.append("".join(cells))
-    return "<br>".join(lines)
-
-
-# One line of HTML on purpose: Streamlit replaces <pre>, and a blank line would end the HTML block.
-_SKY_HTML = f'<div class="sky" aria-hidden="true"><div class="sky-field">{ascii_sky()}</div></div>'
-
-
-def sky_html():
-    return _SKY_HTML
-
-
 RAIL_ART_COLS, RAIL_ART_ROWS = 44, 9
 _BAYER4 = ((0, 8, 2, 10), (12, 4, 14, 6), (3, 11, 1, 9), (15, 7, 13, 5))
 _DITHER_RAMP = " ˙·:░▒▓"
@@ -227,11 +186,6 @@ def rail_art_html(cols=RAIL_ART_COLS, rows=RAIL_ART_ROWS):
         band = "hi" if r < rows // 3 else ("mid" if r < 2 * rows // 3 else "lo")
         lines.append(f'<span class="{band}">{"".join(cells)}</span>')
     return '<div class="rail-art" aria-hidden="true">' + "".join(lines) + "</div>"
-
-
-def sky_level(turns):
-    """0 on an empty chat, one step fainter per question asked, gone after the fourth."""
-    return max(0, min(int(turns), len(SKY_LEVELS) - 1))
 
 
 def polaris_on():
@@ -1460,11 +1414,24 @@ REASONING_LABEL = "Writing its reasoning (chain of thought)"
 REASONING_NOTE = "The answer follows below it, from its Answer: line or when the reply ends."
 
 
-def flags_html(sky, daylight=False, generating=False):
-    """The hidden marker the stylesheet reads through :root:has(); polaris-generating holds the ambient motion."""
-    flags = ["polaris-flags", f"polaris-sky-{sky}"]
-    if daylight:
-        flags.append("polaris-daylight")
+# Light and Dark share one quiet layout (warm neutrals, hairlines, a sans interface); Polaris is the night terminal.
+THEMES = ("light", "dark", "polaris")
+THEME_NAMES = {"light": "Light", "dark": "Dark", "polaris": "Polaris"}
+CALM_THEMES = frozenset({"light", "dark"})
+DEFAULT_THEME = "polaris"
+
+
+def theme_or_default(theme):
+    return theme if theme in THEMES else DEFAULT_THEME
+
+
+def flags_html(theme=DEFAULT_THEME, generating=False):
+    """The hidden marker the stylesheet reads through :root:has(): the theme, polaris-calm for the two themes that
+    share Light and Dark's layout, and polaris-generating, which holds the ambient motion."""
+    theme = theme_or_default(theme)
+    flags = ["polaris-flags", f"polaris-theme-{theme}"]
+    if theme in CALM_THEMES:
+        flags.append("polaris-calm")
     if generating:
         flags.append("polaris-generating")
     return f'<div class="{" ".join(flags)}"></div>'
@@ -1609,23 +1576,6 @@ def model_status_html(option, names, ollama_up):
     )
 
 
-def models_table_html(options, names, ollama_up):
-    rows = []
-    for option in options:
-        state = is_installed(option.name, names) if ollama_up else None
-        label = {True: "installed", False: "not installed", None: "unknown"}[state]
-        fix = "" if state else f"<code>{escape(option.create)}</code>"
-        rows.append(
-            f'<li class="{label.replace(" ", "-")}"><span class="n">{escape(option.name)}</span>'
-            f'<span class="r">{escape(option.role)}</span><span class="s">{label}</span>{fix}</li>'
-        )
-    return (
-        '<ul class="models">' + "".join(rows) + "</ul>"
-        '<p class="dlg-note">OLLAMA_MODEL sets the default base and OLLAMA_DISTILLED_MODEL names the student. '
-        "A missing model is never swapped for another one.</p>"
-    )
-
-
 def records_in(messages):
     """Run records in the order they were answered, compare pairs left then right."""
     records = []
@@ -1668,19 +1618,77 @@ def avg_latency(records):
     return sum(float(r.get("latency_s") or 0.0) for r in records) / len(records)
 
 
-def sidebar_kv_html(rows):
-    parts = ['<div class="kv-list">']
-    for key, value in rows:
-        parts.append(
-            f'<div class="kv"><span class="k">{escape(str(key))}</span>'
-            f'<span class="v">{escape(str(value))}</span></div>'
-        )
-    parts.append("</div>")
-    return "".join(parts)
-
-
 def warm_label(warmed):
     return "ready" if warmed else "idle"
+
+
+@dataclass(frozen=True)
+class SettingRow:
+    """One settings row: a label, a muted one-line note, and on the right either a read-only value or the named
+    control the dialog draws there ("theme", "export", "syscheck"). tone colours the value: "ok" or "bad"."""
+    label: str
+    note: str = ""
+    value: str = ""
+    control: str = ""
+    fix: str = ""
+    tone: str = ""
+    mono: bool = False
+
+
+@dataclass(frozen=True)
+class SettingCard:
+    title: str
+    rows: tuple
+
+
+@dataclass(frozen=True)
+class SettingSection:
+    key: str
+    title: str
+    icon: str
+    cards: tuple
+
+
+def _row_matches(row, words):
+    text = f"{row.label} {row.note} {row.value} {row.fix}".lower()
+    return all(w in text for w in words)
+
+
+def search_settings(sections, query):
+    """The sections, cut down to the rows whose label, note or value hold every word of query. A section or card
+    with nothing left is dropped; a card keeps its title so a result still says where it lives."""
+    words = query.lower().split()
+    if not words:
+        return tuple(sections)
+    found = []
+    for section in sections:
+        cards = tuple(SettingCard(card.title, rows) for card in section.cards
+                      if (rows := tuple(r for r in card.rows if _row_matches(r, words))))
+        if cards:
+            found.append(SettingSection(section.key, section.title, section.icon, cards))
+    return tuple(found)
+
+
+def setting_text_html(row):
+    fix = f'<code class="set-fix">{escape(row.fix)}</code>' if row.fix else ""
+    note = f'<span class="set-d">{escape(row.note)}</span>' if row.note else ""
+    return f'<div class="set-text"><span class="set-l">{escape(row.label)}</span>{note}{fix}</div>'
+
+
+def setting_row_html(row):
+    """A read-only row, value right-aligned. Rows with a control are drawn by the dialog: text, then the widget."""
+    klass = " ".join(filter(None, ("set-v", row.tone, "mono" if row.mono else "")))
+    value = f'<span class="{klass}">{escape(row.value)}</span>' if row.value else ""
+    return f'<div class="set-row">{setting_text_html(row)}{value}</div>'
+
+
+def setting_card_head_html(title):
+    return f'<p class="set-card-h">{escape(title)}</p>'
+
+
+def settings_title_html(title, note=""):
+    sub = f'<p class="set-sub">{escape(note)}</p>' if note else ""
+    return f'<div class="set-head"><p class="set-title">{escape(title)}</p>{sub}</div>'
 
 
 def style_path():

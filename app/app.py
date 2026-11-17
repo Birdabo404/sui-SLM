@@ -20,8 +20,9 @@ import requests
 import streamlit as st
 import streamlit.components.v1 as components
 
+from app import diagnostics
 from app.answer_format import app_messages, parse_answer, safe_markdown
-from app.chat_memory import ChatStore, build_chat_context
+from app.chat_memory import ChatStore, build_chat_context, chat_data_dir
 from app.engine import (
     BASE_MODEL,
     DEFAULT_INDEX,
@@ -45,7 +46,7 @@ from app.issues import (
     Issue,
     abstain_note,
     answer_status,
-    checks_html,
+    checks_summary,
     hf_cached,
     index_missing,
     issue_for_error,
@@ -55,6 +56,7 @@ from app.issues import (
     model_missing,
     offline_checks,
     ollama_down,
+    short_path,
 )
 from app.models import (
     compare_picks,
@@ -77,7 +79,12 @@ from app.polaris import (
     REASONING_NOTE,
     REASONING_TITLE,
     SCORES_NOTE,
+    THEME_NAMES,
+    THEMES,
     RateTrace,
+    SettingCard,
+    SettingRow,
+    SettingSection,
     avg_latency,
     best_match_html,
     build_run_record,
@@ -108,28 +115,31 @@ from app.polaris import (
     mode_name,
     model_choice_label,
     model_status_html,
-    models_table_html,
     monitor_html,
     network_online,
     plain_label,
     polaris_on,
     rail_art_html,
+    search_settings,
+    setting_card_head_html,
+    setting_row_html,
+    setting_text_html,
+    settings_title_html,
     records_in,
     records_to_csv,
     records_to_json,
     side_logo_html,
-    sky_html,
-    sky_level,
-    sidebar_kv_html,
     loose_commands_html,
     source_line_html,
     stopped_html,
+    theme_or_default,
     thinking_html,
     thinking_label,
     user_turn_html,
     waiting_html,
     warm_label,
 )
+from app.prefs import save_theme, saved_theme
 from app.streaming import ChatCancelled, stream_answer_question
 from shared.frozen import format_threshold, load_frozen
 
@@ -336,6 +346,8 @@ def _init_session():
     st.session_state.setdefault("compare", False)
     st.session_state.setdefault("model_pick", BASE_MODEL)
     st.session_state.setdefault("chat", _chat_state())
+    if "theme" not in st.session_state:
+        st.session_state["theme"] = saved_theme()
     _session_git_commit()
     if "tabs" not in st.session_state:
         st.session_state["tabs"] = _recent_chat_ids()
@@ -401,27 +413,24 @@ def run_polaris():
         _sync_chat(chat, [*msgs, {"role": "user", "content": incoming}])
     compare_on = bool(st.session_state.get("compare"))
     left, right = _compare_pair(options)
-    asked = sum(1 for m in msgs if m.get("role") == "user") + (1 if incoming else 0)
 
     flags = st.empty()
 
     def mark(generating):
-        flags.markdown(
-            flags_html(
-                sky_level(asked),
-                daylight=bool(st.session_state.get("daylight")),
-                generating=generating,
-            ),
-            unsafe_allow_html=True,
-        )
+        flags.markdown(flags_html(st.session_state.theme, generating=generating), unsafe_allow_html=True)
 
     # Before the rail, so the star's first wrap starts out paused while this run generates.
     mark(generating=bool(incoming))
     status = dict(options=options, picked=picked, mode=mode, names=names, up=up, online=online,
                   index_dir=index_dir, frozen=frozen)
     rail = _render_rail(status, compare_on, left, right, busy=bool(incoming), chat=bool(msgs or incoming))
-    st.markdown(sky_html(), unsafe_allow_html=True)
+    # A theme picked in Settings repaints the whole page, so the dialog is drawn again on top of it.
+    if st.session_state.pop("settings_reopen", False) | st.session_state.pop("settings_apply", False):
+        _settings_dialog(status)
     _render_tabs()
+    if st.session_state.get("view") == "system" and not incoming:
+        _render_system_check(status)
+        return
 
     if compare_on:
         summary = compare_summary_html(left.option.name, left.mode, right.option.name, right.mode)
@@ -474,7 +483,7 @@ def run_polaris():
         # Stored before the next st call: a click can end this run at any st call, and reading session state counts
         # as one. A stopped or failed turn still keeps its question.
         _sync_chat(chat, msgs)
-        # A turn that raises still takes the Stop buttons away and lets the sky move again.
+        # A turn that raises still takes the Stop buttons away and lets the star move again.
         stop_slot.empty()
         rail.foot.empty()
         mark(generating=False)
@@ -610,6 +619,7 @@ def _recent_chat_ids():
 
 
 def _new_chat():
+    st.session_state.pop("view", None)
     st.session_state.messages = []
     st.session_state.run_records = []
     st.session_state.chat = _chat_state()
@@ -653,6 +663,7 @@ def _open_chat(chat_id):
     except (sqlite3.Error, OSError, ValueError):
         st.session_state.chat["error"] = history_error_text(store.root)
         return
+    st.session_state.pop("view", None)
     st.session_state.messages = list(stored.messages)
     st.session_state.run_records = records_in(st.session_state.messages)
     st.session_state.chat = _chat_state(stored.chat_id, len(stored.messages))
@@ -813,13 +824,12 @@ class _Rail:
             if busy:
                 # Settings can't open mid-answer (it would rerun and stop it), so Stop takes its place.
                 st.button("Stop", key="stop-rail", icon=":material/stop:", help="Stop generating")
-            elif st.button("Settings", key="settings", icon=":material/tune:"):
-                _settings_dialog(self.status)
-            if busy:
-                st.toggle("Light mode", value=bool(st.session_state.get("daylight")), key="daylight-busy",
-                          disabled=True)
             else:
-                st.toggle("Light mode", key="daylight")
+                if st.button("Settings", key="settings", icon=":material/tune:"):
+                    _settings_dialog(self.status)
+                st.button("System check", key="syscheck-open", icon=":material/monitor_heart:",
+                          help="System check", on_click=_open_system_check)
+            _theme_picker(f"theme-rail{suffix}", disabled=busy)
 
     def refresh(self):
         self.draw(busy=False)
@@ -909,64 +919,244 @@ def _compare_pickers(options, names, left, right, suffix, busy):
                  args=(f"cmp-right-config{suffix}", "cmp_right_pick"), disabled=busy)
 
 
-@st.dialog("Settings", width="large")
-def _settings_dialog(status):
+def _theme_picker(where, disabled=False, from_settings=False):
+    """Light, Dark or Polaris. The key carries the theme, so a choice made in the other picker draws this one fresh
+    instead of leaving it on its old value."""
+    theme = theme_or_default(st.session_state.get("theme"))
+    key = f"{where}-{theme}"
+    st.radio("Theme", THEMES, index=THEMES.index(theme), format_func=THEME_NAMES.get, key=key, horizontal=True,
+             label_visibility="collapsed", disabled=disabled, on_change=_pick_theme, args=(key, from_settings))
+
+
+def _pick_theme(key, from_settings=False):
+    theme = theme_or_default(st.session_state.get(key))
+    st.session_state.theme = theme
+    save_theme(theme)
+    if from_settings:
+        # The dialog reruns alone; the page's theme marker is outside it, so the whole page has to run once.
+        st.session_state.settings_apply = True
+
+
+def _open_system_check():
+    st.session_state.view = "system"
+    st.session_state.syscheck_run = True
+
+
+def _rerun_system_check():
+    st.session_state.syscheck_run = True
+
+
+def _close_system_check():
+    st.session_state.pop("view", None)
+
+
+SETTINGS_SECTIONS = ("general", "appearance", "model", "answers", "system", "about")
+
+
+def _settings_sections(status):
+    """Every settings row, by section, from the live state. The dialog shows one section, or search results."""
     records = st.session_state.get("run_records") or []
     avg = avg_latency(records)
-    model = status["picked"].name
-    info = _model_info(model)
+    picked, mode = status["picked"], status["mode"]
+    info = _model_info(picked.name)
     index_dir = status["index_dir"]
     loaded = index_ok(index_dir)
     chunks = _chunk_count(index_dir) if loaded else 0
     sha = st.session_state.get("git_sha", "")
-    st.markdown('<p class="dlg-h">Offline check</p>', unsafe_allow_html=True)
-    st.markdown(checks_html(_start_checks(status)), unsafe_allow_html=True)
-    session_col, system_col = st.columns(2, gap="large")
-    with session_col:
-        st.markdown('<p class="dlg-h">Session</p>', unsafe_allow_html=True)
-        st.markdown(
-            sidebar_kv_html(
-                [("Answers", str(len(records))), ("Average time", "—" if avg is None else f"{avg:.1f} s")]
-            ),
-            unsafe_allow_html=True,
-        )
-        if records:
-            n = len(records)
-            csv_col, json_col = st.columns(2, gap="small")
-            csv_col.download_button("CSV", data=records_to_csv(records), file_name="polaris-runs.csv",
-                                    mime="text/csv", key=f"export-csv-{n}", icon=":material/download:",
-                                    use_container_width=True)
-            json_col.download_button("JSON", data=records_to_json(records), file_name="polaris-runs.json",
-                                     mime="application/json", key=f"export-json-{n}", icon=":material/download:",
-                                     use_container_width=True)
-        st.markdown('<p class="dlg-h">Models</p>', unsafe_allow_html=True)
-        st.markdown(models_table_html(status["options"], status["names"], status["up"]), unsafe_allow_html=True)
-    with system_col:
-        st.markdown('<p class="dlg-h">System</p>', unsafe_allow_html=True)
-        st.markdown(
-            sidebar_kv_html(
-                [
-                    ("Model", model),
-                    ("Digest", info.model_digest or "—"),
-                    ("Ollama", f"running {info.version}".strip() if status["up"] else "stopped"),
-                    ("Keep alive", keep_alive_setting()),
-                    ("Context", f"{NUM_CTX:,} tokens"),
-                    ("Index", Path(index_dir).name),
-                    ("Chunks", f"{chunks:,}" if loaded else "not loaded"),
-                    ("IDK threshold", f"cos {format_threshold(status['frozen']['threshold'])}"),
-                    ("Top-k", str(status["frozen"]["k"])),
-                    ("Warm-up", warm_label(st.session_state.get("warmed"))),
-                    ("Commit", sha[:7] if sha else "—"),
-                ]
-            ),
-            unsafe_allow_html=True,
-        )
-        st.markdown('<p class="dlg-h">About the numbers</p>', unsafe_allow_html=True)
-        st.markdown(
-            "".join(f'<p class="dlg-note">{escape(note)}</p>' for note in (RATE_NOTE, SCORES_NOTE, RAM_TITLE + "."))
-            + '<p class="dlg-note">Ubuntu Sans, Ubuntu Font Licence 1.0 · JetBrains Mono, SIL OFL 1.1</p>',
-            unsafe_allow_html=True,
-        )
+    try:
+        saved = len(ChatStore().list_chats())
+    except (sqlite3.Error, OSError):
+        saved = None
+    names, up = status["names"], status["up"]
+    if st.session_state.get("compare"):
+        left, right = st.session_state.get("cmp_left_pick", ""), st.session_state.get("cmp_right_pick", "")
+        in_use = [SettingRow("Compare", "Two configs answer each question, left then right",
+                             f"{left.replace('|', ' · ')}  vs  {right.replace('|', ' · ')}", mono=True)]
+    else:
+        in_use = [SettingRow("Model", picked.role, picked.name, mono=True),
+                  SettingRow("Config", mode_hint(mode), mode_name(mode))]
+    models = []
+    for option in status["options"]:
+        state = is_installed(option.name, names) if up else None
+        models.append(SettingRow(option.name, option.role,
+                                 {True: "installed", False: "not installed", None: "unknown"}[state],
+                                 fix="" if state else option.create, tone={True: "ok", False: "bad"}.get(state, "")))
+    offline = _start_checks(status)
+    checks = [SettingRow(c.label, "", c.value, fix=c.fix, tone={True: "ok", False: "bad"}.get(c.ok, "")) for c in offline]
+    return (
+        SettingSection("general", "General", "tune", (
+            SettingCard("Chats", (
+                SettingRow("Saved chats", f"Kept on this machine in {short_path(chat_data_dir())}",
+                           "unavailable" if saved is None else f"{saved:,}"),
+                SettingRow("Open tabs", "Older chats stay one click away in History", f"up to {MAX_TABS}"),
+            )),
+            SettingCard("This session", (
+                SettingRow("Answers", "Answered since this page was opened", str(len(records))),
+                SettingRow("Average time", "From sending the question to the last word",
+                           "—" if avg is None else f"{avg:.1f} s"),
+                SettingRow("Export runs", "Each answer's config, timings and retrieval scores",
+                           control="export" if records else "", value="" if records else "nothing yet"),
+            )),
+        )),
+        SettingSection("appearance", "Appearance", "palette", (
+            SettingCard("", (
+                SettingRow("Theme", "Light and Dark are quiet and warm; Polaris is the night terminal", control="theme"),
+                SettingRow("Motion", "Holds still while an answer generates and follows reduce-motion", "system"),
+                SettingRow("Fonts", "Inter, Ubuntu Sans and JetBrains Mono ship with the app", "offline"),
+            )),
+        )),
+        SettingSection("model", "Model", "memory", (
+            SettingCard("In use", (*in_use,)),
+            SettingCard("Installed models", tuple(models)),
+            SettingCard("Ollama", (
+                SettingRow("Ollama", OLLAMA_HOST, f"running {info.version}".strip() if up else "stopped",
+                           tone="ok" if up else "bad"),
+                SettingRow("Digest", f"The exact build of {picked.name}", (info.model_digest or "—")[:19], mono=True),
+                SettingRow("Keep alive", "How long the model stays loaded after an answer", keep_alive_setting()),
+                SettingRow("Context", "Prompt, excerpts, history and answer share it", f"{NUM_CTX:,} tokens"),
+            )),
+        )),
+        SettingSection("answers", "Retrieval & answers", "manage_search", (
+            SettingCard("Retrieval", (
+                SettingRow("Index", Path(index_dir).name, f"{chunks:,} chunks" if loaded else "not loaded",
+                           tone="" if loaded else "bad"),
+                SettingRow("Top-k", "Excerpts retrieved per question", str(status["frozen"]["k"])),
+                SettingRow("IDK threshold", "Below this best cosine the model isn't asked",
+                           f"cos {format_threshold(status['frozen']['threshold'])}"),
+            )),
+            SettingCard("Generation", (
+                SettingRow("Thinking", "Off: reasoning shows only when the model writes it", "off"),
+                SettingRow("Reasoning", "Shown open above the answer, and collapsible", "open"),
+                SettingRow("Warm-up", "The picked model is loaded when the app starts",
+                           warm_label(st.session_state.get("warmed"))),
+            )),
+            SettingCard("About the numbers", (
+                SettingRow("Rate", RATE_NOTE),
+                SettingRow("Scores", SCORES_NOTE),
+                SettingRow("Memory", RAM_TITLE + "."),
+            )),
+        )),
+        SettingSection("system", "System", "monitor_heart", (
+            SettingCard(f"Offline check · {checks_summary(offline)}", tuple(checks)),
+            SettingCard("Diagnostics", (
+                SettingRow("System check", "OS, CPU, RAM, disk, Ollama, models, index, network and warm-up, "
+                           "measured line by line", control="syscheck"),
+            )),
+        )),
+        SettingSection("about", "About", "info", (
+            SettingCard("", (
+                SettingRow("Polaris", "Offline assistant for the CCIS Linux lab", "local only"),
+                SettingRow("Commit", "The code this app is running", sha[:7] if sha else "—", mono=True),
+                SettingRow("Licences", "Ubuntu Sans: Ubuntu Font Licence 1.0 · Inter, JetBrains Mono: SIL OFL 1.1"),
+            )),
+        )),
+    )
+
+
+def _setting_control(row, section_key):
+    records = st.session_state.get("run_records") or []
+    if row.control == "theme":
+        _theme_picker("theme-set", from_settings=True)
+    elif row.control == "export":
+        n = len(records)
+        st.download_button("CSV", data=records_to_csv(records), file_name="polaris-runs.csv", mime="text/csv",
+                           key=f"export-csv-{section_key}-{n}", icon=":material/download:")
+        st.download_button("JSON", data=records_to_json(records), file_name="polaris-runs.json",
+                           mime="application/json", key=f"export-json-{section_key}-{n}",
+                           icon=":material/download:")
+    elif row.control == "syscheck" and st.button("Run", key=f"syscheck-run-{section_key}", icon=":material/play_arrow:",
+                                                 on_click=_open_system_check):
+        # The click only reran the dialog; the page itself has to run to show the check.
+        st.rerun()
+
+
+def _settings_card(card, section_key, index):
+    if card.title:
+        st.markdown(setting_card_head_html(card.title), unsafe_allow_html=True)
+    with st.container(key=f"set-card-{section_key}-{index}"):
+        for n, row in enumerate(card.rows):
+            if not row.control:
+                st.markdown(setting_row_html(row), unsafe_allow_html=True)
+                continue
+            # A flex row, not st.columns: the dialog body is already a column and the export pair would nest a third level.
+            with st.container(key=f"set-row-{section_key}-{index}-{n}"):
+                st.markdown(setting_text_html(row), unsafe_allow_html=True)
+                with st.container(key=f"set-ctl-{section_key}-{index}-{n}"):
+                    _setting_control(row, section_key)
+
+
+@st.dialog("Settings", width="large")
+def _settings_dialog(status):
+    sections = _settings_sections(status)
+    by_key = {s.key: s for s in sections}
+    nav_col, body_col = st.columns([1, 2.75], gap="medium")
+    with nav_col:
+        query = st.text_input("Search settings", key="set-search", placeholder="Search", icon=":material/search:",
+                              label_visibility="collapsed")
+        with st.container(key="set-nav-box"):
+            picked = st.radio("Section", SETTINGS_SECTIONS, key="set-nav", label_visibility="collapsed",
+                              format_func=lambda key: f":material/{by_key[key].icon}: {by_key[key].title}")
+    with body_col, st.container(key="set-body"):
+        words = (query or "").strip()
+        if words:
+            found = search_settings(sections, words)
+            hits = sum(len(card.rows) for section in found for card in section.cards)
+            note = f"{hits} matching “{words}”" if found else f"Nothing matches “{words}”"
+            st.markdown(settings_title_html("Search", note), unsafe_allow_html=True)
+            for section in found:
+                for i, card in enumerate(section.cards):
+                    titled = SettingCard(f"{section.title} · {card.title}" if card.title else section.title, card.rows)
+                    _settings_card(titled, f"q-{section.key}", i)
+        else:
+            section = by_key[picked]
+            st.markdown(settings_title_html(section.title), unsafe_allow_html=True)
+            for i, card in enumerate(section.cards):
+                _settings_card(card, section.key, i)
+    if st.session_state.pop("settings_apply", False):
+        st.session_state.settings_reopen = True
+        st.rerun()
+
+
+def _clear_dialog():
+    # A dialog sits in Streamlit's event container until a run ends without it, so opening the check from Settings
+    # would leave it up while the probes run. A style-only st.html goes to that container's first slot, taking its place.
+    st.html("<style></style>")
+
+
+def _render_system_check(status):
+    """The system check page in place of the chat: each line shows its loading state, runs, then resolves to pass,
+    warn or fail with what it measured. It runs when opened and on Run again; any other rerun redraws the last result
+    instead of loading the model again."""
+    run = st.session_state.pop("syscheck_run", False) or "syscheck" not in st.session_state
+    with st.container(key="syscheck"):
+        head = st.empty()
+        lines = st.container(key="diag-lines")
+        foot = st.empty()
+        if run:
+            _clear_dialog()
+            head.markdown(diagnostics.header_html("running"), unsafe_allow_html=True)
+            probes, started = [], time.perf_counter()
+            steps = diagnostics.plan(status["options"], status["picked"].name, OLLAMA_HOST, status["index_dir"])
+            for step in steps:
+                slot = lines.empty()
+                slot.markdown(diagnostics.line_html(step[0]), unsafe_allow_html=True)
+                began = time.perf_counter()
+                done = diagnostics.run_step(step)
+                time.sleep(max(0.0, diagnostics.PACE_S - (time.perf_counter() - began)))
+                slot.markdown("".join(diagnostics.line_html(p.label, p) for p in done), unsafe_allow_html=True)
+                probes.extend(done)
+            st.session_state.syscheck = {"probes": probes, "total": time.perf_counter() - started,
+                                         "at": time.strftime("%H:%M:%S")}
+            # The warm-up just loaded the picked model, so the rail can say it's ready.
+            st.session_state.warmed = any(p.label == "Warm-up" and p.status != diagnostics.FAIL for p in probes)
+        last = st.session_state.syscheck
+        head.markdown(diagnostics.header_html(f"checked at {last['at']}"), unsafe_allow_html=True)
+        if not run:
+            lines.markdown("".join(diagnostics.line_html(p.label, p) for p in last["probes"]), unsafe_allow_html=True)
+        foot.markdown(diagnostics.summary_html(last["probes"], last["total"]), unsafe_allow_html=True)
+        with st.container(key="diag-actions"):
+            st.button("Run again", key="syscheck-again", icon=":material/refresh:", on_click=_rerun_system_check)
+            st.button("Back to chat", key="syscheck-back", icon=":material/arrow_back:", on_click=_close_system_check)
 
 
 def _render_composer(where, summary, conn, generating=False):
