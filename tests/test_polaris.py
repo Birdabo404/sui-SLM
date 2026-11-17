@@ -41,10 +41,15 @@ from app.engine import (
     warm_model,
 )
 from app.polaris import (
+    COPY_FEEDBACK_ID,
     MONITOR_SWITCH,
     RAM_TITLE,
+    REASONING_LABEL,
+    REASONING_TITLE,
     RateTrace,
     config_summary_html,
+    copy_feedback_html,
+    copy_feedback_path,
     finished_runs,
     hits_from_chart,
     last_runs,
@@ -990,11 +995,80 @@ class LoaderAndNamingTests(unittest.TestCase):
         self.assertIn('[data-testid="stStatusWidget"]{display:none!important}', css)
 
     def test_compare_preview_skips_reasoning_and_fences(self):
-        text = "Think first.\n\nAnswer: Run this:\n```bash\ntar -xzf a.tar.gz\n```\nThen `ls` it."
+        text = "Reasoning: Think first.\n\nAnswer: Run this:\n```bash\ntar -xzf a.tar.gz\n```\nThen `ls` it."
         self.assertEqual(preview_text(text, "cot"), "Run this: Then ls it.")
         html = compare_compact_html({"mode": "base", "answer": "Use `tar`."}, {"mode": "cot", "answer": text})
         self.assertNotIn("```", html)
         self.assertNotIn("Think first", html)
+
+
+class CopyFeedbackTests(unittest.TestCase):
+    """The code boxes' copy button shows a check and "Copied" for 1.5 s after a click, the same in both themes."""
+
+    def test_the_script_marks_any_copy_button_for_1_5_s_then_restores_it(self):
+        js = copy_feedback_path().read_text(encoding="utf-8")
+        self.assertIn("const COPIED_MS = 1500;", js)
+        self.assertIn("const BUTTON = '[data-testid=\"stCodeCopyButton\"]';", js)
+        # one listener on the document, in the capture phase, so boxes drawn later and in compare get it too
+        self.assertIn('document.addEventListener("click"', js)
+        self.assertIn("}, true);", js)
+        self.assertIn("event.target.closest(BUTTON)", js)
+        self.assertIn('button.setAttribute("data-copied", "");', js)
+        self.assertIn('button.removeAttribute("data-copied");', js)
+        self.assertIn("clearTimeout(button.polarisCopied);", js)
+        self.assertIn('button.title = "Copy to clipboard";', js)
+        self.assertIn('live.setAttribute("aria-live", "polite");', js)
+
+    def test_the_loader_adds_the_script_to_the_page_once(self):
+        html = copy_feedback_html()
+        self.assertTrue(html.startswith("<script>") and html.endswith("</script>"))
+        self.assertEqual(html.count("</script>"), 1)
+        self.assertIn("window.parent.document", html)
+        self.assertIn(f"if(doc.getElementById({json.dumps(COPY_FEEDBACK_ID)}))return;", html)
+        body = html.split("s.textContent=", 1)[1].split(";doc.head.appendChild", 1)[0]
+        self.assertEqual(json.loads(body.replace("<\\/", "</")), copy_feedback_path().read_text(encoding="utf-8"))
+
+    def test_the_copied_state_is_one_rule_set_for_both_themes(self):
+        css = style_path().read_text(encoding="utf-8")
+        copied = [line for line in css.splitlines() if "[data-copied]" in line]
+        self.assertTrue(copied)
+        self.assertFalse([line for line in copied if "daylight" in line])
+        rule = css.split('[data-testid="stCodeCopyButton"][data-copied]{', 1)[1].split("}", 1)[0]
+        for ink in ("color:var(--term-cmd)", "background:var(--term-bg)", "var(--term-line)"):
+            self.assertIn(ink, rule)
+        self.assertIn('[data-testid="stCodeCopyButton"][data-copied] svg{display:none}', css)
+        self.assertIn('[data-testid="stCodeCopyButton"][data-copied]::after{content:"Copied"}', css)
+        self.assertIn("mask:var(--check)", css)
+        self.assertIn("M3 8.5l3 3 7-7", css)
+        self.assertIn('[data-testid="stVerticalBlockBorderWrapper"]:has(> .st-key-copy-feedback){display:none}', css)
+
+
+class ReasoningStyleTests(unittest.TestCase):
+    """The chain of thought opens by default above the answer and reads as secondary, never as a numbered step."""
+
+    def test_the_reasoning_is_labelled_as_chain_of_thought(self):
+        self.assertEqual(REASONING_TITLE, "Reasoning (chain of thought)")
+        self.assertIn("chain of thought", REASONING_LABEL)
+
+    def test_the_reasoning_is_muted_compact_and_indented_in_both_themes(self):
+        css = style_path().read_text(encoding="utf-8")
+        scope = ':is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stExpanderDetails"]'
+        details = css.split(scope + "{", 1)[1].split("}", 1)[0]
+        self.assertIn("border-left:2px solid var(--c-line)", details)
+        self.assertIn("margin-left:var(--s-2)", details)
+        text = css.split(scope + " :is(p,li){", 1)[1].split("}", 1)[0]
+        self.assertIn("color:var(--c-text-2)", text)
+        self.assertIn("font-size:var(--fs-reason)", text)
+        size = float(re.search(r"--fs-reason:([\d.]+)px", css).group(1))
+        self.assertTrue(13 <= size <= 15, size)
+        self.assertLess(size, float(re.search(r"--fs-body:([\d.]+)px", css).group(1)))
+        self.assertIn(scope + " li::marker{color:var(--c-text-3)", css)
+        self.assertIn(scope + " code{background:transparent;color:var(--c-text-2)", css)
+        # Light mode redefines the same tokens rather than restyling the reasoning
+        daylight = css.split(":root:has(.polaris-daylight){", 1)[1].split("}", 1)[0]
+        for token in ("--c-text-2:", "--c-text-3:", "--c-line:"):
+            self.assertIn(token, daylight)
+        self.assertNotIn("stExpanderDetails", "".join(line for line in css.splitlines() if "daylight" in line))
 
 
 class AnswerStatsTests(unittest.TestCase):

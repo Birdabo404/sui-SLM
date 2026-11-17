@@ -26,7 +26,7 @@ from app.engine import (
     mode_choices,
     uses_rag,
 )
-from app.answer_format import parse_answer, split_reasoning
+from app.answer_format import abstain_answer, parse_answer
 from app.models import is_installed
 from app.streaming import CancellableChat, ChatCancelled
 from shared.frozen import format_threshold
@@ -1130,7 +1130,7 @@ _TICK_RE = re.compile(r"`([^`\n]+)`")
 
 def idk_card_html(record, note=""):
     """The abstention as written, then `note`: why it abstained (nothing retrieved, or nothing close enough)."""
-    _, answer = split_reasoning(record.get("answer") or "")
+    answer = abstain_answer(record.get("answer") or "")
     body = _TICK_RE.sub(r"<code>\1</code>", escape(answer)).replace("\n", "<br>")
     why = f'<p class="idk-why">{escape(note)}</p>' if note else ""
     return (
@@ -1454,8 +1454,10 @@ def thinking_html(label, elapsed=0.0, note=None):
     )
 
 
-REASONING_LABEL = "Writing its reasoning, under Show reasoning"
-REASONING_NOTE = "The answer shows from its Answer: line, or when the reply ends."
+# CoT is in the thesis title, so the reasoning section opens by default; it stays collapsible.
+REASONING_TITLE = "Reasoning (chain of thought)"
+REASONING_LABEL = "Writing its reasoning (chain of thought)"
+REASONING_NOTE = "The answer follows below it, from its Answer: line or when the reply ends."
 
 
 def flags_html(sky, daylight=False, generating=False):
@@ -1687,6 +1689,27 @@ def style_path():
 
 def orbit_style_path():
     return Path(__file__).with_name("star-orbit.css")
+
+
+def copy_feedback_path():
+    return Path(__file__).with_name("copy-feedback.js")
+
+
+COPY_FEEDBACK_ID = "polaris-copy-feedback"
+
+
+def copy_feedback_html():
+    """A zero-height iframe's document that adds copy-feedback.js to the page once. Scripts in st.markdown never
+    run; a components.html iframe shares the page's origin, so its script can add one to the page itself, where it
+    keeps working after Streamlit redraws or drops the iframe."""
+    source = json.dumps(copy_feedback_path().read_text(encoding="utf-8")).replace("</", "<\\/")
+    return (
+        "<script>(function(){const doc=window.parent.document;"
+        f"if(doc.getElementById({json.dumps(COPY_FEEDBACK_ID)}))return;"
+        "const s=doc.createElement('script');"
+        f"s.id={json.dumps(COPY_FEEDBACK_ID)};s.textContent={source};doc.head.appendChild(s);"
+        "})();</script>"
+    )
 
 
 def injected_css():
