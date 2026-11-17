@@ -415,7 +415,11 @@ def main():
     prompt_path.write_text((system_prompt or "") + "\n", encoding="utf-8")
     with open(table_path, "w", newline="", encoding="utf-8") as table_file:
         fields = list(rows[0])
-        writer = csv.DictWriter(table_file, fieldnames=fields)
+        writer = csv.DictWriter(
+            table_file,
+            fieldnames=fields,
+            lineterminator="\n",
+        )
         writer.writeheader()
         writer.writerows(rows)
     options = _guarded_chat_body(
