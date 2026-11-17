@@ -7,11 +7,12 @@ counts after the iterator is exhausted.
 """
 import http.client
 import json
+import re
 import socket
 import threading
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable
 from urllib.parse import urlsplit
 
@@ -46,6 +47,27 @@ from shared.prompt import ABSTAIN
 APP_NUM_PREDICT = 512
 APP_REPEAT_PENALTY = 1.1
 APP_THINK = False
+_STUDENT_STEPS = re.compile(
+    r"^\s*(?:\*\*|__)?steps(?:\*\*|__)?\s*:",
+    re.IGNORECASE,
+)
+_STUDENT_LEAD_LIMIT = 128
+
+
+def normalize_app_output(text, model_key):
+    """Keep the KD student's trained ``Steps: ... Answer: ...`` shape visible.
+
+    The student was trained with solution steps before the ``Answer:`` marker.
+    The UI uses that marker as the boundary after hidden reasoning, so without
+    this app-only boundary the card shows only the short final sentence. An
+    initial marker makes the complete student response the answer body while
+    leaving every model byte, newline, and Markdown delimiter intact.
+    """
+
+    value = text or ""
+    if model_key == "distilled" and _STUDENT_STEPS.match(value):
+        return f"Answer:\n{value}"
+    return value
 
 
 def _guarded_chat_body(*args, **kwargs):
@@ -481,12 +503,27 @@ class StreamingAnswer:
                 generation_started = time.perf_counter()
                 chunk_count = 0
                 character_count = 0
+                student_lead = "" if self.model_key == "distilled" else None
                 while True:
                     try:
                         delta = next(transport)
                     except StopIteration as stopped:
                         ollama_result = stopped.value
                         transport = None
+                        if student_lead is not None:
+                            visible_lead = normalize_app_output(
+                                student_lead,
+                                self.model_key,
+                            )
+                            if visible_lead:
+                                yield visible_lead
+                        ollama_result = replace(
+                            ollama_result,
+                            text=normalize_app_output(
+                                ollama_result.text,
+                                self.model_key,
+                            ),
+                        )
                         break
                     self.chat.raise_if_cancelled()
                     chunk_count += 1
@@ -504,7 +541,20 @@ class StreamingAnswer:
                         )
                         self.chat.raise_if_cancelled()
                     self.chat.raise_if_cancelled()
-                    yield delta
+                    visible_delta = delta
+                    if student_lead is not None:
+                        student_lead += delta
+                        if (
+                            "\n" not in student_lead
+                            and len(student_lead) < _STUDENT_LEAD_LIMIT
+                        ):
+                            continue
+                        visible_delta = normalize_app_output(
+                            student_lead,
+                            self.model_key,
+                        )
+                        student_lead = None
+                    yield visible_delta
 
             ram = sampler.stop()
             sampler_stopped = True

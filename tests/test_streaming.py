@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import requests
 
+from app.answer_format import canonical_text, parse_answer
 from app.backend import (
     AnswerStatus,
     IndexMissingError,
@@ -29,6 +30,7 @@ from app.streaming import (
     CancellableChat,
     ChatCancelled,
     OllamaStreamError,
+    normalize_app_output,
     retrieval_chart,
     stream_answer_question,
 )
@@ -169,6 +171,49 @@ class StreamingTests(unittest.TestCase):
         self.assertEqual(body["options"]["repeat_penalty"], APP_REPEAT_PENALTY)
         self.assertEqual(body["keep_alive"], "30m")
         self.assertEqual(list(stream), [])
+
+    def test_distilled_steps_remain_visible_with_markdown(self):
+        raw = (
+            "Steps:\n"
+            "1. Check the archive type.\n"
+            "2. Extract it with `tar`.\n\n"
+            "Answer: Run `tar -xzf archive.tar.gz`.\n\n"
+            "Source: [1]"
+        )
+        _StreamingOllama.fragments = [
+            _line({"message": {"role": "assistant", "content": "Ste"}, "done": False}),
+            _line({"message": {"role": "assistant", "content": raw[3:44]}, "done": False}),
+            _line({"message": {"role": "assistant", "content": raw[44:]}, "done": False}),
+            _line(_terminal()),
+        ]
+        with tempfile.TemporaryDirectory() as td:
+            stream = self._stream(
+                Path(td) / "answers.csv",
+                model_key="distilled",
+            )
+            displayed = "".join(stream)
+
+        self.assertEqual(displayed, f"Answer:\n{raw}")
+        self.assertEqual(stream.result["text"], displayed)
+        self.assertEqual(stream.result["eval_count"], 20)
+        before = canonical_text(parse_answer(raw, "full", n_hits=1))
+        after = canonical_text(parse_answer(displayed, "full", n_hits=1))
+        self.assertNotIn("1. Check the archive type.", before)
+        self.assertIn("1. Check the archive type.", after)
+        self.assertIn("`tar -xzf archive.tar.gz`", after)
+
+    def test_output_compatibility_is_distilled_steps_only(self):
+        steps = "Steps:\n1. Run `id`.\n\nAnswer: Check the output."
+        reasoning = "Reasoning:\n- `id` prints identity.\n\nAnswer: Run `id`."
+        self.assertEqual(
+            normalize_app_output(steps, "distilled"),
+            f"Answer:\n{steps}",
+        )
+        self.assertEqual(normalize_app_output(steps, "base"), steps)
+        self.assertEqual(
+            normalize_app_output(reasoning, "distilled"),
+            reasoning,
+        )
 
     def test_retrieval_chart_keeps_raw_score_semantics_and_context(self):
         _StreamingOllama.fragments = [
