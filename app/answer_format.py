@@ -260,8 +260,8 @@ def _clean_citations(md, n_hits):
 
     out = []
     for i, part in enumerate(re.split(r"(`[^`\n]*`)", md)):
-        out.append(part if i % 2 else _CITATION.sub(keep, part))
-    return re.sub(r"[ \t]+([.,;:])", r"\1", "".join(out)), kept, dropped
+        out.append(part if i % 2 else re.sub(r"[ \t]+([.,;:])", r"\1", _CITATION.sub(keep, part)))
+    return "".join(out), kept, dropped
 
 
 def _item(line):

@@ -195,6 +195,16 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(base.blocks[0].text, "Use ls.")
         self.assertEqual((base.cited, base.dropped), ((), (1,)))
 
+    def test_citation_cleanup_leaves_inline_code_byte_for_byte(self):
+        spans = ("`find . -name '*.log'`", "`ls -l ; pwd`", "`awk -F : '{print $1}' /etc/passwd`", "`echo a , b`")
+        for span in spans:
+            parsed = parse_answer(f"Run {span} here [4].", "rag", n_hits=1)
+            self.assertEqual(parsed.blocks[0].text, f"Run {span} here.", span)
+            self.assertEqual(parsed.dropped, (4,), span)
+        step = parse_answer("1. List them with `find . -name x` [9].", "rag", n_hits=1)
+        self.assertEqual(step.blocks[0].text, "1. List them with `find . -name x`.")
+        self.assertEqual(step.steps[0].commands, ("find . -name x",))
+
     def test_streaming_shows_an_open_fence_and_holds_back_a_partial_line(self):
         partial = "Create it.\n\n1. Create the user:\n   ```bash\n   sudo adduser {{username}}\n   ``"
         answer = parse_answer(partial, "rag", n_hits=2, streaming=True)
