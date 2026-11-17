@@ -7,6 +7,7 @@ import html
 import json
 import os
 import re
+import statistics
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -36,10 +37,14 @@ ABSTENTION = re.compile(
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default=os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"))
+    parser.add_argument("--original-model", default="qwen3.5:2b")
     parser.add_argument("--base-model", default="thesis-base-q4km")
     parser.add_argument("--student-model", default="thesis-student")
+    parser.add_argument("--student-intended-model", default="")
+    parser.add_argument("--original-label", default="qwen3.5:2b")
     parser.add_argument("--base-label", default="thesis-base-q4km")
     parser.add_argument("--student-label", default="thesis-student")
+    parser.add_argument("--student-intended-label", default="student with intended template")
     parser.add_argument("--questions", type=Path, default=ROOT / "eval" / "dev.jsonl")
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--out", type=Path, default=ROOT / "docs" / "diagnostics")
@@ -142,7 +147,7 @@ def write_summary(path, rows, args, options):
     lines = [
         "# Raw app-path Ollama stream diagnosis",
         "",
-        "Dataset: first 20 rows of `eval/dev.jsonl` (DEV, not held-out).",
+        f"Dataset: first {args.limit} rows of `eval/dev.jsonl` (DEV, not held-out).",
         "",
         args.scope_note,
         "",
@@ -156,10 +161,12 @@ def write_summary(path, rows, args, options):
         f"App options: `{json.dumps(options, sort_keys=True)}`",
         "",
         "The complete system prompt is saved beside this report. The app sends the "
-        "same +RAG+CoT thesis prompt and formatting overlay to both model roles. "
+        "same +RAG+CoT thesis prompt and formatting overlay to every model role. "
         "The intended ChatML template renders `.System` and `.Messages`; a stale "
         "plain `{{ .Prompt }}` template does not explicitly render either field, so "
         "the deployed student's Modelfile still determines whether the model sees it.",
+        "The stock Ollama model also displays `{{ .Prompt }}`, but pairs it with the "
+        "Qwen3.5 renderer and parser; it is not equivalent to a stale export that has neither.",
         "",
         "## Does Ollama already send one sentence?",
         "",
@@ -176,6 +183,24 @@ def write_summary(path, rows, args, options):
         "This statement applies only to the exact model IDs recorded below. A proxy "
         "capture does not establish what an unavailable fine-tuned student emits.",
         "",
+        "## Aggregate comparison",
+        "",
+        "| Model | Natural stop | Token range (median) | Markdown | Any citation | Abstain | Non-empty thinking |",
+        "|---|---:|---|---:|---:|---:|---:|",
+    ])
+    for label, model_rows in grouped.items():
+        tokens = [row["token_length"] for row in model_rows]
+        lines.append(
+            f"| {label} | "
+            f"{sum(row['done_reason'] == 'stop' for row in model_rows)}/{len(model_rows)} | "
+            f"{min(tokens)}–{max(tokens)} ({statistics.median(tokens):g}) | "
+            f"{sum(row['markdown'] for row in model_rows)}/{len(model_rows)} | "
+            f"{sum(bool(row['citations']) for row in model_rows)}/{len(model_rows)} | "
+            f"{sum(row['abstention'] for row in model_rows)}/{len(model_rows)} | "
+            f"{sum(bool(row['thinking']) for row in model_rows)}/{len(model_rows)} |"
+        )
+    lines.extend([
+        "",
         "## Capture the actual ThinkPad tags",
         "",
         "From the repository root on the ThinkPad:",
@@ -185,8 +210,8 @@ def write_summary(path, rows, args, options):
         "--prefix student-output-actual",
         "```",
         "",
-        "The defaults are `thesis-base-q4km` and `thesis-student`; the command fails "
-        "instead of substituting another model when either tag is unavailable.",
+        "The defaults are `qwen3.5:2b`, `thesis-base-q4km`, and `thesis-student`; "
+        "the command fails instead of substituting another model when a tag is unavailable.",
         "",
         "## Per-answer stream results",
         "",
@@ -202,22 +227,28 @@ def write_summary(path, rows, args, options):
             f"{'yes' if row['abstention'] else 'no'} | {row['sentence_count']} | "
             f"{len(row['content'])} / {len(row['thinking'])} |"
         )
+    role_labels = {}
+    for row in rows:
+        role_labels.setdefault(row["role"], row["model_label"])
+    roles = tuple(role_labels)
     lines.extend([
         "",
         "## Side-by-side raw content samples",
         "",
-        "| DEV question | Base stream content | Student stream content |",
-        "|---|---|---|",
+        "| DEV question | " + " | ".join(role_labels[role] for role in roles) + " |",
+        "|---|" + "---|" * len(roles),
     ])
     by_question = defaultdict(dict)
     for row in rows:
         by_question[row["id"]][row["role"]] = row
     for item in dev_rows(args.questions, args.limit):
-        base = by_question[item["id"]]["base"]
-        student = by_question[item["id"]]["student"]
+        model_rows = by_question[item["id"]]
+        cells = [safe_cell(model_rows[role]["content"]) for role in roles]
         lines.append(
-            f"| {base['dev_index']:02d} {html.escape(item['question'])} | "
-            f"{safe_cell(base['content'])} | {safe_cell(student['content'])} |"
+            f"| {model_rows[roles[0]]['dev_index']:02d} "
+            f"{html.escape(item['question'])} | "
+            + " | ".join(cells)
+            + " |"
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -230,10 +261,19 @@ def main():
     summary_path = args.out / f"{args.prefix}-summary.md"
     prompt_path = args.out / f"{args.prefix}-system-prompt.txt"
     items = dev_rows(args.questions, args.limit)
-    models = (
+    models = [
+        ("original", args.original_label, args.original_model),
         ("base", args.base_label, args.base_model),
-        ("student", args.student_label, args.student_model),
-    )
+    ]
+    if args.student_intended_model:
+        models.append(
+            (
+                "student_intended",
+                args.student_intended_label,
+                args.student_intended_model,
+            )
+        )
+    models.append(("student", args.student_label, args.student_model))
     rows = []
     system_prompt = None
     with open(raw_path, "w", encoding="utf-8") as raw_file:
@@ -241,7 +281,10 @@ def main():
             json.dumps(
                 {
                     "type": "capture_metadata",
-                    "dataset": "first 20 rows of eval/dev.jsonl (DEV, not held-out)",
+                    "dataset": (
+                        f"first {len(items)} rows of eval/dev.jsonl "
+                        "(DEV, not held-out)"
+                    ),
                     "scope_note": args.scope_note,
                 }
             )

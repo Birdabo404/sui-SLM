@@ -1,0 +1,750 @@
+role,model_label,actual_model,dev_index,id,question,token_length,done_reason,chunk_count,markdown,citations,abstention,sentence_count,one_sentence,content,thinking
+original,stock qwen3.5:2b Q8_0,qwen3.5:2b,1,tuning-tar,how do I extract a tar.gz file,87,stop,85,True,['1'],False,4,False,"Reasoning: The user wants to know how to extract a compressed `.gz` tarball using the `tldr tar` documentation excerpt provided. This is a direct command query based on snippet [1].
+
+Answer: 1. Open your terminal or SSH session as root.<br>2. Run the following command:<br>```bash<br>tar -xzf archive.tar.gz```\nSource: [1]",
+original,stock qwen3.5:2b Q8_0,qwen3.5:2b,2,tuning-ssh,connect to another lab PC over ssh,81,stop,72,True,['1'],False,6,False,"Reasoning: The question asks how to connect using SSH, which is directly described as a command syntax in the provided documentation excerpt. I will use this specific line from [1].
+
+Answer: 1. Open your terminal on the Linux lab PC. 2. Type `ssh <username>@<host>`.
+```bash
+ssh username@localhost
+```
+Source: [1]",
+original,stock qwen3.5:2b Q8_0,qwen3.5:2b,3,tuning-apt,install a package from the terminal,123,stop,116,True,['1'],False,10,False,"Reasoning: The user wants to know how to install a package using only commands provided in the excerpt, specifically for Linux terminals. I need to extract the command syntax and explain it briefly without inventing extra details or options not present in the text.
+
+Answer: 1. Open your terminal window on the lab PC.
+2. Type `sudo apt` followed by `<username>` (your user ID).
+3. Enter a space, then type `install <package_name>`.
+4. Press enter and follow any prompts for confirmation or password input as required.
+
+Source: [1]",
+original,stock qwen3.5:2b Q8_0,qwen3.5:2b,4,tuning-chmod,make a script executable,108,stop,106,True,[],False,5,False,"Reasoning: The user wants to execute a command using `tldr` which provides one-liners for common tasks, specifically changing file permissions. To make the provided script (`script`) executable, I need to use the chmod utility with an 'x' flag (execute bit). Since no specific path is given in the excerpt but implied by ""make a script"", I will assume it refers to `./script` or simply `script`.
+
+1. Open terminal
+2. Run command: ```bash chmod +x ./script```",
+original,stock qwen3.5:2b Q8_0,qwen3.5:2b,5,tuning-chown,change the owner of a folder,116,stop,110,True,['1'],False,5,False,"Reasoning: The question asks how to change the ownership (owner) of a specific folder using Linux commands, and excerpt [1] provides exactly this command. I will use it directly without modification or additional options since none were requested.
+
+Answer: 1. Run `sudo chown <username>:<group> /path/to/folder`
+2. Replace `<username>` with the desired owner's username (e.g., root) and `/path/to/folder` with the target folder path, then execute it in your terminal.
+
+Source: [1]",
+original,stock qwen3.5:2b Q8_0,qwen3.5:2b,6,tuning-df,check how much disk space is left,86,stop,83,True,['1'],False,5,False,"Reasoning: The user wants to know available disk space using `df`. I will use excerpt [1], which provides the command syntax for checking free disk space.
+
+Answer: 1. Run the following command in your terminal: ```bash df -h``` 2. Review the output column labeled ""Available"" or ""%Used"" to see how much space is remaining on each mounted filesystem. Source: [1]",
+original,stock qwen3.5:2b Q8_0,qwen3.5:2b,7,tuning-du,find which folder is using the most space,119,stop,114,True,[],False,2,False,"Reasoning: To identify the largest directory, you need to list directories sorted by size in descending order and then select the top one. The `du` command calculates disk usage for a specified path or set of paths; sorting it with `-h` (human-readable) makes numbers easier to read; adding `--max-depth=1` limits the search to only direct subdirectories, preventing errors if you try to list files inside those directories themselves.
+
+Answer:
+```bash
+du -sh --max-depth=1 / | sort -hr | head -n 1
+```",
+original,stock qwen3.5:2b Q8_0,qwen3.5:2b,8,tuning-kill,stop a frozen program,178,stop,172,True,['1'],False,8,False,"Reasoning: The question asks how to stop a ""frozen"" (unresponsive) process using only available documentation, which does not mention specific methods for handling unresponsiveness. Since the provided excerpt is simply `tldr kill` with no further details on what happens when a command fails or if it can be forced to run again, I cannot provide an answer based solely on this text.
+
+Answer:
+1. Press Ctrl+C in your terminal window to send a signal and attempt to stop the frozen program.
+2. If that does not work immediately, try sending SIGKILL with `kill -9 <PID>` if you know the process ID of the stuck application.
+3. Check for zombie processes using `ps aux` or `top` to see which programs are unresponsive and may need manual intervention by a system administrator.
+
+Source: [1]",
+original,stock qwen3.5:2b Q8_0,qwen3.5:2b,9,tuning-top,see which processes use the most CPU,147,stop,143,True,[],False,9,False,"Reasoning: The user wants to identify running processes that consume the highest amount of CPU time based on the provided documentation excerpt for `top`. This command is designed specifically for monitoring and analyzing system performance, including process resource usage. I will select this tool as it directly addresses the query about which processes use the most CPU without needing other commands like `ps` or `/proc`, assuming standard Linux environment context implied by the lab setting.
+
+Answer:
+1. Open a terminal window on your Linux PC.
+2. Type and press Enter to execute the command `top`.
+3. The screen will display a list of running processes with their CPU usage percentages, allowing you to identify which ones are consuming the most resources immediately.",
+original,stock qwen3.5:2b Q8_0,qwen3.5:2b,10,tuning-scp,copy a file to another computer on the network,233,stop,224,True,['1'],False,9,False,"Reasoning: The question asks how to use `scp` (Secure Copy Protocol) to transfer files between computers. I need to provide commands based on the provided excerpt which shows the syntax for copying from one location to another using an SSH connection via a username and password, or just host if no user is specified in this specific snippet context but implies standard usage. The excerpt [1] explicitly details the `scp` command format: `scp file user@host:` where you can omit the colon after 'user' for anonymous transfer (though typically it's required) or use a username directly followed by '@'. Based on common Linux lab scenarios and the snippet provided, I will construct commands using standard SSH syntax found in such documentation.
+
+Answer:
+1. Open your terminal window.
+2. Navigate to the directory containing the file you want to copy (e.g., `cd /home/username`).
+3. Run the following command to transfer the file from your local machine to a remote server, replacing `<remote_host>` with the actual IP address or hostname:
+
+```bash
+scp <file_name> username@<remote_host>:
+```",
+original,stock qwen3.5:2b Q8_0,qwen3.5:2b,11,tuning-ip,show my IP address,83,stop,79,True,['1'],False,3,False,"Reasoning: The user wants to see their current IPv4 address using standard Linux commands found in the provided documentation excerpt [1]. I will use `hostname -I` as it is a common and reliable method for displaying all assigned network interfaces, including the primary one. Since this command requires root privileges (sudo), I must include that flag.
+
+Answer:
+```bash
+sudo hostname -i
+```",
+original,stock qwen3.5:2b Q8_0,qwen3.5:2b,12,tuning-ping,test if the internet connection works,127,stop,117,True,['1'],False,6,False,"Reasoning: The question asks to verify an internet connection using a command, which corresponds directly to the `tldr ping` documentation excerpt provided in [1]. This snippet contains the specific syntax required for this task.
+
+Answer: 1. Open your terminal window on the Linux lab PC. 2. Type and execute the following command:
+```bash
+ping -c 3 8.8.8.8
+```
+This will test connectivity to Google's public DNS server (8.8.8.8) for three packets, confirming if an internet connection is working.
+
+Source: [1]",
+original,stock qwen3.5:2b Q8_0,qwen3.5:2b,13,tuning-grep,search for text inside files,83,stop,79,True,[],False,2,False,"Reasoning: The user wants to find specific text within multiple files using the `tldr grep` documentation excerpt, which provides a command-line example. I will use this snippet as it directly addresses searching for patterns in file contents without needing additional context about directory traversal or case sensitivity that isn't present here.
+- Run the following command from your terminal:
+
+```bash
+grep -r pattern .
+```",
+original,stock qwen3.5:2b Q8_0,qwen3.5:2b,14,tuning-find,find a file by name,136,stop,127,True,['1'],False,7,False,"Reasoning: The user wants to locate a specific file using the `find` command based on its name. Excerpt [1] provides the standard syntax for this operation, which is `-name <filename>`. No other excerpts are relevant as they discuss different commands like `ls`, `grep`, or `cat`.
+
+Answer:
+```bash
+sudo find . -name ""your_file_name""
+```
+1. Open a terminal and ensure you have the necessary permissions (e.g., using `sudo`).
+2. Use the command syntax provided in Excerpt [1]: `find <directory> -name ""<filename>""`.
+
+Source: [1]",
+original,stock qwen3.5:2b Q8_0,qwen3.5:2b,15,tuning-adduser,create a new user account,140,stop,134,True,['1'],False,8,False,"Reasoning: The provided excerpt contains only one command for creating an account, which is insufficient to provide all necessary steps or explanations required by the question. Since I cannot invent commands or options and do not know if there are additional prerequisites like sudo privileges that might be implied but not stated in this specific text block, it would be appropriate to suggest asking a lab technician for more context on system requirements.
+
+Answer:
+1. Run `sudo adduser <username>` as the root user (or your configured admin).
+2. Follow any prompts regarding email and password settings displayed by the command.
+3. Verify that you have sudo privileges before executing this command.
+
+Source: [1]",
+original,stock qwen3.5:2b Q8_0,qwen3.5:2b,16,tuning-passwd,change my password,164,stop,160,True,['1'],True,7,False,"Reasoning: The provided documentation excerpt is simply the command `passwd`, which does not contain instructions on how to use it or explain its functionality, so I cannot answer the question from this text alone. Since no other excerpts are available in your input list, you must ask a lab technician for further guidance if needed.
+Answer: 1. Open a terminal and enter the following command as root:<br>```bash<br>#sudo passwd <username><br>2. The system will prompt to confirm the new password.<br>3. Enter the desired new password when prompted.<br>4. Confirm it by typing the same password again, then press Enter.<br>5. If successful, you are done; if not, check your permissions or try as root first.`
+Source: [1]",
+original,stock qwen3.5:2b Q8_0,qwen3.5:2b,17,tuning-lsblk,list USB drives and partitions,99,stop,93,True,['1'],False,5,False,"Reasoning: The user wants to see all connected devices, specifically focusing on storage like USB drives and their internal partitions using `lsblk`. Since the provided excerpt only shows a basic command without options for filtering or listing specific device types in detail, I will use it as requested.
+
+Answer: 1. Run the following command at your terminal prompt:
+```bash
+sudo lsblk
+2. Review the output to identify USB drives and their partitions.
+Source: [1]",
+original,stock qwen3.5:2b Q8_0,qwen3.5:2b,18,tuning-systemctl,restart a service,83,stop,76,True,[],False,5,False,"Reasoning: The user wants to know how to restart a specific system service using Linux commands based on the provided documentation excerpt about `systemctl`. I will extract the relevant command syntax from the text.
+
+Answer: 1. Open your terminal and ensure you are logged in as <username>. 2. Run the following command to restart the named service:
+```bash
+sudo systemctl restart name
+```",
+original,stock qwen3.5:2b Q8_0,qwen3.5:2b,19,tuning-unzip,unzip a zip file,124,stop,119,True,['1'],False,7,False,"Reasoning: The provided excerpt contains only one command to extract files from an archive, which directly answers how to perform this task on the Linux system.
+
+Answer: 1. Open your terminal window and type `sudo apt install unzip` if it is not already installed. 2. Navigate to a directory where you want to save the extracted contents using `cd /path/to/destination`. 3. Extract the file by running `unzip <filename>.zip`, replacing `<filename>` with the actual name of your zip archive (e.g., `unzip myarchive.zip`). Source: [1]",
+original,stock qwen3.5:2b Q8_0,qwen3.5:2b,20,tuning-sudo,run a command as administrator,141,stop,135,True,['1'],False,8,False,"Reasoning: The user wants to know how to execute a specific command with elevated privileges using the `sudo` utility, based on the provided documentation. I will extract the steps for running commands via `sudo`.
+
+Answer: 1. Open your terminal application and type `sudo <command>` at the prompt where `<command>` is replaced by the actual program you wish to run (e.g., `/usr/bin/apt update`).
+2. Press Enter on your keyboard, then enter your system administrator password when prompted for authentication.
+3. The command will execute with root privileges if successful; otherwise, an error message indicating insufficient permissions or a wrong password may appear.
+
+Source: [1]",
+base,thesis-base-q4km Q4_K_M reproduction,thesis-base-q4km-repro,1,tuning-tar,how do I extract a tar.gz file,127,stop,127,True,['1'],False,7,False,"Reasoning: The user wants to know how to extract a `tar.gz` file using the provided documentation. Excerpt [1] explicitly shows the command syntax for extracting such an archive.
+
+Answer:
+```bash
+tar -xzf archive.tar.gz
+```
+
+1. Open your terminal or command prompt.
+2. Navigate to the directory containing the archive if needed, or specify the path directly (e.g., `cd /path/to/archive`).
+3. Run the following command in the terminal:
+   ```bash
+   tar -xzf archive.tar.gz
+   ```
+
+Source: [1]",
+base,thesis-base-q4km Q4_K_M reproduction,thesis-base-q4km-repro,2,tuning-ssh,connect to another lab PC over ssh,124,stop,120,True,['1'],False,6,False,"Reasoning: The question asks how to connect to another lab PC using SSH, which is a direct command from the provided documentation. I will use excerpt [1].
+
+Answer:
+```bash
+ssh <username>@<host>
+```
+
+Steps:
+1. Replace `<username>` with your actual Linux user name (e.g., `student`).
+2. Replace `<host>` with the IP address or hostname of the other lab PC (e.g., `192.168.1.50` or `lab-pc-03`).
+
+Source: [1]",
+base,thesis-base-q4km Q4_K_M reproduction,thesis-base-q4km-repro,3,tuning-apt,install a package from the terminal,115,stop,114,True,['1'],False,6,False,"Reasoning: The user wants to know how to install a package using the terminal based on the provided documentation excerpt. The excerpt explicitly shows the command syntax for installing an application via `apt`.
+
+Answer:
+1. Open your terminal and type the following command, replacing <package_name> with the name of the software you want to install (e.g., ""sudo apt install vim""):
+```bash
+sudo apt install package
+```
+2. Press Enter to execute the command. If prompted for a password, enter it securely.
+
+Source: [1]",
+base,thesis-base-q4km Q4_K_M reproduction,thesis-base-q4km-repro,4,tuning-chmod,make a script executable,151,stop,149,True,['1'],False,7,False,"Reasoning: To make a script executable, you need to use the `chmod` command with the plus sign for execute permissions on all files. The excerpt provides the basic syntax and an example of adding execute permission to a file named ""script"".
+
+Answer:
+1. Open your terminal as root or user with sudo privileges.
+2. Run the following command in the directory where your script is located:
+```bash
+sudo chmod +x <path/to/script>
+```
+3. Verify that the permissions have been set by running `ls -l <path/to/script>` and checking for an 'x' at the end of the permission string (e.g., `-rwxr-xr-x`).
+
+Source: [1]",
+base,thesis-base-q4km Q4_K_M reproduction,thesis-base-q4km-repro,5,tuning-chown,change the owner of a folder,85,stop,83,True,['1'],False,3,False,"Reasoning:
+- The question asks how to change the ownership of a folder using Linux commands.
+- Excerpt [1] provides the `chown` command syntax for changing file or directory owners.
+- No other excerpts contain relevant information about this specific task.
+
+Answer:
+```bash
+sudo chown <username>:<group> /path/to/folder
+```
+
+Source: [1]",
+base,thesis-base-q4km Q4_K_M reproduction,thesis-base-q4km-repro,6,tuning-df,check how much disk space is left,53,stop,53,True,['1'],False,2,False,"Reasoning: The user wants to know available disk space using `df`. I will use the `-h` option from excerpt [1] to display human-readable values.
+
+Answer:
+```bash
+df -h
+```
+
+Source: [1]",
+base,thesis-base-q4km Q4_K_M reproduction,thesis-base-q4km-repro,7,tuning-du,find which folder is using the most space,82,stop,82,True,['1'],False,2,False,"Reasoning: To identify the top directory by size, you need to use `du` with a `-h` flag for human-readable output and specify the maximum depth as 1. This command will list all directories within one level of the current location along with their sizes in bytes or kilobytes.
+```bash
+du -h --max-depth=1
+```
+Source: [1]",
+base,thesis-base-q4km Q4_K_M reproduction,thesis-base-q4km-repro,8,tuning-kill,stop a frozen program,206,stop,203,True,['1'],False,9,False,"Reasoning: The question asks how to ""stop a frozen program,"" which implies terminating an unresponsive process rather than just killing it forcefully. While the `kill` command is mentioned in the excerpt, standard Linux practice for stopping a hung or stuck process often involves using `wait` with a timeout or checking if the process has exited before forcibly killing it. However, since the provided excerpt only contains the basic `kill PID` syntax and does not offer alternative methods like `wait`, I must rely on the information available in this specific document. The most direct command to stop a program is using the kill command with its standard options.
+
+Answer:
+1. Open a terminal window.
+2. Enter the following command, replacing `<PID>` with the process ID of the frozen program (found by `ps -p <PID> --o pid= -f`):
+```bash
+kill <PID>
+```
+3. Press Enter to send the signal to terminate the process.
+
+Source: [1]",
+base,thesis-base-q4km Q4_K_M reproduction,thesis-base-q4km-repro,9,tuning-top,see which processes use the most CPU,163,stop,163,True,['1'],False,10,False,"Reasoning: To find out which processes are consuming the most CPU, you need to run a command that displays real-time statistics for all running processes. The `top` utility is specifically designed for this purpose and provides a live view of resource usage including CPU time.
+
+1. Open a terminal window on your Linux PC.
+2. Type the following command at the prompt:
+```bash
+sudo top
+```
+3. Press Enter to start viewing the process list. The screen will show a table with columns for PID, %CPU, %MEM, and other details. You can then scroll down or use arrow keys to identify the processes using the most CPU time.
+
+Answer: Run `sudo top` in the terminal to see which processes are consuming the most CPU. Source: [1]",
+base,thesis-base-q4km Q4_K_M reproduction,thesis-base-q4km-repro,10,tuning-scp,copy a file to another computer on the network,98,stop,96,True,['1'],False,6,False,"Reasoning: The question asks how to copy a file to another computer using SCP, and the provided excerpt contains the command syntax for this operation.
+
+Answer:
+1. Open a terminal window on your Linux lab PC.
+2. Run the following command in the terminal:
+```bash
+scp <username> <path/to/file> user@host:/destination/path/
+```
+3. Enter your password when prompted to authorize the transfer.
+
+Source: [1]",
+base,thesis-base-q4km Q4_K_M reproduction,thesis-base-q4km-repro,11,tuning-ip,show my IP address,127,stop,127,True,['0'],True,7,False,"Reasoning: The question asks for the user's current IP address, which is displayed by running the `ip` command followed by `addr`. Since no specific excerpt was provided that contains this information or commands, I cannot answer based on the given text.
+
+Answer:
+1. Open a terminal in your Linux lab PC.
+2. Type the following command and press Enter:
+```bash
+sudo ip addr
+```
+3. Look for the line starting with `inet` followed by an IP address (e.g., `inet 192.168.x.x`).
+
+Source: [0]",
+base,thesis-base-q4km Q4_K_M reproduction,thesis-base-q4km-repro,12,tuning-ping,test if the internet connection works,74,stop,74,True,['1'],False,2,False,"Reasoning: The user wants to verify an internet connection using a command from the provided documentation. Excerpt [1] contains the `ping` utility and its usage example, which is exactly what is needed to test connectivity.
+
+Answer:
+```bash
+ping -c 3 8.8.8.8
+```
+
+Source: [1]",
+base,thesis-base-q4km Q4_K_M reproduction,thesis-base-q4km-repro,13,tuning-grep,search for text inside files,131,stop,131,True,['1'],False,8,False,"Reasoning: The question asks how to search for text inside files using the provided documentation excerpt. Excerpt [1] explicitly shows the command `grep -r pattern .` which is used to recursively search for a pattern in all files within the current directory and its subdirectories. This matches the requirement perfectly.
+Answer: 1. Open your terminal or command prompt.
+2. Type the following command into the terminal: ```bash grep -r pattern .```
+3. Press Enter to execute the command, which will search for lines containing `pattern` in all files within the current directory and subdirectories.
+
+Source: [1]",
+base,thesis-base-q4km Q4_K_M reproduction,thesis-base-q4km-repro,14,tuning-find,find a file by name,93,stop,92,True,['1'],False,3,False,"Reasoning: The user wants to locate a specific file using the `find` command based on its name. Excerpt [1] provides the syntax for this operation, which is to use the `-name` option followed by the pattern of the filename. No other information or commands are needed as the core requirement is simply executing the correct find syntax.
+
+Answer:
+```bash
+find . -name <filename>
+```
+Source: [1]",
+base,thesis-base-q4km Q4_K_M reproduction,thesis-base-q4km-repro,15,tuning-adduser,create a new user account,51,stop,50,True,['1'],False,2,False,"Reasoning: The provided excerpt contains the command to create a new user using `adduser`. No other information is needed for this specific task.
+Answer:
+```bash
+sudo adduser <username>
+```
+Source: [1]",
+base,thesis-base-q4km Q4_K_M reproduction,thesis-base-q4km-repro,16,tuning-passwd,change my password,124,stop,122,True,['1'],False,7,False,"Reasoning: The user wants to change their password using the `passwd` command, which is documented in excerpt [1]. I will provide the steps to run this command and explain its purpose.
+
+```bash
+sudo passwd <username>
+```
+
+1.  Run the following command as root or with sudo privileges:
+    ```bash
+    sudo passwd <username>
+    ```
+2.  Enter your current password when prompted.
+3.  The system will ask for a new password and then confirm it again before saving the changes to `/etc/shadow`.
+
+Source: [1]",
+base,thesis-base-q4km Q4_K_M reproduction,thesis-base-q4km-repro,17,tuning-lsblk,list USB drives and partitions,110,stop,110,True,['1'],False,8,False,"Reasoning: The user wants to see all mounted USB drives and their partitions using `lsblk`. This command lists block devices, including removable media like USBs. I will use the provided excerpt which shows how to run `lsblk` on a Linux system.
+
+Answer:
+1. Open your terminal or SSH into the lab PC.
+2. Run the following command in the terminal:
+```bash
+sudo lsblk
+```
+3. Review the output to identify USB drives and their partitions.
+
+Source: [1]",
+base,thesis-base-q4km Q4_K_M reproduction,thesis-base-q4km-repro,18,tuning-systemctl,restart a service,161,stop,157,True,['1'],False,8,False,"Reasoning: The user wants to know how to restart a system service using the provided documentation excerpt. Excerpt [1] explicitly shows the command syntax for restarting a named service with `sudo systemctl restart <name>`. No other excerpts are relevant or needed for this specific task.
+
+Answer:
+```bash
+sudo systemctl restart <service_name>
+```
+
+Steps:
+1. Open your terminal and ensure you have root privileges (e.g., run `sudo -i` or use a sudo command).
+2. Replace `<service_name>` with the actual name of the service you want to restart (e.g., `nginx`, `sshd`).
+3. Execute the following command:
+
+```bash
+sudo systemctl restart <service_name>
+```
+
+Source: [1]",
+base,thesis-base-q4km Q4_K_M reproduction,thesis-base-q4km-repro,19,tuning-unzip,unzip a zip file,106,stop,105,True,['1'],False,8,False,"Reasoning: The user wants to know how to unzip a zip file using the provided documentation excerpt. The first line of the excerpt explicitly shows the command syntax for this operation.
+
+Answer:
+1. Open your terminal or command prompt.
+2. Type `unzip <path/to/file>.zip` and press Enter.
+3. Wait for the extraction process to complete, then verify by listing the contents with `ls -l`.
+
+```bash
+unzip file.zip
+```
+
+Source: [1]",
+base,thesis-base-q4km Q4_K_M reproduction,thesis-base-q4km-repro,20,tuning-sudo,run a command as administrator,96,stop,96,True,['1'],False,8,False,"Reasoning: The question asks how to run a command as an administrator using the `sudo` tool, which is covered in the provided documentation excerpt. I will use the first line of the excerpt to provide the answer.
+
+Answer:
+1. Type `sudo` at your terminal prompt.
+2. Enter your password when prompted.
+3. The system will then execute the command with elevated privileges.
+
+```bash
+sudo
+```
+
+Source: [1]",
+student_intended,student intended-template proxy (not fine-tuned),thesis-student-template-proxy,1,tuning-tar,how do I extract a tar.gz file,159,stop,159,True,['1'],False,7,False,"Reasoning: The user wants to know how to extract a `tar.gz` file using the provided documentation. Excerpt [1] contains the command-line syntax for extracting such an archive.
+- 1. Open your terminal and navigate to the directory containing the archive, or use the full path if needed (e.g., `cd /home/user/Downloads`).
+- 2. Run the extraction command using the `-xzf` flags: ```bash tar -xzf archive.tar.gz```
+- 3. The file will be extracted into the current working directory by default.
+
+Answer: To extract a `tar.gz` file, run the following command in your terminal:
+```bash
+tar -xzf archive.tar.gz
+```
+Source: [1]",
+student_intended,student intended-template proxy (not fine-tuned),thesis-student-template-proxy,2,tuning-ssh,connect to another lab PC over ssh,110,stop,106,True,['1'],False,8,False,"Reasoning: The question asks how to connect to another lab PC using SSH, which is a direct command from the provided documentation. I will use excerpt [1].
+
+Answer:
+```bash
+ssh <username>@<host>
+```
+
+Steps:
+1. Replace `<username>` with your actual Linux username on this PC.
+2. Replace `<host>` with the IP address or hostname of the other lab PC you want to connect to.
+3. Run the command in a terminal window.
+
+Source: [1]",
+student_intended,student intended-template proxy (not fine-tuned),thesis-student-template-proxy,3,tuning-apt,install a package from the terminal,133,stop,130,True,['1'],False,9,False,"Reasoning: The user wants to know how to install a package using the terminal based on the provided documentation excerpt. Excerpt [1] explicitly shows the command syntax for installing packages via `apt`. I will extract the specific command shown in the text and format it as requested.
+
+Answer:
+```bash
+sudo apt install <package_name>
+```
+1. Open a terminal session.
+2. Type `sudo apt install <package_name>` (replacing `<package_name>` with the name of the package you wish to install).
+3. Press Enter to execute the command and allow sudo authentication if prompted.
+
+Source: [1]",
+student_intended,student intended-template proxy (not fine-tuned),thesis-student-template-proxy,4,tuning-chmod,make a script executable,107,stop,104,True,['1'],False,4,False,"Reasoning: The question asks how to make a script executable using the provided documentation excerpt about `tldr chmod`.
+- Step 1: Open your terminal.
+- Step 2: Use the command `chmod +x <script_name>` where `<script_name>` is the name of your script file.
+- Step 3: Verify that the script has execute permissions by running `ls -l <script_name>`.
+
+```bash
+sudo chmod +x my_script.sh
+```
+
+Source: [1]",
+student_intended,student intended-template proxy (not fine-tuned),thesis-student-template-proxy,5,tuning-chown,change the owner of a folder,113,stop,111,True,['1'],False,7,False,"Reasoning: The question asks how to change the owner of a folder, which corresponds directly to the command provided in the documentation excerpt.
+
+Answer:
+```bash
+sudo chown <username>:<group> /path/to/folder
+```
+1. Run the `chown` command with the sudo user to gain permission.
+2. Specify the target username and group on the left side of the colon.
+3. Enter the path to the folder you want to modify on the right side of the colon.
+
+Source: [1]",
+student_intended,student intended-template proxy (not fine-tuned),thesis-student-template-proxy,6,tuning-df,check how much disk space is left,152,stop,152,True,['1'],False,9,False,"Reasoning: To find out how much disk space is remaining, you need to run a command that displays available space in human-readable format. The `df` command lists filesystems and their usage, while the `-h` flag provides this information in human units (like KB, MB, GB).
+```bash
+df -h
+```
+
+Answer: Run the following command in your terminal to see disk usage statistics:
+1. Open a terminal window on your Linux lab PC.
+2. Type `df -h` and press Enter.
+3. Read the output table to find the column labeled ""Available"" or ""Use%"". The value under this column represents the remaining space for that specific filesystem.
+
+Source: [1]",
+student_intended,student intended-template proxy (not fine-tuned),thesis-student-template-proxy,7,tuning-du,find which folder is using the most space,331,stop,330,True,['1'],False,13,False,"Reasoning: To determine which folder uses the most space, you need to list all directories and their sizes. The `du` command calculates disk usage for a path or set of paths. By default, it lists the top 10 largest items; however, using the `-h` flag formats the output in human-readable units (KB, MB, GB), which is essential for interpreting the numbers correctly. You can then sort this list to find the maximum value.
+
+Answer:
+```bash
+du -sh --max-depth=1 / | sort -hr | head -n 1
+```
+1. Open your terminal and navigate to the directory containing your files or run `cd <path/to/your/files>` if you are already in a specific folder.
+2. Run the command: `du -sh --max-depth=1 /`. This will list all directories with their total size in human-readable format (e.g., 500M, 2GB).
+3. Sort the output by size in descending order using `sort -hr` (where `-h` handles human readability and `-r` reverses it) or simply use `head -n 1` to get the first line which is already sorted if you didn't reverse it explicitly with a flag, but typically `du -sh --max-depth=1 / | sort -hr | head -n 1` ensures the largest folder appears at the top.
+4. The output of this command will show the path and size of the single largest directory in your current working directory or specified path.
+
+Source: [1]",
+student_intended,student intended-template proxy (not fine-tuned),thesis-student-template-proxy,8,tuning-kill,stop a frozen program,58,stop,57,True,['1'],False,2,False,"Reasoning: The question asks how to stop a frozen program, which corresponds to killing a process with its current PID using the `kill` command. This is covered in excerpt [1].
+
+Answer:
+```bash
+kill <PID>
+```
+Source: [1]",
+student_intended,student intended-template proxy (not fine-tuned),thesis-student-template-proxy,9,tuning-top,see which processes use the most CPU,140,stop,140,True,['1'],False,8,False,"Reasoning: To find out which processes are consuming the most CPU, you should use the `top` command to display real-time process information. This is a standard Linux utility for monitoring system performance.
+
+Answer:
+1. Open your terminal and type `top`.
+2. Press 'q' at the bottom of the screen to quit if you want to see the full history or just the current snapshot, then press 'q' again to exit completely.
+3. Use the arrow keys to navigate through the columns (e.g., from CPU usage to PID) and sort by CPU usage using the `S` key at the bottom of the screen.
+
+Source: [1]",
+student_intended,student intended-template proxy (not fine-tuned),thesis-student-template-proxy,10,tuning-scp,copy a file to another computer on the network,70,stop,69,True,['1'],False,2,False,"Reasoning: The question asks how to copy a file from one computer to another using SCP, which is described in the provided documentation. I will use the command format shown in excerpt [1].
+
+Answer:
+```bash
+scp <username>:/path/to/file user@host:/destination/path/
+```
+Source: [1]",
+student_intended,student intended-template proxy (not fine-tuned),thesis-student-template-proxy,11,tuning-ip,show my IP address,135,stop,135,True,['1'],False,9,False,"Reasoning: The user wants to display their current IPv4 address using standard Linux commands. The `ip` command is a modern replacement for the older `ifconfig`, and its primary function is to list network interfaces along with their assigned addresses. By running this command, you will see a table of active interfaces (like eth0) and the IP addresses associated with them.
+
+Answer:
+1. Open your terminal window on the Linux lab PC.
+2. Type the following command at the prompt: `ip addr`.
+3. Press Enter to execute the command and view the output.
+
+```bash
+ip addr
+```
+
+Source: [1]",
+student_intended,student intended-template proxy (not fine-tuned),thesis-student-template-proxy,12,tuning-ping,test if the internet connection works,108,stop,108,True,['1'],False,6,False,"Reasoning: The user wants to verify an internet connection by running a ping command against Google's DNS server (8.8.8.8). I need to provide the specific command syntax for this test using the provided excerpt.
+
+Answer:
+1. Open your terminal or command prompt.
+2. Type `ping -c 3 8.8.8.8` and press Enter.
+```bash
+ping -c 3 8.8.8.8
+```
+Source: [1]",
+student_intended,student intended-template proxy (not fine-tuned),thesis-student-template-proxy,13,tuning-grep,search for text inside files,121,stop,121,True,['1'],False,7,False,"Reasoning: The question asks how to search for text inside files using the provided documentation. Excerpt [1] explicitly shows the command `grep -r pattern .` which performs a recursive search for the pattern in all files under the current directory, matching the ""search for text inside files"" requirement.
+Answer: 1. Open your terminal.
+2. Type the following command and press Enter:
+```bash
+grep -r pattern .
+```
+3. The command will recursively search through all files in the current directory for lines containing `pattern`.
+
+Source: [1]",
+student_intended,student intended-template proxy (not fine-tuned),thesis-student-template-proxy,14,tuning-find,find a file by name,124,stop,121,True,['1'],False,8,False,"Reasoning: The question asks how to use the `find` command to locate a specific file by its name, which is directly described in the provided documentation.
+Answer:
+```bash
+find . -name <filename>
+```
+1. Open your terminal or command prompt.
+2. Type the following command into the terminal: `find . -name <filename>` (replace `<filename>` with the actual name of the file you want to find).
+3. Press Enter to execute the command and locate the specified file in the current directory and its subdirectories.
+
+Source: [1]",
+student_intended,student intended-template proxy (not fine-tuned),thesis-student-template-proxy,15,tuning-adduser,create a new user account,164,stop,162,True,['1'],False,11,False,"Reasoning: The question asks for instructions on creating a new user account, which corresponds to the command provided in the first excerpt.
+- 1. Open your terminal by pressing `Ctrl+Alt+T` or using the Run Command menu.
+- 2. Type the following command and press Enter: ```sudo adduser <username>```
+- 3. Confirm that the user was created successfully if prompted, otherwise proceed to set a password.
+
+Answer:
+1. Open your terminal by pressing `Ctrl+Alt+T` or using the Run Command menu.
+2. Type the following command and press Enter: ```sudo adduser <username>```
+3. Confirm that the user was created successfully if prompted, otherwise proceed to set a password.
+
+Source: [1]",
+student_intended,student intended-template proxy (not fine-tuned),thesis-student-template-proxy,16,tuning-passwd,change my password,111,stop,110,True,['1'],False,8,False,"Reasoning: The user wants to change their password using the `passwd` command, which is documented in excerpt [1]. I will provide the standard steps for running this command.
+
+Answer:
+1. Open a terminal and enter your username as the root of the operation.
+2. Run the `passwd` command with the `-d` flag to force a password change without prompting for confirmation.
+3. Enter the new password when prompted.
+
+```bash
+sudo passwd -d <username>
+```
+
+Source: [1]",
+student_intended,student intended-template proxy (not fine-tuned),thesis-student-template-proxy,17,tuning-lsblk,list USB drives and partitions,105,stop,105,True,['1'],False,4,False,"Reasoning: The question asks to list USB drives and partitions using `lsblk`. I need to find a command that specifically targets block devices, including removable media like USBs.
+- Step 1: Run the `lsblk` command in the terminal to display a tree-like view of all block devices.
+- Step 2: Look for lines starting with `/dev/` or containing ""USB"" to identify connected drives and partitions.
+
+```bash
+lsblk
+```
+
+Source: [1]",
+student_intended,student intended-template proxy (not fine-tuned),thesis-student-template-proxy,18,tuning-systemctl,restart a service,158,stop,155,True,['1'],False,8,False,"Reasoning: The user wants to know how to restart a service using the provided documentation excerpt. Excerpt [1] explicitly shows the command syntax for restarting services with `sudo systemctl restart name`.
+
+Answer:
+```bash
+sudo systemctl restart <service_name>
+```
+
+Steps:
+1. Open your terminal and ensure you have root privileges by running `sudo -l` or checking if you are already in a sudo context.
+2. Replace `<service_name>` with the actual name of the service you wish to restart (e.g., `nginx`, `sshd`).
+3. Execute the command using the syntax shown in the documentation: `sudo systemctl restart <service_name>`.
+
+```bash
+sudo systemctl restart nginx
+```
+
+Source: [1]",
+student_intended,student intended-template proxy (not fine-tuned),thesis-student-template-proxy,19,tuning-unzip,unzip a zip file,119,stop,117,True,['1'],False,8,False,"Reasoning: The user wants to know how to unzip a zip file using the provided documentation excerpt. The first line of the excerpt explicitly shows the command syntax for this operation.
+
+Answer:
+1. Open your terminal or command prompt.
+2. Type `unzip <filename>.zip` and press Enter, replacing `<filename>` with the name of your zip file (e.g., `unzip myfile.zip`).
+3. The file will be extracted to the current directory by default.
+
+```bash
+unzip myfile.zip
+```
+
+Source: [1]",
+student_intended,student intended-template proxy (not fine-tuned),thesis-student-template-proxy,20,tuning-sudo,run a command as administrator,121,stop,119,True,['1'],False,7,False,"Reasoning: The user wants to know how to run a command with elevated privileges using the `sudo` utility based on the provided documentation excerpt.
+
+Answer:
+1. Open a terminal and type `sudo -l` to list available commands.
+2. Enter your username when prompted for authentication.
+3. Type the full path of the command you wish to execute as root, followed by the password.
+
+```bash
+sudo -l
+```
+
+```bash
+<username>
+```
+
+```bash
+/path/to/command
+<password>
+```
+
+Source: [1]",
+student,student stale-template proxy (not fine-tuned),thesis-student-legacy-proxy,1,tuning-tar,how do I extract a tar.gz file,116,stop,116,True,['1'],False,9,False,"Reasoning: The user wants to know how to extract a `tar.gz` file using the provided documentation. Excerpt [1] explicitly shows the command syntax for extracting such files.
+
+Answer:
+```bash
+tar -xzf archive.tar.gz
+```
+
+1. Open your terminal or command prompt.
+2. Navigate to the directory containing the archive (e.g., `cd /path/to/archive`).
+3. Run the following command: `tar -xzf archive.tar.gz`. This will extract the contents of the compressed file into the current directory.",
+student,student stale-template proxy (not fine-tuned),thesis-student-legacy-proxy,2,tuning-ssh,connect to another lab PC over ssh,108,stop,108,True,['1'],False,6,False,"Reasoning: The question asks how to connect to another lab PC using SSH, which is a direct command from the provided documentation.
+- 1. Open your terminal on the target machine (the other lab PC).
+- 2. Enter the following command as root or with sudo privileges: `ssh <username>@<host>`
+- 3. Press enter to establish the connection and begin the interactive shell session.
+
+Answer: ```bash
+ssh <username>@<host>
+```
+Source: [1]",
+student,student stale-template proxy (not fine-tuned),thesis-student-legacy-proxy,3,tuning-apt,install a package from the terminal,85,stop,85,True,['1'],False,5,False,"Reasoning: The user wants to know how to install a package using the `apt` command, which is described in excerpt [1].
+
+Answer:
+```bash
+sudo apt install <package>
+```
+1. Open your terminal and enter your username as `<username>` (e.g., `root`).
+2. Type `sudo apt install <package_name>` to install the package from the repository.",
+student,student stale-template proxy (not fine-tuned),thesis-student-legacy-proxy,4,tuning-chmod,make a script executable,145,stop,145,True,['1'],False,9,False,"Reasoning: The user wants to make a script executable using Linux commands. Excerpt [1] provides the `chmod` command syntax for adding execute permissions, which is exactly what is needed. I will use this excerpt to provide the solution steps.
+
+Answer:
+```bash
+sudo chmod +x <script_name>
+```
+1. Open your terminal and navigate to the directory containing the script (e.g., `cd /home/user/my_script`).
+2. Replace `<script_name>` with the actual name of your executable file.
+3. Run the command `sudo chmod +x <script_name>` to add execute permissions for all users, including the root user.
+
+Source: [1]",
+student,student stale-template proxy (not fine-tuned),thesis-student-legacy-proxy,5,tuning-chown,change the owner of a folder,97,stop,97,True,[],False,5,False,"Reasoning: To change the ownership of a folder, you need to use the `chown` command followed by the username and group name. The excerpt provides the basic syntax for this operation.
+
+Answer:
+1. Open your terminal as root or with sudo privileges.
+2. Run the following command, replacing `<username>` and `<group>` with the desired values:
+```bash
+sudo chown <username>:<group> /path/to/folder
+```",
+student,student stale-template proxy (not fine-tuned),thesis-student-legacy-proxy,6,tuning-df,check how much disk space is left,102,stop,102,True,['1'],False,4,False,"Reasoning: The user wants to know the remaining disk space using `df`. Excerpt [1] provides the command `df -h`, which displays usage in human-readable format. This matches the requirement to ""check how much disk space is left.""
+
+Answer:
+```bash
+df -h
+```
+This command will display the filesystem usage, including available space, in a human-readable format (e.g., 10G / 20G).
+
+Source: [1]",
+student,student stale-template proxy (not fine-tuned),thesis-student-legacy-proxy,7,tuning-du,find which folder is using the most space,91,stop,91,True,[],False,2,False,"Reasoning: To determine which folder uses the most space, you need to list directories with their sizes and sort them by size in descending order. The `du` command calculates disk usage for a directory tree, while `sort -k1rn` orders the output from largest to smallest based on the first column (size).
+
+```bash
+du -h --max-depth=1 | sort -k1rn
+```
+
+Answer: 1",
+student,student stale-template proxy (not fine-tuned),thesis-student-legacy-proxy,8,tuning-kill,stop a frozen program,58,stop,58,True,['1'],False,2,False,"Reasoning: The question asks how to stop a frozen program, which corresponds to killing it using its process ID (PID). Excerpt [1] provides the command syntax for this action.
+
+Answer:
+```bash
+kill <pid>
+```
+Source: [1]",
+student,student stale-template proxy (not fine-tuned),thesis-student-legacy-proxy,9,tuning-top,see which processes use the most CPU,102,stop,102,True,['1'],False,7,False,"Reasoning: To find out which processes are consuming the most CPU, you need to run a command that displays real-time statistics for all running processes. The `top` utility is specifically designed for this purpose and provides a live view of system performance metrics including CPU usage.
+
+Answer:
+1. Open your terminal.
+2. Type the following command at the prompt:
+```bash
+sudo top
+```
+3. Press Enter to start viewing the process list.
+
+Source: [1]",
+student,student stale-template proxy (not fine-tuned),thesis-student-legacy-proxy,10,tuning-scp,copy a file to another computer on the network,169,stop,169,True,['1'],False,8,False,"Reasoning: The question asks how to copy a file to another computer using SCP, and the provided excerpt contains the command syntax for this operation. I will use the first excerpt which provides the basic SCP command structure.
+
+Answer:
+1. Open your terminal or SSH client on the local machine where you have the source file.
+2. Enter the following command in the terminal, replacing <username> with your target user and <path/to/file> with the path to the file you want to copy:
+```bash
+scp <file> <username>@<host>:
+```
+3. Press enter to execute the command. The system will prompt for the password of the target user if it is not configured for SSH key-based authentication, or proceed automatically if a key pair has been set up.
+
+Source: [1]",
+student,student stale-template proxy (not fine-tuned),thesis-student-legacy-proxy,11,tuning-ip,show my IP address,134,stop,134,True,['1'],False,6,False,"Reasoning: The user wants to see their current IP address using the `ip` command. I will use the provided excerpt which shows how to run the `ip addr` command and then interpret its output.
+
+1. Run the `ip addr` command in your terminal.
+2. Look for a line starting with ""inet"" followed by an IPv4 or IPv6 address, such as `inet 192.168.1.10/24 brd 192.168.1.255 scope id eth0`.
+
+```bash
+ip addr
+```
+
+Source: [1]",
+student,student stale-template proxy (not fine-tuned),thesis-student-legacy-proxy,12,tuning-ping,test if the internet connection works,68,stop,68,True,['1'],False,2,False,"Reasoning: The user wants to verify an internet connection using a command from the provided documentation. Excerpt [1] contains the specific `ping` command syntax and example usage for this purpose.
+
+Answer:
+```bash
+ping -c 3 8.8.8.8
+```
+
+Source: [1]",
+student,student stale-template proxy (not fine-tuned),thesis-student-legacy-proxy,13,tuning-grep,search for text inside files,78,stop,78,True,['1'],False,2,False,"Reasoning: The question asks how to search for text inside files using the provided documentation excerpt. Excerpt [1] explicitly shows a command that uses `grep` with the `-r` flag and a filename argument, which is the standard way to recursively search for text in files.
+
+Answer:
+```bash
+grep -r pattern .
+```
+Source: [1]",
+student,student stale-template proxy (not fine-tuned),thesis-student-legacy-proxy,14,tuning-find,find a file by name,119,stop,119,True,['1'],False,6,False,"Reasoning: The question asks how to use the `find` command to locate a specific file by its name, which is directly supported in the provided documentation.
+
+Answer:
+```bash
+find . -name <filename>
+```
+1. Open your terminal and navigate to the directory containing the files you want to search (e.g., `cd /path/to/directory`).
+2. Type the command `find . -name <filename>` into the terminal, replacing `<filename>` with the actual name of the file you are looking for.
+
+Source: [1]",
+student,student stale-template proxy (not fine-tuned),thesis-student-legacy-proxy,15,tuning-adduser,create a new user account,98,stop,98,True,['1'],False,7,False,"Reasoning: The question asks how to create a new user account, which corresponds directly to the command provided in the first excerpt.
+- 1. Open a terminal and enter `sudo`.
+- 2. Type `adduser` followed by your desired username (e.g., `adduser <username>`).
+- 3. Press Enter to execute the command.
+
+Answer: ```bash
+sudo adduser <username>
+```
+Source: [1]",
+student,student stale-template proxy (not fine-tuned),thesis-student-legacy-proxy,16,tuning-passwd,change my password,91,stop,91,True,['1'],False,2,False,"Reasoning: The user wants to change their password using the `passwd` command, which is described in excerpt [1]. I will provide a short intro line followed by numbered steps for changing the password.
+
+```bash
+sudo passwd <username>
+```
+
+```bash
+echo $USER | xxd -p | tr -d '\n'
+```
+
+```bash
+sudo passwd <username>
+```
+
+Source: [1]",
+student,student stale-template proxy (not fine-tuned),thesis-student-legacy-proxy,17,tuning-lsblk,list USB drives and partitions,59,stop,59,True,['1'],False,2,False,"Reasoning: The user wants to see a list of all mounted USB drives and their partitions using `lsblk`. This command is available in the standard Linux package.
+
+Answer:
+```bash
+sudo apt-get install lsblk
+sudo lsblk
+```
+Source: [1]",
+student,student stale-template proxy (not fine-tuned),thesis-student-legacy-proxy,18,tuning-systemctl,restart a service,138,stop,138,True,['1'],False,9,False,"Reasoning: The user wants to know how to restart a specific service using the `systemctl` command based on the provided documentation excerpt. The first line of the excerpt shows the syntax for restarting a service named ""name"". To answer this, I need to explain that the command requires the full name of the service and provide the example from the text.
+
+1. Open a terminal window in your lab environment.
+2. Type `systemctl restart <service_name>` into the terminal.
+3. Press Enter to execute the command with the specific service name you want to restart.
+
+```bash
+sudo systemctl restart <service_name>
+```
+
+Source: [1]",
+student,student stale-template proxy (not fine-tuned),thesis-student-legacy-proxy,19,tuning-unzip,unzip a zip file,102,stop,102,True,['1'],False,7,False,"Reasoning: The user wants to know how to unzip a zip file using the provided documentation excerpt. Excerpt [1] contains the command `unzip file.zip`, which directly answers the question.
+
+Answer:
+```bash
+unzip file.zip
+```
+
+1. Open your terminal or command prompt.
+2. Type the following command and press Enter:
+   ```bash
+   unzip file.zip
+   ```
+3. The file will be extracted to the current directory by default.",
+student,student stale-template proxy (not fine-tuned),thesis-student-legacy-proxy,20,tuning-sudo,run a command as administrator,105,stop,105,True,['1'],False,8,False,"Reasoning: The user wants to know how to run a command with elevated privileges using the `sudo` utility based on the provided documentation. I will use the first excerpt which defines the `sudo` command and its primary function.
+
+```bash
+sudo command
+```
+
+1. Open your terminal or command prompt.
+2. Type `sudo` followed by the desired command, for example: `sudo apt update`.
+3. Press Enter to execute the command with root privileges.
+
+Source: [1]",
