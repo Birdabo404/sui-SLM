@@ -497,7 +497,10 @@ class PolarisRunLoopTests(unittest.TestCase):
         self._ask_real("make a file readable only by me", _ndjson([draft[i:i + 7] for i in range(0, len(draft), 7)]),
                        mode="full")
         (body,) = _NdjsonOllama.bodies
-        self.assertEqual(sorted(body["options"]), ["num_ctx", "temperature"])
+        self.assertEqual(
+            sorted(body["options"]),
+            ["num_ctx", "num_predict", "repeat_penalty", "temperature"],
+        )
         self.assertEqual((body["think"], body["options"]["temperature"]), (False, 0.2))
         (reasoning,) = self.at.expander
         self.assertEqual(reasoning.label, polaris.REASONING_TITLE)
