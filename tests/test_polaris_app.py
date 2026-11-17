@@ -1743,6 +1743,24 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertIn("Replace &lt;username> and run `id <username>`.", [m.value for m in self.at.markdown])
         self.assertEqual(self.at.expander, [])
 
+    def test_the_copy_feedback_loader_is_on_every_page_once_including_compare(self):
+        def loaders():
+            return [e for e in self.at.get("iframe") if e.proto.srcdoc == polaris.copy_feedback_html()]
+
+        self.at.run()
+        self.assertEqual(len(loaders()), 1)
+
+        def texts(question, mode):
+            return SUDO_FULL if mode == "cot" else BASE_STEPS
+
+        self._compare_base_vs_cot()
+        with self._answers(texts):
+            self._ask(SUDO_QUESTION, "landing")
+        self.assertEqual(len(loaders()), 1)
+        self.assertEqual(len(self.at.code), 5)
+        self.at.toggle(key="daylight").set_value(True).run()
+        self.assertEqual(len(loaders()), 1)
+
     def test_compare_folds_reasoning_on_the_side_that_wrote_it(self):
         texts = lambda question, mode: SUDO_FULL if mode == "cot" else "Use `sudo adduser <username>`."  # noqa: E731
         self._compare_base_vs_cot()

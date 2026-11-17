@@ -18,6 +18,7 @@ os.environ.setdefault("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "false")
 
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 
 from app.answer_format import app_messages, parse_answer, safe_markdown
 from app.chat_memory import ChatStore, build_chat_context
@@ -86,6 +87,7 @@ from app.polaris import (
     compare_summary_html,
     composer_note_html,
     config_summary_html,
+    copy_feedback_html,
     connection_html,
     empty_hero_html,
     empty_slot_html,
@@ -317,6 +319,8 @@ def _show_sources(sources):
 
 def _inject_css():
     st.markdown(f"<style>{injected_css()}</style>", unsafe_allow_html=True)
+    with st.container(key="copy-feedback"):
+        components.html(copy_feedback_html(), height=0)
 
 
 # Tabs open at once; older ones stay one click away in History.

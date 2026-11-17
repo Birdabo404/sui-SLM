@@ -41,10 +41,13 @@ from app.engine import (
     warm_model,
 )
 from app.polaris import (
+    COPY_FEEDBACK_ID,
     MONITOR_SWITCH,
     RAM_TITLE,
     RateTrace,
     config_summary_html,
+    copy_feedback_html,
+    copy_feedback_path,
     finished_runs,
     hits_from_chart,
     last_runs,
@@ -995,6 +998,47 @@ class LoaderAndNamingTests(unittest.TestCase):
         html = compare_compact_html({"mode": "base", "answer": "Use `tar`."}, {"mode": "cot", "answer": text})
         self.assertNotIn("```", html)
         self.assertNotIn("Think first", html)
+
+
+class CopyFeedbackTests(unittest.TestCase):
+    """The code boxes' copy button shows a check and "Copied" for 1.5 s after a click, the same in both themes."""
+
+    def test_the_script_marks_any_copy_button_for_1_5_s_then_restores_it(self):
+        js = copy_feedback_path().read_text(encoding="utf-8")
+        self.assertIn("const COPIED_MS = 1500;", js)
+        self.assertIn("const BUTTON = '[data-testid=\"stCodeCopyButton\"]';", js)
+        # one listener on the document, in the capture phase, so boxes drawn later and in compare get it too
+        self.assertIn('document.addEventListener("click"', js)
+        self.assertIn("}, true);", js)
+        self.assertIn("event.target.closest(BUTTON)", js)
+        self.assertIn('button.setAttribute("data-copied", "");', js)
+        self.assertIn('button.removeAttribute("data-copied");', js)
+        self.assertIn("clearTimeout(button.polarisCopied);", js)
+        self.assertIn('button.title = "Copy to clipboard";', js)
+        self.assertIn('live.setAttribute("aria-live", "polite");', js)
+
+    def test_the_loader_adds_the_script_to_the_page_once(self):
+        html = copy_feedback_html()
+        self.assertTrue(html.startswith("<script>") and html.endswith("</script>"))
+        self.assertEqual(html.count("</script>"), 1)
+        self.assertIn("window.parent.document", html)
+        self.assertIn(f"if(doc.getElementById({json.dumps(COPY_FEEDBACK_ID)}))return;", html)
+        body = html.split("s.textContent=", 1)[1].split(";doc.head.appendChild", 1)[0]
+        self.assertEqual(json.loads(body.replace("<\\/", "</")), copy_feedback_path().read_text(encoding="utf-8"))
+
+    def test_the_copied_state_is_one_rule_set_for_both_themes(self):
+        css = style_path().read_text(encoding="utf-8")
+        copied = [line for line in css.splitlines() if "[data-copied]" in line]
+        self.assertTrue(copied)
+        self.assertFalse([line for line in copied if "daylight" in line])
+        rule = css.split('[data-testid="stCodeCopyButton"][data-copied]{', 1)[1].split("}", 1)[0]
+        for ink in ("color:var(--term-cmd)", "background:var(--term-bg)", "var(--term-line)"):
+            self.assertIn(ink, rule)
+        self.assertIn('[data-testid="stCodeCopyButton"][data-copied] svg{display:none}', css)
+        self.assertIn('[data-testid="stCodeCopyButton"][data-copied]::after{content:"Copied"}', css)
+        self.assertIn("mask:var(--check)", css)
+        self.assertIn("M3 8.5l3 3 7-7", css)
+        self.assertIn('[data-testid="stVerticalBlockBorderWrapper"]:has(> .st-key-copy-feedback){display:none}', css)
 
 
 class AnswerStatsTests(unittest.TestCase):
