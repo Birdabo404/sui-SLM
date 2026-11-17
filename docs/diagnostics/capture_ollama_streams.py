@@ -8,6 +8,7 @@ import json
 import os
 import re
 import statistics
+import subprocess
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -77,6 +78,19 @@ def excerpt_for(item):
     }
 
 
+def installed_models(host):
+    response = requests.get(host.rstrip("/") + "/api/tags", timeout=10)
+    response.raise_for_status()
+    names = set()
+    for item in response.json().get("models") or ():
+        name = str(item.get("name") or item.get("model") or "")
+        if name:
+            names.add(name)
+            if name.endswith(":latest"):
+                names.add(name.removesuffix(":latest"))
+    return names
+
+
 def sentence_count(text):
     prose = re.sub(r"```.*?```|~~~.*?~~~", "", text or "", flags=re.DOTALL)
     prose = re.sub(r"(?m)^\s*Source:.*$", "", prose)
@@ -138,6 +152,27 @@ def safe_cell(text, limit=260):
     if len(compact) > limit:
         compact = compact[: limit - 1].rstrip() + "…"
     return html.escape(compact).replace("|", "&#124;")
+
+
+def write_modelfiles(path, models, host):
+    sections = []
+    env = {**os.environ, "OLLAMA_HOST": host}
+    for role, label, model in models:
+        result = subprocess.run(
+            ["ollama", "show", model, "--modelfile"],
+            check=True,
+            capture_output=True,
+            env=env,
+            text=True,
+        )
+        sections.extend(
+            [
+                f"===== {role}: {label} ({model}) =====",
+                result.stdout.rstrip(),
+                "",
+            ]
+        )
+    path.write_text("\n".join(sections), encoding="utf-8")
 
 
 def write_summary(path, rows, args, options):
@@ -206,12 +241,14 @@ def write_summary(path, rows, args, options):
         "From the repository root on the ThinkPad:",
         "",
         "```bash",
-        "python docs/diagnostics/capture_ollama_streams.py "
-        "--prefix student-output-actual",
+        "python scripts/capture_raw_chat.py",
         "```",
         "",
-        "The defaults are `qwen3.5:2b`, `thesis-base-q4km`, and `thesis-student`; "
-        "the command fails instead of substituting another model when a tag is unavailable.",
+        "The required defaults are `thesis-base-q4km` and `thesis-student`; "
+        "the command fails instead of substituting another model when either is unavailable. "
+        "It also captures `qwen3.5:2b` when that optional tag is installed. Raw chunks, "
+        "the per-answer table, summary, system prompt, and every `ollama show --modelfile` "
+        "result are saved under `docs/diagnostics/student-output-actual-*`.",
         "",
         "## Per-answer stream results",
         "",
@@ -260,12 +297,23 @@ def main():
     table_path = args.out / f"{args.prefix}-sanity.csv"
     summary_path = args.out / f"{args.prefix}-summary.md"
     prompt_path = args.out / f"{args.prefix}-system-prompt.txt"
+    modelfiles_path = args.out / f"{args.prefix}-modelfiles.txt"
     items = dev_rows(args.questions, args.limit)
-    models = [
-        ("original", args.original_label, args.original_model),
-        ("base", args.base_label, args.base_model),
-    ]
+    available = installed_models(args.host)
+    required = (args.base_model, args.student_model)
+    missing = [model for model in required if model not in available]
+    if missing:
+        raise SystemExit(
+            "Required Ollama model tags are missing: "
+            + ", ".join(missing)
+        )
+    models = [("base", args.base_label, args.base_model)]
     if args.student_intended_model:
+        if args.student_intended_model not in available:
+            raise SystemExit(
+                "Requested intended-template model is missing: "
+                + args.student_intended_model
+            )
         models.append(
             (
                 "student_intended",
@@ -274,6 +322,17 @@ def main():
             )
         )
     models.append(("student", args.student_label, args.student_model))
+    if args.original_model in available:
+        models.insert(
+            0,
+            ("original", args.original_label, args.original_model),
+        )
+    else:
+        print(
+            f"skip optional model {args.original_model}: not installed",
+            flush=True,
+        )
+    write_modelfiles(modelfiles_path, models, args.host)
     rows = []
     system_prompt = None
     with open(raw_path, "w", encoding="utf-8") as raw_file:
@@ -367,6 +426,14 @@ def main():
         stream=True,
     )["options"]
     write_summary(summary_path, rows, args, options)
+    for path in (
+        raw_path,
+        table_path,
+        summary_path,
+        prompt_path,
+        modelfiles_path,
+    ):
+        print(path, flush=True)
 
 
 if __name__ == "__main__":
