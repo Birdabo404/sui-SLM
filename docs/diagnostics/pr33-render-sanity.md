@@ -1,39 +1,48 @@
-# PR #33 render-path sanity check
+# Revised thesis-student diagnosis
 
-The first 20 `eval/dev.jsonl` questions were used (DEV, not held-out). Each deterministic KD-shaped student reply was streamed through `app.answer_format.parse_answer(..., streaming=True)` in seven-character prefixes and then parsed as a finished +RAG+CoT answer. The base side uses the matched Q4_K_M raw app-path captures.
+## Real-student measurement
 
-## Result
+The following result is **Engineering Lead's measurement**, not a capture
+produced by this branch:
 
-- `student_finished_nonempty`: 20/20
-- `student_reasoning_empty`: 20/20
-- `student_stream_never_reasoning`: 20/20
-- `student_stream_final_matches`: 20/20
-- `chatml_markers_removed`: 20/20
-- `base_finished_nonempty`: 20/20
+- Model: the owner's real `thesis-student` GGUF and deployed Modelfile,
+  hash-matched before the run.
+- Path: Ollama `/api/chat` through the app request path with the approved
+  `think:false`, `num_ctx:4096`, `num_predict:512`, and
+  `repeat_penalty:1.1` settings.
+- Questions: 22.
+- Result: 22/22 ended naturally with `done_reason:stop`; answer lengths were
+  101–175 evaluated tokens; 0/22 reached the 512-token cap.
+- Modelfile: explicit ChatML with an empty think block and only
+  `<|im_end|>` as a stop token.
 
-Every student result kept two numbered steps, kept citation `[1]`, removed the ChatML end marker, and displayed the short `Answer:` after the steps. Every captured base response remained non-empty.
+This rules out the app prediction cap, repetition guard, and deployed template
+as the cause of the short visible answer. No Modelfile rebuild is indicated.
+`scripts/capture_raw_chat.py` remains available as optional confirmation on
+the owner's machine.
 
-## Side-by-side finished content
+## Revised interpretation
 
-| DEV question | Student-shaped output through #33 | Matched Q4_K_M base through #33 |
-|---|---|---|
-| 01 how do I extract a tar.gz file | Steps: 1. Check the supplied documentation excerpt. 2. Use the documented command `tar -xzf archive.tar.gz`. Answer: Use `tar -xzf archive.tar.gz`. | ```bash tar -xzf archive.tar.gz ``` 1. Open your terminal or command prompt. 2. Navigate to the directory containing the archive if needed, or specify the path directly (e.g., `cd /path/to/archive`). 3. Run the following command in the terminal: ```bash tar -xzf archive.tar.gz ``` |
-| 02 connect to another lab PC over ssh | Steps: 1. Check the supplied documentation excerpt. 2. Use the documented command `ssh user@host`. Answer: Use `ssh user@host`. | ```bash ssh &lt;username&gt;@&lt;host&gt; ``` Steps: 1. Replace `&lt;username&gt;` with your actual Linux user name (e.g., `student`). 2. Replace `&lt;host&gt;` with the IP address or hostname of the other lab PC (e.g., `192.168.1.50` or `lab-pc-03`). |
-| 03 install a package from the terminal | Steps: 1. Check the supplied documentation excerpt. 2. Use the documented command `sudo apt install package`. Answer: Use `sudo apt install package`. | 1. Open your terminal and type the following command, replacing &lt;package_name&gt; with the name of the software you want to install (e.g., &quot;sudo apt install vim&quot;): ```bash sudo apt install package ``` 2. Press Enter to execute the command. If prompted for a password, enter it securely. |
-| 04 make a script executable | Steps: 1. Check the supplied documentation excerpt. 2. Use the documented command `chmod +x script`. Answer: Use `chmod +x script`. | 1. Open your terminal as root or user with sudo privileges. 2. Run the following command in the directory where your script is located: ```bash sudo chmod +x &lt;path/to/script&gt; ``` 3. Verify that the permissions have been set by running `ls -l &lt;path/to/script&gt;` and checking for an &#x27;x&#x27; at the end of the permission string (e.g., `-rwxr-xr-x`). |
-| 05 change the owner of a folder | Steps: 1. Check the supplied documentation excerpt. 2. Use the documented command `chown user:group folder`. Answer: Use `chown user:group folder`. | ```bash sudo chown &lt;username&gt;:&lt;group&gt; /path/to/folder ``` |
-| 06 check how much disk space is left | Steps: 1. Check the supplied documentation excerpt. 2. Use the documented command `df -h`. Answer: Use `df -h`. | ```bash df -h ``` |
-| 07 find which folder is using the most space | Steps: 1. Check the supplied documentation excerpt. 2. Use the documented command `du -h --max-depth=1`. Answer: Use `du -h --max-depth=1`. | ```bash du -h --max-depth=1 ``` |
-| 08 stop a frozen program | Steps: 1. Check the supplied documentation excerpt. 2. Use the documented command `kill PID`. Answer: Use `kill PID`. | 1. Open a terminal window. 2. Enter the following command, replacing `&lt;PID&gt;` with the process ID of the frozen program (found by `ps -p &lt;PID&gt; --o pid= -f`): ```bash kill &lt;PID&gt; ``` 3. Press Enter to send the signal to terminate the process. |
-| 09 see which processes use the most CPU | Steps: 1. Check the supplied documentation excerpt. 2. Use the documented command `top`. Answer: Use `top`. | Reasoning: To find out which processes are consuming the most CPU, you need to run a command that displays real-time statistics for all running processes. The `top` utility is specifically designed for this purpose and provides a live view of resource usage including CPU time. 1. Open a terminal window on your Linux PC. 2. Type the following command at the prompt: ```bash sudo top ``` 3. Press Enter to start viewing the process list. The screen will show a table with columns for PID, %CPU, %MEM, and other details. You can then scroll down or use arrow keys to identify the processes using the most CPU time. Answer: Run `sudo top` in the terminal to see which processes are consuming the most CPU. Source: [1] |
-| 10 copy a file to another computer on the network | Steps: 1. Check the supplied documentation excerpt. 2. Use the documented command `scp file user@host:`. Answer: Use `scp file user@host:`. | 1. Open a terminal window on your Linux lab PC. 2. Run the following command in the terminal: ```bash scp &lt;username&gt; &lt;path/to/file&gt; user@host:/destination/path/ ``` 3. Enter your password when prompted to authorize the transfer. |
-| 11 show my IP address | Steps: 1. Check the supplied documentation excerpt. 2. Use the documented command `ip addr`. Answer: Use `ip addr`. | 1. Open a terminal in your Linux lab PC. 2. Type the following command and press Enter: ```bash sudo ip addr ``` 3. Look for the line starting with `inet` followed by an IP address (e.g., `inet 192.168.x.x`). |
-| 12 test if the internet connection works | Steps: 1. Check the supplied documentation excerpt. 2. Use the documented command `ping -c 3 8.8.8.8`. Answer: Use `ping -c 3 8.8.8.8`. | ```bash ping -c 3 8.8.8.8 ``` |
-| 13 search for text inside files | Steps: 1. Check the supplied documentation excerpt. 2. Use the documented command `grep -r pattern.`. Answer: Use `grep -r pattern.`. | 1. Open your terminal or command prompt. 2. Type the following command into the terminal: ```bash grep -r pattern.``` 3. Press Enter to execute the command, which will search for lines containing `pattern` in all files within the current directory and subdirectories. |
-| 14 find a file by name | Steps: 1. Check the supplied documentation excerpt. 2. Use the documented command `find. -name filename`. Answer: Use `find. -name filename`. | ```bash find . -name &lt;filename&gt; ``` |
-| 15 create a new user account | Steps: 1. Check the supplied documentation excerpt. 2. Use the documented command `sudo adduser name`. Answer: Use `sudo adduser name`. | ```bash sudo adduser &lt;username&gt; ``` |
-| 16 change my password | Steps: 1. Check the supplied documentation excerpt. 2. Use the documented command `passwd`. Answer: Use `passwd`. | ```bash sudo passwd &lt;username&gt; ``` 1. Run the following command as root or with sudo privileges: ```bash sudo passwd &lt;username&gt; ``` 2. Enter your current password when prompted. 3. The system will ask for a new password and then confirm it again before saving the changes to `/etc/shadow`. |
-| 17 list USB drives and partitions | Steps: 1. Check the supplied documentation excerpt. 2. Use the documented command `lsblk`. Answer: Use `lsblk`. | 1. Open your terminal or SSH into the lab PC. 2. Run the following command in the terminal: ```bash sudo lsblk ``` 3. Review the output to identify USB drives and their partitions. |
-| 18 restart a service | Steps: 1. Check the supplied documentation excerpt. 2. Use the documented command `sudo systemctl restart name`. Answer: Use `sudo systemctl restart name`. | ```bash sudo systemctl restart &lt;service_name&gt; ``` Steps: 1. Open your terminal and ensure you have root privileges (e.g., run `sudo -i` or use a sudo command). 2. Replace `&lt;service_name&gt;` with the actual name of the service you want to restart (e.g., `nginx`, `sshd`). 3. Execute the following command: ```bash sudo systemctl restart &lt;service_name&gt; ``` |
-| 19 unzip a zip file | Steps: 1. Check the supplied documentation excerpt. 2. Use the documented command `unzip file.zip`. Answer: Use `unzip file.zip`. | 1. Open your terminal or command prompt. 2. Type `unzip &lt;path/to/file&gt;.zip` and press Enter. 3. Wait for the extraction process to complete, then verify by listing the contents with `ls -l`. ```bash unzip file.zip ``` |
-| 20 run a command as administrator | Steps: 1. Check the supplied documentation excerpt. 2. Use the documented command `sudo command`. Answer: Use `sudo command`. | 1. Type `sudo` at your terminal prompt. 2. Enter your password when prompted. 3. The system will then execute the command with elevated privileges. ```bash sudo ``` |
+`kd/teacher_generate.py` trains `Steps:` as two to five short reasoning steps
+that show how an excerpt leads to the answer. It separately trains `Answer:`
+as the concise one-to-four-sentence response shown to the student. Therefore:
+
+- `Steps:` followed by `Answer:` belongs under collapsed **Show reasoning**.
+- The concise `Answer:` is the complete trained answer, not a truncated stream.
+- Inline commands in a bare answer need copy boxes even when the model does not
+  emit a fenced code block.
+- A finished `Steps:` response with no `Answer:` still needs the non-empty
+  fallback rather than disappearing.
+
+PR #33 implements that interpretation and also keeps inline code byte-for-byte
+while cleaning citations.
+
+## Supporting proxy captures
+
+Before the real model was available, this branch captured 20 DEV questions
+through the same app request body for stock `qwen3.5:2b`, a matched Q4_K_M
+base, and two template-only proxies. All four variants produced Markdown,
+ended naturally on all 20 questions, and produced zero one-sentence raw
+streams. Those proxy results remain useful for isolating transport and
+template behavior, but the real-student measurement above supersedes them for
+the actual model's length and output shape.
