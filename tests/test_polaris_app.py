@@ -476,7 +476,7 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.addCleanup(server.shutdown)
         return f"http://127.0.0.1:{server.server_address[1]}"
 
-    def _ask_real(self, question, events=None, mode="base", dense=0.7):
+    def _ask_real(self, question, events=None, mode="base", dense=0.7, where="landing"):
         host = self._ollama(events)
         retriever = MagicMock(HybridRetriever=lambda index_dir: MagicMock(
             retrieve=lambda *a, **k: [dict(HIT, dense=dense)]))
@@ -486,7 +486,7 @@ class PolarisRunLoopTests(unittest.TestCase):
                 patch("app.engine.LOG_CSV", Path(tempfile.mkdtemp()) / "answers.csv"), \
                 patch("app.engine.index_ok", return_value=True), patch.dict(sys.modules, {"rag.query_hybrid": retriever}):
             self.at.run()
-            self._ask(question, "landing")
+            self._ask(question, where)
         self.assertFalse(self.at.exception)
 
     def test_a_numbered_draft_before_answer_stays_under_show_reasoning(self):
@@ -500,7 +500,7 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertEqual(sorted(body["options"]), ["num_ctx", "temperature"])
         self.assertEqual((body["think"], body["options"]["temperature"]), (False, 0.2))
         (reasoning,) = self.at.expander
-        self.assertEqual(reasoning.label, "Show reasoning")
+        self.assertEqual(reasoning.label, polaris.REASONING_TITLE)
         self.assertIn("The excerpts show", reasoning.markdown[0].value)
         answer = [m.value for m in self.at.markdown if m not in reasoning.markdown]
         self.assertFalse([m for m in answer if "excerpts" in m or "draft line" in m])
@@ -518,8 +518,8 @@ class PolarisRunLoopTests(unittest.TestCase):
                "account with a default home directory and ask you to choose a password...\n\nSource: [1]<|im_end|>")
         self._ask_real("add a user named juan", _ndjson([raw[i:i + 7] for i in range(0, len(raw), 7)]), mode="full")
         (reasoning,) = self.at.expander
-        self.assertEqual(reasoning.label, "Show reasoning")
-        self.assertFalse(reasoning.proto.expanded)
+        self.assertEqual(reasoning.label, polaris.REASONING_TITLE)
+        self.assertTrue(reasoning.proto.expanded)
         self.assertIn("By substituting 'juan'", reasoning.markdown[0].value)
         answer = [m.value for m in self.at.markdown if m not in reasoning.markdown]
         self.assertIn("To create a new user named juan on Ubuntu, run `sudo adduser juan`. This will set up their "
@@ -529,9 +529,19 @@ class PolarisRunLoopTests(unittest.TestCase):
         html = self._html()
         self.assertIn('<p class="src-line">Source <b>[1]</b>', html)
         self.assertNotIn("im_end", html)
+        # the open reasoning comes first, the answer directly below it
+        values = [m.value for m in self.at.markdown]
+        self.assertLess(values.index(reasoning.markdown[0].value), values.index(answer[-1]))
+
+        self._ask_real("explain step 2", _ndjson(["Step 2 is not in that answer."]), mode="full", where="dock")
+        user = _NdjsonOllama.bodies[-1]["messages"][-1]["content"]
+        self.assertIn("it had no numbered steps, so there is no step 2", user)
+        self.assertNotIn("substituting", user)
+        self.assertNotIn("default home directory and prompts", user)
 
     def _record_deltas(self):
-        """Every element the runs send from here on, in order, as (delta path, element type, text)."""
+        """Every element the runs send from here on, in order, as (delta path, element type, text); an expander is
+        (path, "expandable", (label, expanded))."""
         seen = []
 
         def hook(msg):
@@ -540,6 +550,11 @@ class PolarisRunLoopTests(unittest.TestCase):
                 kind = element.WhichOneof("type")
                 text = element.markdown.body if kind == "markdown" else element.code.code_text if kind == "code" else ""
                 seen.append((tuple(msg.metadata.delta_path), kind, text))
+            elif msg.WhichOneof("type") == "delta" and msg.delta.WhichOneof("type") == "add_block":
+                block = msg.delta.add_block
+                if block.WhichOneof("type") == "expandable":
+                    seen.append((tuple(msg.metadata.delta_path), "expandable",
+                                 (block.expandable.label, block.expandable.expanded)))
 
         ForwardMsgQueue.on_before_enqueue_msg(hook)
         self.addCleanup(ForwardMsgQueue.on_before_enqueue_msg, None)
@@ -594,6 +609,24 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertEqual(events, ["loader", "reasoning", "loader", "reasoning", "answer"])
         self.assertEqual(labels, ["Waiting for the model", polaris.REASONING_LABEL])
         self.assertNotIn('class="cube"', self._html())
+
+    def test_the_students_reasoning_streams_open_above_and_the_answer_fills_in_below(self):
+        deltas = self._record_deltas()
+        text = ("Steps:\n1. The excerpt shows that adding a new user requires using the 'adduser' command...\n"
+                "2. By substituting 'juan' into the provided syntax, we can construct the exact command...\n\n"
+                "Answer: To create a new user named juan on Ubuntu, run `sudo adduser juan`.\n\nSource: [1]")
+        cut = text.index("Answer:")
+        self._ask_real("add a user named juan", self._paced(text, 40, 100, cut, cut + 60), mode="full")
+        ((events, labels),) = self._loader_lifecycles(deltas)
+        # the cube waits beside the open reasoning, and the first answer block replaces it in one redraw
+        self.assertEqual(events, ["loader", "reasoning", "loader", "reasoning", "answer"])
+        self.assertEqual(labels, ["Searching the lab docs", "Waiting for the model", polaris.REASONING_LABEL])
+        self.assertEqual({text for path, kind, text in deltas if kind == "expandable"},
+                         {(polaris.REASONING_TITLE, True)})
+        (reasoning,) = self.at.expander
+        self.assertTrue(reasoning.proto.expanded)
+        self.assertIn("By substituting 'juan'", reasoning.markdown[0].value)
+        self.assertEqual([c.value for c in self.at.code], ["sudo adduser juan"])
 
     def test_a_cot_reply_without_an_answer_line_keeps_the_cube_until_it_ends(self):
         deltas = self._record_deltas()
@@ -1681,8 +1714,8 @@ class PolarisRunLoopTests(unittest.TestCase):
                      "3. Log in as the user and check:"):
             self.assertIn(line, shown)
         (reasoning,) = self.at.expander
-        self.assertEqual(reasoning.label, "Show reasoning")
-        self.assertFalse(reasoning.proto.expanded)
+        self.assertEqual(reasoning.label, polaris.REASONING_TITLE)
+        self.assertTrue(reasoning.proto.expanded)
         self.assertEqual([m.value for m in reasoning.markdown],
                          ["- adduser creates the account.\n- usermod -aG appends the sudo group."])
         html = self._html()
@@ -1773,8 +1806,8 @@ class PolarisRunLoopTests(unittest.TestCase):
             self._ask(SUDO_QUESTION, "landing")
 
         (reasoning,) = self.at.expander
-        self.assertEqual(reasoning.label, "Show reasoning")
-        self.assertFalse(reasoning.proto.expanded)
+        self.assertEqual(reasoning.label, polaris.REASONING_TITLE)
+        self.assertTrue(reasoning.proto.expanded)
         # the BASE side's bare one-line answer gets a box for its whole inline command
         self.assertEqual([c.value for c in self.at.code], ["sudo adduser <username>", *SUDO_COMMANDS])
         self.assertIn("No documents in +CoT", self._html())

@@ -1454,8 +1454,10 @@ def thinking_html(label, elapsed=0.0, note=None):
     )
 
 
-REASONING_LABEL = "Writing its reasoning, under Show reasoning"
-REASONING_NOTE = "The answer shows from its Answer: line, or when the reply ends."
+# CoT is in the thesis title, so the reasoning section opens by default; it stays collapsible.
+REASONING_TITLE = "Reasoning (chain of thought)"
+REASONING_LABEL = "Writing its reasoning (chain of thought)"
+REASONING_NOTE = "The answer follows below it, from its Answer: line or when the reply ends."
 
 
 def flags_html(sky, daylight=False, generating=False):

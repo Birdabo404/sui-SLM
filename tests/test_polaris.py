@@ -44,6 +44,8 @@ from app.polaris import (
     COPY_FEEDBACK_ID,
     MONITOR_SWITCH,
     RAM_TITLE,
+    REASONING_LABEL,
+    REASONING_TITLE,
     RateTrace,
     config_summary_html,
     copy_feedback_html,
@@ -1039,6 +1041,34 @@ class CopyFeedbackTests(unittest.TestCase):
         self.assertIn("mask:var(--check)", css)
         self.assertIn("M3 8.5l3 3 7-7", css)
         self.assertIn('[data-testid="stVerticalBlockBorderWrapper"]:has(> .st-key-copy-feedback){display:none}', css)
+
+
+class ReasoningStyleTests(unittest.TestCase):
+    """The chain of thought opens by default above the answer and reads as secondary, never as a numbered step."""
+
+    def test_the_reasoning_is_labelled_as_chain_of_thought(self):
+        self.assertEqual(REASONING_TITLE, "Reasoning (chain of thought)")
+        self.assertIn("chain of thought", REASONING_LABEL)
+
+    def test_the_reasoning_is_muted_compact_and_indented_in_both_themes(self):
+        css = style_path().read_text(encoding="utf-8")
+        scope = ':is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stExpanderDetails"]'
+        details = css.split(scope + "{", 1)[1].split("}", 1)[0]
+        self.assertIn("border-left:2px solid var(--c-line)", details)
+        self.assertIn("margin-left:var(--s-2)", details)
+        text = css.split(scope + " :is(p,li){", 1)[1].split("}", 1)[0]
+        self.assertIn("color:var(--c-text-2)", text)
+        self.assertIn("font-size:var(--fs-reason)", text)
+        size = float(re.search(r"--fs-reason:([\d.]+)px", css).group(1))
+        self.assertTrue(13 <= size <= 15, size)
+        self.assertLess(size, float(re.search(r"--fs-body:([\d.]+)px", css).group(1)))
+        self.assertIn(scope + " li::marker{color:var(--c-text-3)", css)
+        self.assertIn(scope + " code{background:transparent;color:var(--c-text-2)", css)
+        # Light mode redefines the same tokens rather than restyling the reasoning
+        daylight = css.split(":root:has(.polaris-daylight){", 1)[1].split("}", 1)[0]
+        for token in ("--c-text-2:", "--c-text-3:", "--c-line:"):
+            self.assertIn(token, daylight)
+        self.assertNotIn("stExpanderDetails", "".join(line for line in css.splitlines() if "daylight" in line))
 
 
 class AnswerStatsTests(unittest.TestCase):

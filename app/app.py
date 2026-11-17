@@ -75,6 +75,7 @@ from app.polaris import (
     RATE_NOTE,
     REASONING_LABEL,
     REASONING_NOTE,
+    REASONING_TITLE,
     SCORES_NOTE,
     RateTrace,
     avg_latency,
@@ -1458,7 +1459,7 @@ class _AnswerView:
             return
         if self._reasoning_body is None:
             with self._reasoning.container():
-                self._reasoning_body = st.expander("Show reasoning", expanded=False).empty()
+                self._reasoning_body = st.expander(REASONING_TITLE, expanded=True).empty()
         if text != self._reasoning_shown:
             self._reasoning_body.markdown(safe_markdown(text))
             self._reasoning_shown = text

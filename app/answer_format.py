@@ -204,7 +204,7 @@ def _split_label(body, streaming):
 
 
 def split_reasoning(text, streaming=False):
-    """(reasoning, answer) for any reply. Only what the model marked as reasoning is put under Show reasoning: a
+    """(reasoning, answer) for any reply. Only what the model marked as reasoning goes in the reasoning panel: a
     <think> block, or the block a `Reasoning:` (or `Thinking:`) label, or the KD student's `Steps:`, opens up to the
     `Answer:` line.
 
