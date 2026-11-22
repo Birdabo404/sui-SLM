@@ -832,15 +832,16 @@ class _Rail:
         suffix = "-busy" if busy else ""
         with self.controls.container(key=f"rail-run{suffix}"):
             _run_controls(self.status, self.compare_on, self.left, self.right, suffix, busy)
+        # The same three slots busy or idle: Streamlit leaves a slot the new draw skips on screen until the run ends,
+        # which showed the idle theme picker beside the busy one for a whole answer.
         with self.foot.container(key=f"rail-foot{suffix}"):
             if busy:
                 # Settings can't open mid-answer (it would rerun and stop it), so Stop takes its place.
                 st.button("Stop", key="stop-rail", icon=":material/stop:", help="Stop generating")
-            else:
-                if st.button("Settings", key="settings", icon=":material/tune:"):
-                    _settings_dialog(self.status)
-                st.button("System check", key="syscheck-open", icon=":material/monitor_heart:",
-                          help="System check", on_click=_open_system_check)
+            elif st.button("Settings", key="settings", icon=":material/tune:"):
+                _settings_dialog(self.status)
+            st.button("System check", key=f"syscheck-open{suffix}", icon=":material/monitor_heart:",
+                      help="System check", on_click=_open_system_check, disabled=busy)
             _theme_picker(f"theme-rail{suffix}", disabled=busy)
 
     def refresh(self):

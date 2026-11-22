@@ -1250,6 +1250,38 @@ class PolarisRunLoopTests(unittest.TestCase):
     def _theme_flags(self, at=None):
         return next(m.value for m in (at or self.at).markdown if m.value.startswith('<div class="polaris-flags'))
 
+    def _foot_draws(self, run):
+        """The rail footer's widgets in the order `run` draws them: (kind, key) for each button and radio there."""
+        drawn = []
+
+        def spy(kind, real):
+            def draw(*args, **kwargs):
+                key = kwargs.get("key") or ""
+                if key == "settings" or key.startswith(("stop-rail", "syscheck-open", "theme-rail")):
+                    drawn.append((kind, key))
+                return real(*args, **kwargs)
+            return draw
+
+        with patch.object(self.streamlit, "button", spy("button", self.streamlit.button)), \
+                patch.object(self.streamlit, "radio", spy("radio", self.streamlit.radio)):
+            run()
+        return drawn
+
+    def test_the_rail_footer_keeps_its_slots_while_an_answer_streams(self):
+        # Streamlit keeps a slot the new draw leaves out on screen until the run ends: with one slot fewer while
+        # busy, the idle theme picker stayed beside the disabled one for the whole answer.
+        for theme in polaris.THEMES:
+            with self.subTest(theme=theme):
+                self.at.session_state["theme"] = theme
+                self.at.run()
+                drawn = self._foot_draws(lambda: self._ask("extract a .tar.gz file", "landing"))
+                self.assertEqual(drawn, [("button", "stop-rail"), ("button", "syscheck-open-busy"),
+                                         ("radio", f"theme-rail-busy-{theme}"), ("button", "settings"),
+                                         ("button", "syscheck-open"), ("radio", f"theme-rail-{theme}")])
+                self.assertTrue(self.at.button(key="syscheck-open").proto.disabled is False)
+                self.assertEqual([r.key for r in self.at.radio if r.key.startswith("theme-")], [f"theme-rail-{theme}"])
+                self.at.button(key="new-chat").click().run()
+
     def test_the_rail_picks_light_dark_or_polaris_and_the_choice_outlives_the_session(self):
         self.at.run()
         picker = self.at.radio(key="theme-rail-polaris")

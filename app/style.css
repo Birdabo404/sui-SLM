@@ -680,11 +680,11 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 [class*="st-key-settings"] button p{font:500 var(--fs-ui)/1 var(--f-ui)}
 [class*="st-key-settings"] button:hover:not(:disabled){background:var(--c-raised);color:var(--c-text)}
 /* Streamlit tints a clicked button with its primary colour; the calm themes keep it ink */
-:root:has(.polaris-calm) :is([class*="st-key-settings"],.st-key-syscheck-open) button:is(:focus,:active):not(:hover){color:var(--c-text-2)}
-.st-key-syscheck-open{margin-right:auto}
-.st-key-syscheck-open button{width:30px;min-height:30px;padding:0;border:0;border-radius:var(--r-sm);background:transparent;color:var(--c-text-2)}
-.st-key-syscheck-open button p{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-.st-key-syscheck-open button:hover{background:var(--c-raised);color:var(--c-text)}
+:root:has(.polaris-calm) :is([class*="st-key-settings"],[class*="st-key-syscheck-open"]) button:is(:focus,:active):not(:hover){color:var(--c-text-2)}
+[class*="st-key-syscheck-open"]{margin-right:auto}
+[class*="st-key-syscheck-open"] button{width:30px;min-height:30px;padding:0;border:0;border-radius:var(--r-sm);background:transparent;color:var(--c-text-2)}
+[class*="st-key-syscheck-open"] button p{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+[class*="st-key-syscheck-open"] button:hover{background:var(--c-raised);color:var(--c-text)}
 /* the rail's theme switch: three icons (sun, moon, the star) on one track; the names stay for screen readers */
 [class*="st-key-theme-rail"] label[data-baseweb="radio"]{flex:none!important;width:28px;padding:0!important}
 [class*="st-key-theme-rail"] label[data-baseweb="radio"] p{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
