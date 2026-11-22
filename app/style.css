@@ -289,8 +289,6 @@ p.composer-cmp{margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsi
 .composer-cmp .m{font:400 var(--fs-cap)/1 var(--f-mono);color:var(--c-text-3)}
 .composer-cmp .vs{margin:0 var(--s-2);color:var(--c-text-3)}
 
-[data-baseweb="popover"] ul[role="listbox"]{padding:var(--s-1);border:1px solid var(--c-line);border-radius:var(--r-md);background:var(--c-surface);
-  box-shadow:0 16px 40px -16px oklch(0 0 0 / 0.5)}
 [data-baseweb="popover"] li[role="option"]{display:flex;align-items:center;justify-content:space-between;gap:var(--s-4);border-radius:var(--r-xs);
   font:500 var(--fs-ui)/1.2 var(--f-ui);color:var(--c-text)}
 [data-baseweb="popover"] li[role="option"] > div{flex:1 1 auto;min-width:0}
@@ -934,6 +932,15 @@ p.diag-sum.fail{color:var(--c-danger)}
 :root:has(.polaris-calm) .card-head .mode{background:transparent;border-color:var(--c-line)}
 :root:has(.polaris-calm) .stat{background:transparent}
 :root:has(.polaris-calm) :is(.issue,.card){border-color:var(--c-line-soft)}
+/* BaseWeb portals (select and multiselect menus, popovers, tooltips) paint .streamlit/config.toml's dark base on their
+ * wrappers, so Light showed a dark menu under dark option text. */
+:root:has(.polaris-calm) [data-baseweb="popover"]:not([data-testid="stPopoverBody"]),
+:root:has(.polaris-calm) :is([data-baseweb="popover"],[data-baseweb="tooltip"]) > div{background:transparent;color:var(--c-text)}
+:root:has(.polaris-calm) [data-baseweb="popover"] :is([data-testid="stSelectboxVirtualDropdown"],ul[role="listbox"],[data-baseweb="menu"]),
+:root:has(.polaris-calm) [data-baseweb="tooltip"] > div{padding:var(--s-1);border:1px solid var(--c-line);border-radius:var(--r-md);
+  background:var(--c-surface);color:var(--c-text);box-shadow:0 16px 40px -16px oklch(0 0 0 / 0.35)}
+:root:has(.polaris-calm) [data-baseweb="tooltip"] > div{padding:var(--s-1) var(--s-2);font:400 var(--fs-cap)/var(--lh-ui) var(--f-ui)}
+:root:has(.polaris-calm) [data-baseweb="tooltip"] p{color:var(--c-text)}
 
 /* ---------- focus and small screens ---------- */
 button:focus-visible,[role="radio"]:focus-visible,summary:focus-visible,a:focus-visible{outline:2px solid var(--c-accent)!important;outline-offset:2px}

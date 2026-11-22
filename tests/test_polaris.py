@@ -974,6 +974,24 @@ class LoaderAndNamingTests(unittest.TestCase):
             self.assertNotIn("sky", flags_html(theme))
         self.assertNotIn("sky", (ROOT / "app" / "app.py").read_text(encoding="utf-8"))
 
+    def test_light_and_dark_paint_every_baseweb_portal_in_their_own_colours(self):
+        # The portals carry .streamlit/config.toml's dark base on their wrappers, and Streamlit 1.45's select menu is
+        # ul[data-testid=stSelectboxVirtualDropdown], not ul[role=listbox]: Light opened a dark model menu.
+        rules = []
+        for block in re.sub(r"/\*.*?\*/", "", style_path().read_text(encoding="utf-8"), flags=re.S).split("}"):
+            if "{" in block:
+                selectors, body = block.rsplit("{", 1)
+                rules += [(s, body) for s in re.split(r",(?![^(]*\))", " ".join(selectors.split()))]
+        portal = [(s.strip(), body) for s, body in rules if '[data-baseweb="popover"]' in s or '[data-baseweb="tooltip"]' in s]
+        for part in ('[data-testid="stSelectboxVirtualDropdown"]', '[data-baseweb="menu"]', '[data-baseweb="tooltip"] > div',
+                     '[data-baseweb="popover"]:not([data-testid="stPopoverBody"])'):
+            painted = [s for s, body in portal if part in s and "background:" in body]
+            self.assertTrue(painted, part)
+        # Polaris keeps the portals it had: every rule that paints one (the option rows aside) is for Light and Dark only.
+        for s, body in portal:
+            if "background" in body and 'li[role="option"]' not in s:
+                self.assertTrue(s.startswith(":root:has(.polaris-calm) "), s)
+
     def test_status_widget_stays_hidden(self):
         css = style_path().read_text(encoding="utf-8")
         self.assertIn('[data-testid="stStatusWidget"]{display:none!important}', css)
