@@ -999,7 +999,8 @@ class LoaderAndNamingTests(unittest.TestCase):
 
 
 class IdentityTests(unittest.TestCase):
-    """Who-are-you questions get the app's fixed answer; anything that only mentions a model or a maker doesn't."""
+    """The rule-based identity response: who-are-you questions get fixed text before retrieval; a question that only
+    mentions a model or a maker goes to the model."""
 
     ASKS = (
         "Who are you?", "who are you, Polaris?", "Hey Polaris, what are you?", "hello, who am I talking to",
@@ -1026,23 +1027,32 @@ class IdentityTests(unittest.TestCase):
             with self.subTest(question=question):
                 self.assertFalse(identity.asks_identity(question))
 
-    def test_the_student_is_polaris_and_a_base_model_says_it_is_stock(self):
+    def test_the_fixed_response_names_the_model_that_runs(self):
         self.assertEqual(
-            identity.identity_answer("distilled", "thesis-student"),
-            "I'm Polaris, running a fine-tuned and distilled Qwen3.5:2B built by Clyde Heinrich Lontoc and Jebby Cruz "
-            "of Caraga State University.",
+            identity.identity_response("thesis-student", "full"),
+            "I'm Polaris, an offline Linux lab assistant. I run Thesis-Student, a Qwen3.5-2B model fine-tuned through "
+            "knowledge distillation by Clyde Heinrich Lontoc and Jebby Cruz of Caraga State University.",
         )
-        stock = identity.identity_answer("base", "qwen3.5:2b")
-        self.assertTrue(stock.startswith("This is stock Qwen3.5:2B with no fine-tuning or distillation"))
-        self.assertNotIn("fine-tuned", stock)
-        self.assertIn("stock Qwen3.5:2B (Q4_K_M) with no fine-tuning", identity.identity_answer("base", "thesis-base-q4km"))
-        self.assertIn("stock llama3.2:1b with no", identity.identity_answer("base", "llama3.2:1b"))
+        self.assertEqual(
+            identity.identity_response("thesis-base-q4km", "full"),
+            "I'm Polaris, an offline Linux lab assistant. I run thesis-base-q4km, a Qwen3.5-2B model fine-tuned "
+            "through knowledge distillation by Clyde Heinrich Lontoc and Jebby Cruz of Caraga State University.",
+        )
+        self.assertIn("I run my-student, a Qwen3.5-2B model", identity.identity_response("my-student", "full"))
+
+    def test_plain_mode_and_the_stock_model_say_stock(self):
+        stock = ("I'm Polaris, an offline Linux lab assistant. Right now I'm running the stock Qwen3.5-2B model with no "
+                 "fine-tuning, set up by Clyde Heinrich Lontoc and Jebby Cruz of Caraga State University.")
+        for model, mode in (("qwen3.5:2b", "base"), ("qwen3.5:2b", "full"), ("qwen3.5:2b", "cot"),
+                            ("thesis-base-q4km", "base")):
+            with self.subTest(model=model, mode=mode):
+                self.assertEqual(identity.identity_response(model, mode), stock)
 
     def test_only_the_app_uses_it(self):
         for path in (ROOT / "shared", ROOT / "rag", ROOT / "eval", ROOT / "kd"):
             for source in path.rglob("*.py"):
                 with self.subTest(source=source.name):
-                    self.assertNotRegex(source.read_text(encoding="utf-8"), r"app\.identity|asks_identity|identity_answer")
+                    self.assertNotRegex(source.read_text(encoding="utf-8"), r"app\.identity|asks_identity|identity_response")
         self.assertNotRegex((ROOT / "app" / "engine.py").read_text(encoding="utf-8"), r"identity")
 
 

@@ -1,18 +1,24 @@
-"""The app's own answer when a question asks who or what the assistant is: fixed text chosen by the picked model,
-with no call to Ollama. Only the app's request handling uses it; the eval pipeline sends every question to the model.
+"""Rule-based identity response: an intent check that runs before retrieval. A question asking who or what the
+assistant is gets fixed text chosen by the picked model and mode, with no call to Ollama. Only the app's request
+handling uses it; the eval pipeline sends every question to the model.
 
 The patterns match the whole question, so a question that only mentions a model or a maker ("what model is my CPU",
-"who made ls") still goes to the model.
+"who made ls") still goes to retrieval and the model.
 """
 import re
 
-from app.models import MATCHED_BASE
+from app.engine import BASE_MODEL
+from app.models import STUDENT
 
-POLARIS_ANSWER = (
-    "I'm Polaris, running a fine-tuned and distilled Qwen3.5:2B built by Clyde Heinrich Lontoc and Jebby Cruz of "
-    "Caraga State University."
+STOCK_RESPONSE = (
+    "I'm Polaris, an offline Linux lab assistant. Right now I'm running the stock Qwen3.5-2B model with no "
+    "fine-tuning, set up by Clyde Heinrich Lontoc and Jebby Cruz of Caraga State University."
 )
-STOCK_NAMES = {"qwen3.5:2b": "Qwen3.5:2B", MATCHED_BASE: "Qwen3.5:2B (Q4_K_M)"}
+FINE_TUNED_RESPONSE = (
+    "I'm Polaris, an offline Linux lab assistant. I run {model}, a Qwen3.5-2B model fine-tuned through knowledge "
+    "distillation by Clyde Heinrich Lontoc and Jebby Cruz of Caraga State University."
+)
+MODEL_NAMES = {STUDENT: "Thesis-Student"}
 
 _MAKE = r"(?:made|built|created|trained|developed|programmed|fine[ -]?tuned|distilled)"
 _RUN = r"(?:running|using|based on|built on|running on)"
@@ -42,16 +48,13 @@ def _normalized(question):
 
 
 def asks_identity(question):
+    """The intent check: whether the whole question asks who or what the assistant is."""
     return bool(_ASKS.fullmatch(_normalized(question)))
 
 
-def identity_answer(model_key, model_name):
-    """The built-in answer for the picked model: Polaris's line for the KD student, and for a base model (which is
-    what PLAIN runs) that it is the stock model with no fine-tuning."""
-    if model_key == "distilled":
-        return POLARIS_ANSWER
-    name = STOCK_NAMES.get(model_name, model_name)
-    return (
-        f"This is stock {name} with no fine-tuning or distillation, running in Polaris, the offline lab assistant "
-        "by Clyde Heinrich Lontoc and Jebby Cruz of Caraga State University."
-    )
+def identity_response(model_name, mode):
+    """The fixed response for the picked model and mode: the stock text in PLAIN (the `base` mode) or on the stock
+    default model, otherwise the fine-tuned text naming the model that runs."""
+    if mode == "base" or model_name == BASE_MODEL:
+        return STOCK_RESPONSE
+    return FINE_TUNED_RESPONSE.format(model=MODEL_NAMES.get(model_name, model_name))

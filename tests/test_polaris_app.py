@@ -1601,17 +1601,15 @@ class PolarisRunLoopTests(unittest.TestCase):
         # The base model is still what a new session starts on.
         self.assertEqual(engine.BASE_MODEL, "qwen3.5:2b")
 
-    # ---------- the app's own answer to "who are you" ----------
+    # ---------- rule-based identity response ----------
 
-    def _builtin_cards(self):
-        return [m.value for m in self.at.markdown if m.value in (identity.POLARIS_ANSWER, self._stock())]
+    NOTE = '<p class="fixed-note">Fixed response · not model-generated</p>'
+    STUDENT = identity.FINE_TUNED_RESPONSE.format(model="Thesis-Student")
 
-    @staticmethod
-    def _stock(name="Qwen3.5:2B"):
-        return (f"This is stock {name} with no fine-tuning or distillation, running in Polaris, the offline lab "
-                "assistant by Clyde Heinrich Lontoc and Jebby Cruz of Caraga State University.")
+    def _identity_cards(self):
+        return [m.value for m in self.at.markdown if m.value in (self.STUDENT, identity.STOCK_RESPONSE)]
 
-    def test_the_student_says_who_it_is_without_asking_ollama(self):
+    def test_the_student_says_who_it_is_before_retrieval_without_asking_ollama(self):
         # The student isn't even installed: the answer is the app's, so nothing is checked, retrieved or streamed.
         with patch("app.models.installed_names", return_value=frozenset({"qwen3.5:2b"})), \
                 patch("app.engine.index_ok", side_effect=AssertionError("index checked")):
@@ -1620,25 +1618,23 @@ class PolarisRunLoopTests(unittest.TestCase):
             self._ask("Who are you?", "landing")
         self.assertEqual((self.calls, _FakeStream.made), ([], []))
         self.assertEqual(self.at.error, [])
-        self.assertEqual([m.value for m in self.at.markdown if m.value == identity.POLARIS_ANSWER],
-                         [identity.POLARIS_ANSWER])
+        self.assertEqual(self._identity_cards(), [self.STUDENT])
         html = self._html()
-        self.assertIn('<p class="builtin-note">built-in answer</p>', html)
+        self.assertIn(self.NOTE, html)
         self.assertIn('<span class="mode">+RAG+CoT</span>', html)
         self.assertNotIn('class="metrics"', html)
         self.assertEqual(self.at.session_state["run_records"], [])
         message = self.at.session_state["messages"][-1]
-        self.assertEqual(message, {"role": "assistant", "builtin": [
-            {"mode": "full", "model": "thesis-student", "text": identity.POLARIS_ANSWER}]})
+        self.assertEqual(message, {"role": "assistant", "identity": [
+            {"mode": "full", "model": "thesis-student", "text": self.STUDENT}]})
         cid = self._chat_id()
         self.assertEqual(self.store.load_chat(cid).messages[-1], message)
         # A replay and a reopened chat draw the same card.
         for reopen in (lambda: self.at.run(), lambda: (self.at.button(key="new-chat").click().run(),
                                                          self.at.button(key=f"hist-open-{cid}").click().run())):
             reopen()
-            self.assertEqual([m.value for m in self.at.markdown if m.value == identity.POLARIS_ANSWER],
-                             [identity.POLARIS_ANSWER])
-            self.assertIn('<p class="builtin-note">built-in answer</p>', self._html())
+            self.assertEqual(self._identity_cards(), [self.STUDENT])
+            self.assertIn(self.NOTE, self._html())
 
     def test_the_stock_model_says_it_is_stock_in_every_mode(self):
         self.at.run()
@@ -1647,8 +1643,20 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.at.radio(key="mode-pick").set_value("full").run()
         self._ask("Hey Polaris, who made you?")
         self.assertEqual(self.calls, [])
-        self.assertEqual(self._builtin_cards(), [self._stock(), self._stock()])
-        self.assertNotIn(identity.POLARIS_ANSWER, self._html())
+        self.assertEqual(self._identity_cards(), [identity.STOCK_RESPONSE, identity.STOCK_RESPONSE])
+        self.assertNotIn("Thesis-Student", self._html())
+
+    def test_another_fine_tuned_model_is_named_and_plain_mode_says_stock(self):
+        self.at.run()
+        self.at.selectbox(key="model-select").set_value("thesis-base-q4km").run()
+        self.at.radio(key="mode-pick").set_value("cot").run()
+        self._ask("Who are you?", "landing")
+        self.at.radio(key="mode-pick").set_value("base").run()
+        self._ask("who are you")
+        self.assertEqual(self.calls, [])
+        named = identity.FINE_TUNED_RESPONSE.format(model="thesis-base-q4km")
+        self.assertEqual([m.value for m in self.at.markdown if m.value in (named, identity.STOCK_RESPONSE)],
+                         [named, identity.STOCK_RESPONSE])
 
     def test_compare_gives_each_side_its_own_identity_card(self):
         with patch("app.models.installed_names", return_value=frozenset({"qwen3.5:2b", "thesis-student:latest"})):
@@ -1657,9 +1665,9 @@ class PolarisRunLoopTests(unittest.TestCase):
             self.at.selectbox(key="cmp-right-config").set_value("thesis-student|full").run()
             self._ask("who are you", "landing")
         self.assertEqual(self.calls, [])
-        self.assertEqual(self._builtin_cards(), [self._stock(), identity.POLARIS_ANSWER])
+        self.assertEqual(self._identity_cards(), [identity.STOCK_RESPONSE, self.STUDENT])
         html = self._html()
-        self.assertEqual(html.count('<p class="builtin-note">built-in answer</p>'), 2)
+        self.assertEqual(html.count(self.NOTE), 2)
         self.assertIn('<span class="model">thesis-student</span>', html)
 
     def test_near_miss_questions_still_go_to_the_model(self):
@@ -1667,7 +1675,7 @@ class PolarisRunLoopTests(unittest.TestCase):
         self._ask("what model is my CPU", "landing")
         self._ask("who made ls")
         self.assertEqual([c["question"] for c in self.calls], ["what model is my CPU", "who made ls"])
-        self.assertNotIn("builtin-note", self._html())
+        self.assertNotIn("fixed-note", self._html())
 
     def test_an_identity_turn_stays_out_of_the_next_questions_context(self):
         self.at.run()
