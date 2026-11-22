@@ -1366,6 +1366,22 @@ class TabStripTests(unittest.TestCase):
         self.assertEqual(out["few"], nothing)
 
 
+class NavGridTests(unittest.TestCase):
+    """Bar and rail controls share one height, icon size and gap so they line up in every theme."""
+
+    def test_nav_buttons_share_height_icon_size_and_gap(self):
+        css = style_path().read_text(encoding="utf-8")
+        nav = ':is(.st-key-new-chat,.st-key-tab-history,[class*="st-key-settings"],[class*="st-key-syscheck-open"],.st-key-stop-rail)'
+        self.assertIn(nav + " button{gap:6px;height:30px;min-height:30px}", css)
+        self.assertIn(nav + ' [data-testid="stIconMaterial"]{font-size:18px}', css)
+        square = css.split(':is(.st-key-new-chat,[class*="st-key-syscheck-open"]) button[data-testid]{', 1)[1].split("}", 1)[0]
+        self.assertIn("width:30px", square)
+        rail = ':is([data-testid="stSidebarCollapseButton"],[data-testid="stSidebarCollapsedControl"]) button'
+        self.assertIn(rail + "{display:flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0}", css)
+        self.assertIn(rail + " svg{width:18px;height:18px;margin:0}", css)
+        self.assertIn('[class*="st-key-rail-foot"] > *{height:30px}', css)
+
+
 class ReasoningStyleTests(unittest.TestCase):
     """The chain of thought opens by default above the answer and reads as secondary, never as a numbered step."""
 

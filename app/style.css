@@ -632,7 +632,7 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 
 /* the wordmark rides up into the sidebar's header row, beside the collapse control; the art sits under it.
    Streamlit shows that control only on hover and the wordmark's row covers it, so it stays shown and on top. */
-.st-key-side-top{margin-top:-62px;gap:0}
+.st-key-side-top{margin-top:-59.5px;gap:0}
 [data-testid="stSidebarCollapseButton"]{display:inline!important;position:relative;z-index:1}
 :is([data-testid="stSidebarCollapseButton"],[data-testid="stSidebarCollapsedControl"]) button{color:var(--c-text-2)}
 :is([data-testid="stSidebarCollapseButton"],[data-testid="stSidebarCollapsedControl"]) button:is(:hover,:focus-visible){color:var(--c-text)}
@@ -696,7 +696,7 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 [class*="st-key-theme-rail"] label[data-baseweb="radio"]{flex:none!important;width:28px;padding:0!important}
 [class*="st-key-theme-rail"] label[data-baseweb="radio"] p{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 [class*="st-key-theme-rail"] label[data-baseweb="radio"] > div:last-child{display:flex;align-items:center;justify-content:center;width:100%;height:26px}
-[class*="st-key-theme-rail"] label[data-baseweb="radio"] > div:last-child::before{content:"";width:15px;height:15px;background:var(--c-text-3);
+[class*="st-key-theme-rail"] label[data-baseweb="radio"] > div:last-child::before{content:"";width:16px;height:16px;background:var(--c-text-3);
   -webkit-mask:var(--icon) center/contain no-repeat;mask:var(--icon) center/contain no-repeat}
 [class*="st-key-theme-rail"] label[data-baseweb="radio"]:hover > div:last-child::before{background:var(--c-text)}
 [class*="st-key-theme-rail"] label[data-baseweb="radio"]:has(input:checked) > div:last-child::before{background:var(--c-text)}
@@ -756,6 +756,9 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 [class*="st-key-tab-close-"] button{width:24px;min-height:24px;height:24px;padding:0;border:0;border-radius:var(--r-xs);background:transparent;color:var(--c-text-3)}
 [class*="st-key-tab-close-"] button p{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 [class*="st-key-tab-close-"] button [data-testid="stIconMaterial"]{font-size:16px}
+[class*="st-key-tab-close-"] button[data-testid]{justify-content:center;gap:0}
+[class*="st-key-tab-close-"] button :is(span:first-child,[data-testid="stIconMaterial"]){margin:0}
+[class*="st-key-tab-close-"] button [data-testid="stMarkdownContainer"]{position:absolute}
 [class*="st-key-tab-close-"] button:hover{background:var(--c-raised);color:var(--c-text)}
 /* like a browser: every tab shows its x until tabs get narrow, then only the open one and the one under the pointer */
 @container tab (max-width:139px){
@@ -772,7 +775,7 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
   border-radius:50%;background:var(--c-star);animation:polaris-breathe 1.8s var(--ease-breathe) infinite both}
 @keyframes polaris-breathe{0%,100%{opacity:.2;transform:scale(.55)}42%{opacity:1;transform:scale(1)}}
 /* History and New sit after the tabs, like a browser's tab-search and + buttons */
-.st-key-tabbar > :nth-child(n+2){flex:none;width:auto!important;margin-bottom:5px}
+.st-key-tabbar > :nth-child(n+2){flex:none;width:auto!important;margin-bottom:4px}
 :is(.st-key-tab-history [data-testid="stPopoverButton"],.st-key-new-chat button){min-height:30px;height:30px;padding:0 var(--s-2);border:0;border-radius:var(--r-sm);
   background:transparent;color:var(--c-text-2);gap:6px}
 :is(.st-key-tab-history [data-testid="stPopoverButton"],.st-key-new-chat button) p{font:500 var(--fs-ui)/1 var(--f-ui)}
@@ -780,6 +783,23 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 .st-key-new-chat button p{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .st-key-tabbar > :has(> .st-key-tab-history){margin-left:auto}
 
+/* ---------- nav controls: one grid for the tab bar and the rail ----------
+ * Every nav button is 30px tall with its icon (18px) and label centred on one line; icon-only buttons are 30px
+ * square, labelled ones pad 8px and keep 6px between icon and label. Glyphs inside a control (a tab's x, the theme
+ * segments) are 16px. The header row (wordmark, the rail's chevron, +, History) centres on the tab titles, 29px
+ * down, whether the rail is open or not. */
+:is(.st-key-new-chat,.st-key-tab-history,[class*="st-key-settings"],[class*="st-key-syscheck-open"],.st-key-stop-rail) button{gap:6px;height:30px;min-height:30px}
+:is(.st-key-new-chat,.st-key-tab-history,[class*="st-key-settings"],[class*="st-key-syscheck-open"],.st-key-stop-rail) button :is(span:first-child,[data-testid="stIconMaterial"]){margin:0}
+:is(.st-key-new-chat,.st-key-tab-history,[class*="st-key-settings"],[class*="st-key-syscheck-open"],.st-key-stop-rail) [data-testid="stIconMaterial"]{font-size:18px}
+:is(.st-key-new-chat,[class*="st-key-syscheck-open"]) button[data-testid]{width:30px;min-width:30px;padding:0;gap:0;justify-content:center}
+:is(.st-key-new-chat,[class*="st-key-syscheck-open"]) button [data-testid="stMarkdownContainer"]{position:absolute}
+:is([data-testid="stSidebarCollapseButton"],[data-testid="stSidebarCollapsedControl"]) button{display:flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0}
+:is([data-testid="stSidebarCollapseButton"],[data-testid="stSidebarCollapsedControl"]) button svg{width:18px;height:18px;margin:0}
+[data-testid="stSidebarHeader"]{padding-top:14px}
+/* Streamlit sets the collapsed control's button 3.75px into the control */
+[data-testid="stSidebarCollapsedControl"]{top:10.25px}
+[class*="st-key-rail-foot"] > *{height:30px}
+:is([class*="st-key-mode-pick"],[class*="st-key-theme-"]) [role="radiogroup"]{min-height:0}
 /* tabs.js shows these over the strip's ends while tabs are scrolled out of sight that way */
 .polaris-tab-scroll{position:fixed;z-index:999992;display:flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;
   border-radius:var(--r-xs);background:var(--c-bg);color:var(--c-text-2);cursor:pointer;
