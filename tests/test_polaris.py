@@ -43,7 +43,15 @@ from app.engine import (
     ollama_reachable,
     warm_model,
 )
+from app.answer_format import parse_answer
 from app.polaris import (
+    AMBIGUOUS_K,
+    AMBIGUOUS_SPREAD,
+    AMBIGUOUS_TOP,
+    ambiguity_hint_html,
+    corpus_label,
+    excerpt_label,
+    source_line_html,
     COPY_FEEDBACK_ID,
     FOLLOW_ID,
     MONITOR_SWITCH,
@@ -2419,6 +2427,122 @@ class ImportPolarisTests(unittest.TestCase):
         self.assertTrue(hasattr(mod, "run_polaris"))
         self.assertTrue(hasattr(mod, "run_legacy"))
         self.assertEqual(os.environ.get("ANONYMIZED_TELEMETRY"), "False")
+
+
+# What the real index returned for "how do i edit files inside the terminal?" (top 5, dense 0.413-0.447).
+EDIT_HITS = [
+    {"rank": 1, "source": "tldr", "title": "nmtui-edit (tldr linux)", "path": "tldr/linux/nmtui-edit.md", "dense": 0.447},
+    {"rank": 2, "source": "tldr", "title": "vim (tldr common)", "path": "tldr/common/vim.md", "dense": 0.441},
+    {"rank": 3, "source": "tldr", "title": "git-unlock (tldr common)", "path": "tldr/common/git-unlock.md", "dense": 0.430},
+    {"rank": 4, "source": "tldr", "title": "nano (tldr common)", "path": "tldr/common/nano.md", "dense": 0.422},
+    {"rank": 5, "source": "ubuntu-server-docs", "title": "Basic commands", "path": "docs/tutorial/basic.md", "dense": 0.413},
+]
+EDIT_ANSWER = "Answer: Open the file with `vim notes.txt` [2].\n\nSource: [2]"
+
+
+class SourceTitleTests(unittest.TestCase):
+    """A cited [n] reads as the excerpt's name and the corpus it came from, as does each Evidence row."""
+
+    def test_each_corpus_names_its_excerpts_the_way_a_reader_knows_them(self):
+        cases = (
+            ({"source": "tldr", "title": "nmtui-edit (tldr linux)"}, "nmtui-edit · tldr"),
+            ({"source": "tldr", "title": "vim (tldr common)"}, "vim · tldr"),
+            ({"source": "command-manpages", "title": "nano(1)"}, "nano(1) · man page"),
+            ({"source": "man-pages", "title": "crontab(5)"}, "crontab(5) · man page"),
+            ({"source": "ubuntu-docs", "title": "Edit text files"}, "Edit text files · Ubuntu help"),
+            ({"source": "gnome-user-docs", "title": "Wi-Fi"}, "Wi-Fi · GNOME help"),
+            ({"source": "ubuntu-server-docs", "title": "Basic commands"}, "Basic commands · Ubuntu Server docs"),
+            ({"source": "arch-wiki", "title": "Nano"}, "Nano · Arch Wiki"),
+            ({"title": "", "path": "tldr/common/tar.md"}, "tar"),
+            ({}, ""),
+        )
+        for hit, label in cases:
+            with self.subTest(hit=hit):
+                self.assertEqual(excerpt_label(hit), label)
+        self.assertEqual(corpus_label("some-new-corpus"), source_key("some-new-corpus").lower())
+
+    def test_the_source_line_names_each_cited_excerpt_and_its_origin(self):
+        parsed = parse_answer("Answer: Use `nano notes.txt` [4], or vim [2].\n\nSource: [2] [4]", "full", n_hits=5)
+        line = source_line_html(parsed, "full", EDIT_HITS)
+        self.assertEqual(line, '<p class="src-line">Source '
+                               '<b>[2]</b> <span class="n">vim</span><span class="origin"> · tldr</span> · '
+                               '<b>[4]</b> <span class="n">nano</span><span class="origin"> · tldr</span></p>')
+        self.assertNotIn("(tldr", line)
+
+    def test_a_number_past_the_retrieved_excerpts_is_muted_not_a_crash(self):
+        parsed = parse_answer("Answer: Use vim [7].\n\nSource: [7]", "full", n_hits=5)
+        line = source_line_html(parsed, "full", EDIT_HITS)
+        self.assertIn('<span class="miss">removed [7], not among the 5 retrieved</span>', line)
+        # Even a [n] that reaches the line with no excerpt behind it is shown muted, without a name.
+        line = source_line_html(parsed.__class__(**{**parsed.__dict__, "cited": (2, 9)}), "full", EDIT_HITS)
+        self.assertIn('<b>[2]</b> <span class="n">vim</span>', line)
+        self.assertIn('<span class="miss">[9]</span>', line)
+        self.assertIn('<span class="miss">[9]</span>', source_line_html(parsed.__class__(**{**parsed.__dict__, "cited": (9,)}), "full", []))
+
+    def test_titles_are_escaped(self):
+        parsed = parse_answer("Answer: x [1].\n\nSource: [1]", "full", n_hits=1)
+        line = source_line_html(parsed, "full", [{"source": "tldr", "title": "<b>x</b>"}])
+        self.assertIn("&lt;b&gt;x&lt;/b&gt;", line)
+
+    def test_evidence_rows_use_the_same_names(self):
+        rows = evidence_rows_html(EDIT_HITS)
+        self.assertIn('<span class="title">nmtui-edit<span class="origin"> · tldr</span></span>', rows)
+        self.assertIn('<span class="title">Basic commands<span class="origin"> · Ubuntu Server docs</span></span>', rows)
+        self.assertNotIn("(tldr", rows)
+
+    def test_origins_and_misses_are_muted_in_every_theme(self):
+        css = style_path().read_text(encoding="utf-8")
+        self.assertIn(".src-line .miss{color:var(--c-text-3);opacity:.75}", css)
+        self.assertIn(".ev .origin{color:var(--c-text-3)}", css)
+        self.assertFalse([line for line in css.splitlines() if ("src-line ." in line or ".ev .origin" in line)
+                          and "daylight" in line])
+
+
+class AmbiguityHintTests(unittest.TestCase):
+    """One muted line when the search found several near-equal weak matches; display only."""
+
+    def record(self, **kw):
+        return {"mode": "full", "hits": EDIT_HITS, "abstained": False, "answer": EDIT_ANSWER, **kw}
+
+    def test_the_constants_are_the_documented_ones(self):
+        self.assertEqual((AMBIGUOUS_K, AMBIGUOUS_SPREAD, AMBIGUOUS_TOP), (5, 0.05, 0.50))
+
+    def test_near_equal_weak_matches_suggest_naming_the_top_retrieved_tool(self):
+        self.assertEqual(ambiguity_hint_html(self.record()),
+                         "<p class=\"amb-hint\">Search wasn't sure about this one. Naming the tool helps, e.g. "
+                         "“how to use nmtui-edit”.</p>")
+
+    def test_the_example_is_a_command_when_one_was_retrieved_else_a_generic_tool(self):
+        man = [dict(h, source="command-manpages", title="nano(1)") if h["rank"] == 1 else h for h in EDIT_HITS]
+        self.assertIn("“how to use nano”", ambiguity_hint_html(self.record(hits=man)))
+        docs = [dict(h, source="ubuntu-docs", title=f"Page {h['rank']}") for h in EDIT_HITS]
+        self.assertIn("“how to use tar”", ambiguity_hint_html(self.record(hits=docs)))
+
+    def test_it_needs_a_tight_cluster_and_no_confident_match(self):
+        def scored(top, bottom):
+            step = (top - bottom) / 4
+            return [dict(h, dense=round(top - i * step, 4)) for i, h in enumerate(EDIT_HITS)]
+        self.assertTrue(ambiguity_hint_html(self.record(hits=scored(0.449, 0.401))))
+        self.assertEqual(ambiguity_hint_html(self.record(hits=scored(0.45, 0.40))), "")  # spread is 0.05
+        self.assertEqual(ambiguity_hint_html(self.record(hits=scored(0.50, 0.47))), "")  # top reaches 0.50
+        self.assertEqual(ambiguity_hint_html(self.record(hits=EDIT_HITS[:4])), "")  # fewer than five scores
+        self.assertEqual(ambiguity_hint_html(self.record(hits=[dict(h, dense=None) for h in EDIT_HITS])), "")
+
+    def test_it_never_shows_on_abstentions_plain_modes_or_missing_hits(self):
+        self.assertEqual(ambiguity_hint_html(self.record(abstained=True)), "")
+        self.assertEqual(ambiguity_hint_html(self.record(answer=ABSTAIN)), "")
+        self.assertEqual(ambiguity_hint_html(self.record(answer="Answer: I do not know.")), "")
+        for mode in ("base", "cot"):
+            self.assertEqual(ambiguity_hint_html(self.record(mode=mode)), "")
+        self.assertEqual(ambiguity_hint_html(self.record(hits=[])), "")
+        self.assertEqual(ambiguity_hint_html({}), "")
+
+    def test_the_hint_is_compact_and_muted_in_every_theme(self):
+        css = style_path().read_text(encoding="utf-8")
+        rule = css.split("p.amb-hint{", 1)[1].split("}", 1)[0]
+        self.assertIn("font:400 var(--fs-ui)", rule)
+        self.assertIn("color:var(--c-text-3)", rule)
+        self.assertNotIn("daylight", css.split("p.amb-hint{", 1)[0].rsplit("\n", 1)[1])
 
 
 if __name__ == "__main__":

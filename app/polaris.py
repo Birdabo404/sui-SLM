@@ -145,6 +145,31 @@ SOURCE_KEY_RULES = (
     ("help", "UBUNTU-HELP"),
 )
 
+# Each corpus in the index (rag/build_index.py's source names) as a reader would name it, beside a cited excerpt.
+CORPUS_LABELS = {
+    "tldr": "tldr",
+    "command-manpages": "man page",
+    "man-pages": "man page",
+    "ubuntu-docs": "Ubuntu help",
+    "gnome-user-docs": "GNOME help",
+    "ubuntu-server-docs": "Ubuntu Server docs",
+    "arch-wiki": "Arch Wiki",
+}
+# Corpora whose titles name one command (tldr's page name, a man page's name(section)).
+COMMAND_CORPORA = ("tldr", "command-manpages", "man-pages")
+_TLDR_PLATFORM = re.compile(r"\s*\(tldr [^)]*\)$")
+_MAN_SECTION = re.compile(r"\(\w+\)$")
+
+# The ambiguity hint under an answer, display only: it changes nothing retrieved, the 0.30 abstain threshold or what
+# the model is sent. On the real index a vague question ("how do i edit files inside the terminal?") brings back
+# five tools that score within a few hundredths of each other (nmtui-edit, vim, git-unlock, nano, a cd tutorial at
+# 0.413-0.447) and none near a confident match, and the student then answers from a different one each run. The
+# top AMBIGUOUS_K dense scores spread less than AMBIGUOUS_SPREAD with the best under AMBIGUOUS_TOP is that case.
+AMBIGUOUS_K = 5
+AMBIGUOUS_SPREAD = 0.05
+AMBIGUOUS_TOP = 0.50
+AMBIGUOUS_FALLBACK_TOOL = "tar"
+
 
 RAIL_ART_COLS, RAIL_ART_ROWS = 44, 9
 _BAYER4 = ((0, 8, 2, 10), (12, 4, 14, 6), (3, 11, 1, 9), (15, 7, 13, 5))
@@ -393,6 +418,30 @@ def source_key(source):
     if not raw:
         return "DOC"
     return raw.upper()[:12]
+
+
+def corpus_label(source):
+    raw = str(source or "").strip()
+    return CORPUS_LABELS.get(raw.lower()) or source_key(raw).lower()
+
+
+def excerpt_name(hit):
+    """A retrieved excerpt by the name a reader knows it by: the command for tldr ("nmtui-edit", not its index
+    title "nmtui-edit (tldr linux)") and man pages ("nano(1)"), else the page title."""
+    title = _TLDR_PLATFORM.sub("", str(hit.get("title") or "").strip())
+    if title:
+        return title
+    path = str(hit.get("path") or "").strip()
+    return Path(path).stem if path else ""
+
+
+def excerpt_label(hit):
+    """'nmtui-edit · tldr', or '' when the hit carries no name."""
+    name = excerpt_name(hit)
+    if not name:
+        return ""
+    origin = corpus_label(hit.get("source")) if str(hit.get("source") or "").strip() else ""
+    return f"{name} · {origin}" if origin else name
 
 
 def chip_name(hit):
@@ -1131,12 +1180,13 @@ def evidence_rows_html(hits):
     parts = ['<ol class="ev">']
     for hit in hits:
         dense = _fmt_score(hit.get("dense"))
-        src = source_key(hit.get("source"))
+        origin = corpus_label(hit.get("source")) if str(hit.get("source") or "").strip() else ""
         parts.append(
             "<li>"
             f'<span class="rank">{int(hit["rank"])}</span>'
-            f'<span class="src">{escape(src)}</span>'
-            f'<span class="title">{escape(str(hit.get("title") or ""))}</span>'
+            f'<span class="title">{escape(excerpt_name(hit))}'
+            + (f'<span class="origin"> · {escape(origin)}</span>' if origin else "")
+            + "</span>"
             f'<span class="sc">cosine {dense}</span>'
             f'<p class="snip">{escape(str(hit.get("snippet") or ""))}</p>'
             "</li>"
@@ -1493,12 +1543,50 @@ def source_line_html(answer, mode, hits):
         return f'<p class="src-line none">{line}</p>'
     names = []
     for n in answer.cited:
-        hit = hits[n - 1] if n - 1 < len(hits) else {}
-        names.append(f"<b>[{n}]</b> {escape(doc_label(hit) or f'excerpt {n}')}")
+        hit = hits[n - 1] if 1 <= n <= len(hits) else None
+        if hit is None:
+            names.append(f'<span class="miss">[{n}]</span>')
+            continue
+        name = excerpt_name(hit) or doc_label(hit) or f"excerpt {n}"
+        origin = corpus_label(hit.get("source")) if str(hit.get("source") or "").strip() else ""
+        names.append(f'<b>[{n}]</b> <span class="n">{escape(name)}</span>'
+                     + (f'<span class="origin"> · {escape(origin)}</span>' if origin else ""))
     line = ("Source " + " · ".join(names)) if names else "Source not cited by the model"
     if dropped:
-        line += f" · removed {dropped}, not among the {len(hits)} retrieved"
+        line += f' · <span class="miss">removed {dropped}, not among the {len(hits)} retrieved</span>'
     return f'<p class="src-line">{line}</p>'
+
+
+def ambiguity_example(hits):
+    """The tool the hint suggests naming: the best-ranked retrieved command, else a generic one."""
+    for hit in hits:
+        if str(hit.get("source") or "").strip().lower() in COMMAND_CORPORA:
+            name = _MAN_SECTION.sub("", excerpt_name(hit)).strip()
+            if name and " " not in name:
+                return name
+    return AMBIGUOUS_FALLBACK_TOOL
+
+
+def retrieval_ambiguous(hits):
+    dense = sorted((d for d in (_opt_float(h.get("dense")) for h in hits) if d is not None), reverse=True)
+    if len(dense) < AMBIGUOUS_K:
+        return False
+    # Rounded so a spread of exactly 0.05 (0.45 - 0.40 is 0.0499... in floats) is not counted as tighter.
+    return dense[0] < AMBIGUOUS_TOP and round(dense[0] - dense[AMBIGUOUS_K - 1], 4) < AMBIGUOUS_SPREAD
+
+
+def ambiguity_hint_html(record):
+    """One muted line under a finished RAG answer whose search found several near-equal weak matches; '' otherwise,
+    including for abstentions (the app's or the model's own "I don't know") and BASE / +CoT. The identity response
+    has no record and never reaches it."""
+    hits = record.get("hits") or []
+    if not uses_rag(record.get("mode") or "") or record.get("abstained") or not retrieval_ambiguous(hits):
+        return ""
+    if abstain_answer(record.get("answer") or "").lower().startswith(("i don't know", "i do not know")):
+        return ""
+    tool = escape(ambiguity_example(hits))
+    return (f"<p class=\"amb-hint\">Search wasn't sure about this one. Naming the tool helps, e.g. "
+            f"“how to use {tool}”.</p>")
 
 
 def compare_model_tags(left, right):

@@ -86,6 +86,7 @@ from app.polaris import (
     SettingCard,
     SettingRow,
     SettingSection,
+    ambiguity_hint_html,
     avg_latency,
     best_match_html,
     build_run_record,
@@ -1784,6 +1785,9 @@ class _AnswerView:
         with self._foot:
             if not abstained:
                 st.markdown(source_line_html(parsed, mode, hits), unsafe_allow_html=True)
+                hint = ambiguity_hint_html({**record, "mode": mode})
+                if hint:
+                    st.markdown(hint, unsafe_allow_html=True)
             if uses_rag(mode):
                 st.markdown(evidence_block_html(record, collapsed=True), unsafe_allow_html=True)
             elif align_slots:

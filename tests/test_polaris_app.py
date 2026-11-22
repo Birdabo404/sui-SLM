@@ -2077,7 +2077,8 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertEqual([m.value for m in reasoning.markdown],
                          ["- adduser creates the account.\n- usermod -aG appends the sudo group."])
         html = self._html()
-        self.assertIn('<p class="src-line">Source <b>[1]</b> adduser · <b>[2]</b> usermod</p>', html)
+        self.assertIn('<p class="src-line">Source <b>[1]</b> <span class="n">adduser</span><span class="origin"> · tldr</span>'
+                      ' · <b>[2]</b> <span class="n">usermod</span><span class="origin"> · tldr</span></p>', html)
         self.assertNotIn("{{", html + "".join(c.value for c in self.at.code))
         self.assertNotIn("Reasoning:", html)
 
@@ -2100,6 +2101,52 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.at.button(key=f"hist-open-{cid}").click().run()
         self.assertFalse(self.at.exception)
         self._how_to_shown()
+
+    def _ask_full(self, question, text, hits):
+        for p in self._full_mode():
+            p.start()
+            self.addCleanup(p.stop)
+        with self._answers(lambda q, mode: text, hits):
+            self.at.run()
+            self._ask(question, "landing")
+        self.assertFalse(self.at.exception)
+        return self._html()
+
+    def test_a_search_with_near_equal_weak_matches_gets_the_hint_and_nothing_else_changes(self):
+        html = self._ask_full(EDIT_QUESTION, "Answer: Open it with `vim notes.txt` [2].\n\nSource: [2]", EDIT_HITS)
+        self.assertIn('<b>[2]</b> <span class="n">vim</span><span class="origin"> · tldr</span>', html)
+        self.assertIn("<p class=\"amb-hint\">Search wasn't sure about this one. Naming the tool helps, e.g. "
+                      "“how to use nmtui-edit”.</p>", html)
+        # Display only: one request, sent exactly what it is sent without the hint.
+        (stream,) = _FakeStream.made
+        self.assertEqual(stream.kw["messages_fn"](EDIT_QUESTION, EDIT_HITS, "full"),
+                         app_messages(EDIT_QUESTION, EDIT_HITS, "full"))
+        self.assertEqual(len(self.calls), 1)
+        # Reopened from History it reads the same.
+        cid = self._chat_id()
+        self.at.button(key="new-chat").click().run()
+        self.at.button(key=f"hist-open-{cid}").click().run()
+        self.assertIn('class="amb-hint"', self._html())
+
+    def test_no_hint_for_a_clear_match_an_abstention_or_the_identity_response(self):
+        html = self._ask_full(SUDO_QUESTION, SUDO_FULL, SUDO_HITS)
+        self.assertNotIn("amb-hint", html)
+        self.at.button(key="new-chat").click().run()
+        # Clustered too, but under the 0.30 threshold: the app abstains and the hint stays away.
+        answer = _fake_answer(self.calls)
+
+        def weak(question, mode, model, **kw):
+            return dict(answer(question, mode, model, **kw), text=ABSTAIN, weak=True,
+                        hits=[dict(h, dense=round(h["dense"] - 0.2, 3)) for h in EDIT_HITS])
+
+        with patch("app.engine.answer_question", side_effect=weak):
+            self._ask(EDIT_QUESTION, "landing")
+        self.assertIn("model not called", self._html())
+        self.assertNotIn("amb-hint", self._html())
+        self.at.button(key="new-chat").click().run()
+        self._ask("who are you?", "landing")
+        self.assertIn("Fixed response", self._html())
+        self.assertNotIn("amb-hint", self._html())
 
     def test_explain_step_2_asks_about_the_usermod_step(self):
         texts = lambda question, mode: SUDO_FULL if question == SUDO_QUESTION else "It appends sudo [2]."  # noqa: E731
@@ -2293,6 +2340,14 @@ DRAFT = ("Reasoning:\n1. The excerpts show `chmod 600` gives the owner read and 
          "```bash\nchmod 600 <path/to/file>\n```\n2. Check it:\n```bash\nls -l <path/to/file>\n```\nSource: [1]")
 SUDO_QUESTION = "How do I add a new user on Ubuntu and give them sudo access?"
 SUDO_COMMANDS = ("sudo adduser <username>", "sudo usermod -aG sudo <username>", "groups <username>")
+EDIT_QUESTION = "how do i edit files inside the terminal?"
+EDIT_HITS = [
+    dict(HIT, title="nmtui-edit (tldr linux)", path="tldr/linux/nmtui-edit.md", dense=0.447),
+    dict(HIT, title="vim (tldr common)", path="tldr/common/vim.md", dense=0.441),
+    dict(HIT, title="git-unlock (tldr common)", path="tldr/common/git-unlock.md", dense=0.430),
+    dict(HIT, title="nano (tldr common)", path="tldr/common/nano.md", dense=0.422),
+    dict(HIT, source="ubuntu-server-docs", title="Basic commands", path="docs/tutorial/basic.md", dense=0.413),
+]
 SUDO_HITS = [dict(HIT, title="adduser", path="tldr/adduser.md"), dict(HIT, title="usermod", path="tldr/usermod.md")]
 BASE_STEPS = (
     "1. Create the user:\n```bash\nsudo adduser {{username}}\n```\n"
