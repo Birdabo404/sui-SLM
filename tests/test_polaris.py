@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from shared.prompt import ABSTAIN
+from app import identity
 from app.streaming import LiveThroughput, retrieval_chart
 from tests.backend_fake import PlainStreamError
 from app.models import ComparePick, ModelOption, compare_picks, default_compare_ids, model_options, modes_for, pair_compare_ids
@@ -995,6 +996,54 @@ class LoaderAndNamingTests(unittest.TestCase):
     def test_status_widget_stays_hidden(self):
         css = style_path().read_text(encoding="utf-8")
         self.assertIn('[data-testid="stStatusWidget"]{display:none!important}', css)
+
+
+class IdentityTests(unittest.TestCase):
+    """Who-are-you questions get the app's fixed answer; anything that only mentions a model or a maker doesn't."""
+
+    ASKS = (
+        "Who are you?", "who are you, Polaris?", "Hey Polaris, what are you?", "hello, who am I talking to",
+        "What model are you running?", "which model are you based on", "what model is this", "What LLM are you?",
+        "What is your name", "What\u2019s your name?", "who made you", "Who trained you?", "who built you?",
+        "which company created you", "who is your creator", "are you ChatGPT?", "Are you Qwen?",
+        "introduce yourself", "please tell me about yourself", "what are you running on",
+    )
+    NEAR_MISSES = (
+        "what model is my CPU", "who made ls", "who made linux", "who made the sudo command",
+        "what model is this laptop", "what is the model of my wifi card", "how do I check what model my GPU is",
+        "which model should I use", "what are you doing", "what can you do", "are you able to extract tar files",
+        "who are the lab admins", "what is your name for the ls command", "tell me about yourself and ls",
+        "who made you do that", "",
+    )
+
+    def test_identity_questions_match_in_any_case_and_punctuation(self):
+        for question in self.ASKS:
+            with self.subTest(question=question):
+                self.assertTrue(identity.asks_identity(question))
+
+    def test_questions_that_only_mention_a_model_or_a_maker_go_to_the_model(self):
+        for question in self.NEAR_MISSES:
+            with self.subTest(question=question):
+                self.assertFalse(identity.asks_identity(question))
+
+    def test_the_student_is_polaris_and_a_base_model_says_it_is_stock(self):
+        self.assertEqual(
+            identity.identity_answer("distilled", "thesis-student"),
+            "I'm Polaris, running a fine-tuned and distilled Qwen3.5:2B built by Clyde Heinrich Lontoc and Jebby Cruz "
+            "of Caraga State University.",
+        )
+        stock = identity.identity_answer("base", "qwen3.5:2b")
+        self.assertTrue(stock.startswith("This is stock Qwen3.5:2B with no fine-tuning or distillation"))
+        self.assertNotIn("fine-tuned", stock)
+        self.assertIn("stock Qwen3.5:2B (Q4_K_M) with no fine-tuning", identity.identity_answer("base", "thesis-base-q4km"))
+        self.assertIn("stock llama3.2:1b with no", identity.identity_answer("base", "llama3.2:1b"))
+
+    def test_only_the_app_uses_it(self):
+        for path in (ROOT / "shared", ROOT / "rag", ROOT / "eval", ROOT / "kd"):
+            for source in path.rglob("*.py"):
+                with self.subTest(source=source.name):
+                    self.assertNotRegex(source.read_text(encoding="utf-8"), r"app\.identity|asks_identity|identity_answer")
+        self.assertNotRegex((ROOT / "app" / "engine.py").read_text(encoding="utf-8"), r"identity")
 
 
 class CopyFeedbackTests(unittest.TestCase):

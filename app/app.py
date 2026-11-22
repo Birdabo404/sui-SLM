@@ -41,6 +41,7 @@ from app.engine import (
     uses_rag,
     warm_model,
 )
+from app.identity import asks_identity, identity_answer
 from app.issues import (
     COMPLETE,
     Issue,
@@ -88,6 +89,7 @@ from app.polaris import (
     avg_latency,
     best_match_html,
     build_run_record,
+    builtin_note_html,
     cancelled_side_html,
     card_head_html,
     compare_model_tags,
@@ -505,6 +507,10 @@ def run_polaris():
 def _answer_turn(question, option, mode, compare_on, left, right, index_dir, *, monitor, names, context=None):
     st.session_state.pop("last_cancelled", None)
     st.markdown(user_turn_html(question), unsafe_allow_html=True)
+    if asks_identity(question):
+        sides = [(left.option, left.mode), (right.option, right.mode)] if compare_on else [(option, mode)]
+        _builtin_turn(sides)
+        return True
     slot = st.empty()
 
     if not compare_on:
@@ -556,6 +562,17 @@ def _answer_turn(question, option, mode, compare_on, left, right, index_dir, *, 
     st.session_state.messages.append({"role": "assistant", "record": rec})
     view.finish(rec)
     return True
+
+
+def _builtin_turn(sides):
+    """Answer an identity question from the app, one card per side, without asking Ollama. Kept as its own message
+    type, so chat memory, the monitor and the run records leave it out: no model wrote it."""
+    messages = st.session_state.messages
+    message = {"role": "assistant", "builtin": [
+        {"mode": mode, "model": option.name, "text": identity_answer(option.key, option.name)} for option, mode in sides
+    ]}
+    messages.append(message)
+    _render_builtin(message["builtin"], len(messages) - 1)
 
 
 def _start_blocker(status, compare_on, left, right):
@@ -1601,6 +1618,9 @@ def _replay_message(msg, index):
                 elif miss_r:
                     _render_unanswered_side(miss_r, key=f"answer-h{index}-r", model=right_tag)
         return
+    if msg.get("builtin"):
+        _render_builtin(msg["builtin"], index)
+        return
     rec = msg.get("record")
     if rec:
         _render_card(rec, key=f"answer-{index}")
@@ -1615,6 +1635,23 @@ def _render_card(record, key, align_slots=False, model=""):
     with st.container(key=key):
         view = _AnswerView(record.get("mode") or "", model)
     view.finish(record, align_slots=align_slots)
+
+
+def _render_builtin(sides, index):
+    if len(sides) == 1:
+        _builtin_card(sides[0], key=f"answer-{index}")
+        return
+    tags = compare_model_tags(*sides)
+    with st.container(key=f"cmp-hist-{index}"):
+        for col, side, tag, end in zip(st.columns(2, gap="medium"), sides, tags, "lr"):
+            with col:
+                _builtin_card(side, key=f"answer-h{index}-{end}", model=tag)
+
+
+def _builtin_card(side, key, model=""):
+    with st.container(key=key):
+        view = _AnswerView(side.get("mode") or "", model)
+    view.builtin(side.get("text") or "")
 
 
 def _answer_parts(parsed):
@@ -1718,6 +1755,12 @@ class _AnswerView:
             if self._shown[i] is not None:
                 self._slots[i].empty()
                 self._shown[i] = None
+
+    def builtin(self, text):
+        """The app's own answer in the answer's first block, labelled as such, with no sources or metrics."""
+        self._show_parts([("md", text)])
+        with self._foot:
+            st.markdown(builtin_note_html(), unsafe_allow_html=True)
 
     def finish(self, record, align_slots=False):
         """The finished answer from its record: the final parse (or the abstain card), then sources and metrics."""

@@ -389,6 +389,7 @@ p.stopped{margin:0;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-
 :is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stMarkdownContainer"] ol{margin-bottom:0}
 :is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stMarkdownContainer"] p.src-line{margin:0;font:400 var(--fs-meta)/var(--lh-ui) var(--f-mono);color:var(--c-text-3)}
 .src-line b{font-weight:var(--w-strong);color:var(--c-text-2)}
+[class*="st-key-answer"] [data-testid="stMarkdownContainer"] p.builtin-note{margin:0;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
 [data-testid="stMarkdownContainer"] code{font-family:var(--f-mono);font-size:.875em;padding:.1em .35em;border-radius:var(--r-xs);background:var(--c-raised);color:var(--c-text)}
 
 /* "Reasoning (chain of thought)": open by default above the answer, secondary and never styled like a step: muted

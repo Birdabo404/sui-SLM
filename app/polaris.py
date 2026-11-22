@@ -1438,6 +1438,10 @@ def stopped_html():
     return '<p class="stopped">Stopped. The partial answer was not kept.</p>'
 
 
+def builtin_note_html():
+    return '<p class="builtin-note">built-in answer</p>'
+
+
 def cancelled_side_html():
     return '<p class="stopped">Cancelled</p>'
 

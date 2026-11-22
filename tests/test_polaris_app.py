@@ -24,7 +24,7 @@ sys.path.insert(0, str(ROOT))
 import app.engine as engine
 import app.polaris as polaris
 import app.streaming as streaming
-from app import diagnostics, issues
+from app import diagnostics, identity, issues
 from app.answer_format import app_messages
 from app.chat_memory import ChatStore
 from app.engine import OllamaInfo
@@ -1577,6 +1577,80 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertEqual([(s["model"], s["model_key"]) for s in self.seen], [("thesis-student", "distilled")])
         # The base model is still what a new session starts on.
         self.assertEqual(engine.BASE_MODEL, "qwen3.5:2b")
+
+    # ---------- the app's own answer to "who are you" ----------
+
+    def _builtin_cards(self):
+        return [m.value for m in self.at.markdown if m.value in (identity.POLARIS_ANSWER, self._stock())]
+
+    @staticmethod
+    def _stock(name="Qwen3.5:2B"):
+        return (f"This is stock {name} with no fine-tuning or distillation, running in Polaris, the offline lab "
+                "assistant by Clyde Heinrich Lontoc and Jebby Cruz of Caraga State University.")
+
+    def test_the_student_says_who_it_is_without_asking_ollama(self):
+        # The student isn't even installed: the answer is the app's, so nothing is checked, retrieved or streamed.
+        with patch("app.models.installed_names", return_value=frozenset({"qwen3.5:2b"})), \
+                patch("app.engine.index_ok", side_effect=AssertionError("index checked")):
+            self.at.run()
+            self.at.selectbox(key="model-select").set_value("thesis-student").run()
+            self._ask("Who are you?", "landing")
+        self.assertEqual((self.calls, _FakeStream.made), ([], []))
+        self.assertEqual(self.at.error, [])
+        self.assertEqual([m.value for m in self.at.markdown if m.value == identity.POLARIS_ANSWER],
+                         [identity.POLARIS_ANSWER])
+        html = self._html()
+        self.assertIn('<p class="builtin-note">built-in answer</p>', html)
+        self.assertIn('<span class="mode">+RAG+CoT</span>', html)
+        self.assertNotIn('class="metrics"', html)
+        self.assertEqual(self.at.session_state["run_records"], [])
+        message = self.at.session_state["messages"][-1]
+        self.assertEqual(message, {"role": "assistant", "builtin": [
+            {"mode": "full", "model": "thesis-student", "text": identity.POLARIS_ANSWER}]})
+        cid = self._chat_id()
+        self.assertEqual(self.store.load_chat(cid).messages[-1], message)
+        # A replay and a reopened chat draw the same card.
+        for reopen in (lambda: self.at.run(), lambda: (self.at.button(key="new-chat").click().run(),
+                                                         self.at.button(key=f"hist-open-{cid}").click().run())):
+            reopen()
+            self.assertEqual([m.value for m in self.at.markdown if m.value == identity.POLARIS_ANSWER],
+                             [identity.POLARIS_ANSWER])
+            self.assertIn('<p class="builtin-note">built-in answer</p>', self._html())
+
+    def test_the_stock_model_says_it_is_stock_in_every_mode(self):
+        self.at.run()
+        self.at.radio(key="mode-pick").set_value("base").run()
+        self._ask("what model are you running?", "landing")
+        self.at.radio(key="mode-pick").set_value("full").run()
+        self._ask("Hey Polaris, who made you?")
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self._builtin_cards(), [self._stock(), self._stock()])
+        self.assertNotIn(identity.POLARIS_ANSWER, self._html())
+
+    def test_compare_gives_each_side_its_own_identity_card(self):
+        with patch("app.models.installed_names", return_value=frozenset({"qwen3.5:2b", "thesis-student:latest"})):
+            self.at.run()
+            self.at.toggle(key="compare").set_value(True).run()
+            self.at.selectbox(key="cmp-right-config").set_value("thesis-student|full").run()
+            self._ask("who are you", "landing")
+        self.assertEqual(self.calls, [])
+        self.assertEqual(self._builtin_cards(), [self._stock(), identity.POLARIS_ANSWER])
+        html = self._html()
+        self.assertEqual(html.count('<p class="builtin-note">built-in answer</p>'), 2)
+        self.assertIn('<span class="model">thesis-student</span>', html)
+
+    def test_near_miss_questions_still_go_to_the_model(self):
+        self.at.run()
+        self._ask("what model is my CPU", "landing")
+        self._ask("who made ls")
+        self.assertEqual([c["question"] for c in self.calls], ["what model is my CPU", "who made ls"])
+        self.assertNotIn("builtin-note", self._html())
+
+    def test_an_identity_turn_stays_out_of_the_next_questions_context(self):
+        self.at.run()
+        self._ask("who are you", "landing")
+        self._ask("extract a .tar.gz file")
+        self.assertEqual(self.seen[-1]["context"], None)
 
     def test_the_env_override_names_the_student(self):
         with patch("app.engine.DISTILLED_MODEL", "my-student:q4"):
