@@ -978,7 +978,7 @@ class LoaderAndNamingTests(unittest.TestCase):
         # The portals carry .streamlit/config.toml's dark base on their wrappers, and Streamlit 1.45's select menu is
         # ul[data-testid=stSelectboxVirtualDropdown], not ul[role=listbox]: Light opened a dark model menu.
         rules = []
-        for block in re.sub(r"/\*.*?\*/", "", style_path().read_text(encoding="utf-8"), flags=re.S).split("}"):
+        for block in re.sub(r"/\*.*?\*/", "", style_path().read_text(encoding="utf-8"), flags=re.DOTALL).split("}"):
             if "{" in block:
                 selectors, body = block.rsplit("{", 1)
                 rules += [(s, body) for s in re.split(r",(?![^(]*\))", " ".join(selectors.split()))]
