@@ -1172,8 +1172,9 @@ def _clear_dialog():
 def _render_system_check(status):
     """The system check page in place of the chat: each line shows its loading state, runs, then resolves to pass,
     warn or fail with what it measured. It runs when opened and on Run again; any other rerun redraws the last result
-    instead of loading the model again."""
-    run = st.session_state.pop("syscheck_run", False) or "syscheck" not in st.session_state
+    instead of loading the model again. A check cut short by a click (a theme, a tab) runs again on the next run
+    rather than showing the last finished one as if it were new."""
+    run = st.session_state.get("syscheck_run", False) or "syscheck" not in st.session_state
     with st.container(key="syscheck"):
         head = st.empty()
         lines = st.container(key="diag-lines")
@@ -1193,6 +1194,7 @@ def _render_system_check(status):
                 probes.extend(done)
             st.session_state.syscheck = {"probes": probes, "total": time.perf_counter() - started,
                                          "at": time.strftime("%H:%M:%S")}
+            st.session_state.pop("syscheck_run", None)
             # The warm-up just loaded the picked model, so the rail can say it's ready.
             st.session_state.warmed = any(p.label == "Warm-up" and p.status != diagnostics.FAIL for p in probes)
         last = st.session_state.syscheck

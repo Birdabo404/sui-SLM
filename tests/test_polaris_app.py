@@ -1812,6 +1812,32 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertNotIn("diag-title", html)
         self.assertIn(">extract a .tar.gz file<", html)
 
+    def test_a_system_check_cut_short_runs_again_instead_of_showing_the_last_one(self):
+        real_step = diagnostics.run_step
+        with patch.object(diagnostics, "PACE_S", 0):
+            self.at.run()
+            self.at.button(key="syscheck-open").click().run()
+            first = self.at.session_state["syscheck"]
+            steps = []
+
+            def stopped_at_the_third(step):
+                # A click on a theme or a tab ends the run at the next st call, as StopException does here.
+                steps.append(step)
+                if len(steps) == 3:
+                    raise StopException()
+                return real_step(step)
+
+            with patch.object(diagnostics, "run_step", side_effect=stopped_at_the_third):
+                self.at.button(key="syscheck-again").click().run()
+            self.assertIs(self.at.session_state["syscheck"], first)
+            self.at.run()
+        self.assertFalse(self.at.exception)
+        self.assertIsNot(self.at.session_state["syscheck"], first)
+        self.assertNotIn("syscheck_run", self.at.session_state)
+        self.assertEqual(len(self._diag_lines()), 17)
+        self.at.run()
+        self.assertEqual(len(self._diag_lines()), 17)
+
     def test_settings_opens_the_system_check(self):
         with patch.object(diagnostics, "PACE_S", 0):
             self.at.run()
