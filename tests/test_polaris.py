@@ -8,7 +8,9 @@ import json
 import math
 import os
 import re
+import shutil
 import socket
+import subprocess
 import sys
 import tempfile
 import threading
@@ -43,6 +45,7 @@ from app.engine import (
 )
 from app.polaris import (
     COPY_FEEDBACK_ID,
+    FOLLOW_ID,
     MONITOR_SWITCH,
     RAM_TITLE,
     REASONING_LABEL,
@@ -53,6 +56,8 @@ from app.polaris import (
     copy_feedback_html,
     copy_feedback_path,
     finished_runs,
+    follow_html,
+    follow_path,
     hits_from_chart,
     last_runs,
     model_choice_label,
@@ -1078,14 +1083,16 @@ class CopyFeedbackTests(unittest.TestCase):
         self.assertIn('button.title = "Copy to clipboard";', js)
         self.assertIn('live.setAttribute("aria-live", "polite");', js)
 
-    def test_the_loader_adds_the_script_to_the_page_once(self):
-        html = copy_feedback_html()
-        self.assertTrue(html.startswith("<script>") and html.endswith("</script>"))
-        self.assertEqual(html.count("</script>"), 1)
-        self.assertIn("window.parent.document", html)
-        self.assertIn(f"if(doc.getElementById({json.dumps(COPY_FEEDBACK_ID)}))return;", html)
-        body = html.split("s.textContent=", 1)[1].split(";doc.head.appendChild", 1)[0]
-        self.assertEqual(json.loads(body.replace("<\\/", "</")), copy_feedback_path().read_text(encoding="utf-8"))
+    def test_the_loader_adds_each_script_to_the_page_once(self):
+        for html, script_id, path in ((copy_feedback_html(), COPY_FEEDBACK_ID, copy_feedback_path()),
+                                      (follow_html(), FOLLOW_ID, follow_path())):
+            with self.subTest(script=path.name):
+                self.assertTrue(html.startswith("<script>") and html.endswith("</script>"))
+                self.assertEqual(html.count("</script>"), 1)
+                self.assertIn("window.parent.document", html)
+                self.assertIn(f"if(doc.getElementById({json.dumps(script_id)}))return;", html)
+                body = html.split("s.textContent=", 1)[1].split(";doc.head.appendChild", 1)[0]
+                self.assertEqual(json.loads(body.replace("<\\/", "</")), path.read_text(encoding="utf-8"))
 
     def test_the_copied_state_is_one_rule_set_for_both_themes(self):
         css = style_path().read_text(encoding="utf-8")
@@ -1099,7 +1106,118 @@ class CopyFeedbackTests(unittest.TestCase):
         self.assertIn('[data-testid="stCodeCopyButton"][data-copied]::after{content:"Copied"}', css)
         self.assertIn("mask:var(--check)", css)
         self.assertIn("M3 8.5l3 3 7-7", css)
-        self.assertIn('[data-testid="stVerticalBlockBorderWrapper"]:has(> .st-key-copy-feedback){display:none}', css)
+        self.assertIn('[data-testid="stVerticalBlockBorderWrapper"]:has(> .st-key-page-scripts){display:none}', css)
+
+
+# Drives follow.js in Node against the few DOM pieces it touches: Streamlit's main section (scrollTop clamps to
+# the content and a change queues a scroll event, as in a browser), the dock, the marker a send raises, and one
+# frame per requestAnimationFrame.
+FOLLOW_HARNESS = r"""
+const factory = require(process.argv[1]);
+let frames = [], scrolls = [], observer = null, marker = false, button = null;
+const main = {
+  _t: 0, _h: 800, clientHeight: 800, handler: null,
+  get scrollHeight() { return this._h; },
+  get scrollTop() { return this._t; },
+  set scrollTop(v) {
+    const t = Math.max(0, Math.min(v, this._h - this.clientHeight));
+    if (t !== this._t) { this._t = t; scrolls.push(1); }
+  },
+  addEventListener(type, f) { this.handler = f; },
+  removeEventListener() { this.handler = null; },
+  getBoundingClientRect() { return { left: 200, width: 800, top: 0 }; },
+};
+const dock = { getBoundingClientRect() { return { left: 240, width: 720, top: 700 }; } };
+const doc = {
+  body: { appendChild(b) { button = b; } },
+  scrollingElement: null,
+  createElement() { return { style: {}, hidden: false, addEventListener(type, f) { this.onclick = f; } }; },
+  querySelector(sel) {
+    if (sel === ".polaris-generating") return marker ? {} : null;
+    if (sel === '[data-testid="stMain"]') return main;
+    if (sel === ".st-key-composer-dock") return dock;
+    return null;
+  },
+};
+const win = {
+  innerHeight: 800,
+  requestAnimationFrame(f) { frames.push(f); },
+  addEventListener() {},
+  MutationObserver: class { constructor(cb) { observer = cb; } observe() {} },
+};
+function settle() {
+  while (frames.length || scrolls.length) {
+    const f = frames; frames = []; f.forEach((g) => g());
+    const s = scrolls; scrolls = []; s.forEach(() => main.handler && main.handler());
+  }
+}
+function grow(px) { main._h += px; observer(); settle(); }
+function user(top) { main.scrollTop = top; settle(); }
+const gap = () => main._h - main._t - main.clientHeight;
+const out = {};
+factory(win, doc); settle();
+grow(1200); out.no_send = main._t;
+marker = true; grow(40); out.send_gap = gap();
+grow(300); grow(300); out.stream_gap = gap();
+main._h -= 200; main.scrollTop = main._t; settle(); grow(250); out.after_shrink_gap = gap();
+const before = main._t; user(before - 300); const held = main._t;
+grow(300); grow(300); out.held = main._t === held; out.held_gap = gap(); out.jump_shown = !button.hidden;
+out.jump_left = button.style.left; out.jump_bottom = button.style.bottom;
+user(main._t + gap() - 60); grow(300); out.resumed_gap = gap(); out.jump_hidden_again = button.hidden;
+user(main._t - 30); grow(300); out.small_up_held = gap() > 0;
+button.onclick(); settle(); out.clicked_gap = gap();
+grow(100); out.clicked_stream_gap = gap();
+marker = false; grow(80); out.last_batch_gap = gap();
+grow(500); out.after_end_gap = gap(); out.jump_after_end = !button.hidden;
+console.log(JSON.stringify(out));
+"""
+
+
+class FollowTests(unittest.TestCase):
+    """While a sent question is answered the thread follows the stream; the reader scrolling up stops it."""
+
+    def test_the_script_follows_streamlits_main_section_only_while_a_send_is_answered(self):
+        js = follow_path().read_text(encoding="utf-8")
+        self.assertIn("const SCROLLER = '[data-testid=\"stMain\"]';", js)
+        self.assertIn('const LIVE = ".polaris-generating";', js)
+        self.assertIn("const NEAR_PX = 80;", js)
+        self.assertNotIn("window.scroll", js)
+        self.assertNotIn("scrollIntoView", js)
+
+    def test_the_jump_button_is_fixed_compact_and_themed(self):
+        css = style_path().read_text(encoding="utf-8")
+        rule = css.split(".polaris-jump{", 1)[1].split("}", 1)[0]
+        for part in ("position:fixed", "font:400 var(--fs-ui)", "background:var(--c-bg)", "var(--c-line-strong)"):
+            self.assertIn(part, rule)
+        self.assertIn(".polaris-jump[hidden]{display:none}", css)
+        self.assertNotIn("daylight", rule)
+
+    def test_the_view_follows_a_send_and_lets_the_reader_scroll_away(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node not installed")
+        run = subprocess.run([node, "-e", FOLLOW_HARNESS, str(follow_path())], capture_output=True, text=True,
+                             timeout=30, check=False)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        out = json.loads(run.stdout)
+        # Content that grows without a send (a tab switch, Settings, the system check) leaves the view alone.
+        self.assertEqual(out["no_send"], 0)
+        # The send jumps to the bottom, every token keeps it there, and a redraw that shrinks the page doesn't count.
+        self.assertEqual((out["send_gap"], out["stream_gap"], out["after_shrink_gap"]), (0, 0, 0))
+        # Scrolled up mid-stream: the view stays put and the button shows over the dock.
+        self.assertTrue(out["held"])
+        self.assertGreater(out["held_gap"], 80)
+        self.assertTrue(out["jump_shown"])
+        self.assertEqual((out["jump_left"], out["jump_bottom"]), ("600px", "108px"))
+        # Back within 80 px of the bottom, it follows again; any move up, however small, stops it.
+        self.assertEqual(out["resumed_gap"], 0)
+        self.assertTrue(out["jump_hidden_again"])
+        self.assertTrue(out["small_up_held"])
+        self.assertEqual((out["clicked_gap"], out["clicked_stream_gap"]), (0, 0))
+        # The answer's last change still lands in view; after that the page is the reader's again.
+        self.assertEqual(out["last_batch_gap"], 0)
+        self.assertEqual(out["after_end_gap"], 500)
+        self.assertFalse(out["jump_after_end"])
 
 
 class ReasoningStyleTests(unittest.TestCase):

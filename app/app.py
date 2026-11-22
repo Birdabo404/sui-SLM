@@ -102,6 +102,7 @@ from app.polaris import (
     evidence_block_html,
     fixed_response_note_html,
     flags_html,
+    follow_html,
     header_band_html,
     history_error_text,
     history_note_html,
@@ -339,8 +340,9 @@ def _show_sources(sources):
 
 def _inject_css():
     st.markdown(f"<style>{injected_css()}</style>", unsafe_allow_html=True)
-    with st.container(key="copy-feedback"):
+    with st.container(key="page-scripts"):
         components.html(copy_feedback_html(), height=0)
+        components.html(follow_html(), height=0)
 
 
 # Tabs open at once; older ones stay one click away in History.

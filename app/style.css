@@ -380,8 +380,16 @@ p.stopped{margin:0;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-
   -webkit-mask:var(--check) center/contain no-repeat;mask:var(--check) center/contain no-repeat}
 [data-testid="stCodeCopyButton"][data-copied]::after{content:"Copied"}
 .polaris-copy-live{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-/* the zero-height iframe that loads copy-feedback.js; a hidden iframe still runs its script */
-[data-testid="stVerticalBlockBorderWrapper"]:has(> .st-key-copy-feedback){display:none}
+/* the zero-height iframes that load copy-feedback.js and follow.js; a hidden iframe still runs its script */
+[data-testid="stVerticalBlockBorderWrapper"]:has(> .st-key-page-scripts){display:none}
+/* follow.js shows this over the dock while a stream runs below the reader's place; fixed, so nothing shifts */
+.polaris-jump{position:fixed;z-index:120;transform:translateX(-50%);display:inline-flex;align-items:center;gap:var(--s-1);
+  height:28px;padding:0 var(--s-3);border:1px solid var(--c-line-strong);border-radius:var(--r-pill);background:var(--c-bg);
+  color:var(--c-text-2);font:400 var(--fs-ui)/1 var(--f-ui);cursor:pointer;
+  transition-property:background-color,color;transition-duration:var(--dur-micro);transition-timing-function:var(--ease-out)}
+.polaris-jump::before{content:"↓"/"";color:var(--c-text-3)}
+.polaris-jump:hover{background:var(--c-raised);color:var(--c-text)}
+.polaris-jump[hidden]{display:none}
 /* A command under a numbered step sits on the step's text, not under its number. */
 :is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stElementContainer"]:has(ol) ~ [data-testid="stElementContainer"]:has([data-testid="stCode"]){padding-left:1.55em}
 :is([class*="st-key-answer"],[class*="st-key-live-"]) [data-testid="stElementContainer"]:has(.cmd-loose) ~ [data-testid="stElementContainer"]:has([data-testid="stCode"]){padding-left:0}

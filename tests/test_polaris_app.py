@@ -2116,12 +2116,13 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertIn("Replace &lt;username> and run `id <username>`.", [m.value for m in self.at.markdown])
         self.assertEqual(self.at.expander, [])
 
-    def test_the_copy_feedback_loader_is_on_every_page_once_including_compare(self):
+    def test_the_page_script_loaders_are_on_every_page_once_including_compare(self):
         def loaders():
-            return [e for e in self.at.get("iframe") if e.proto.srcdoc == polaris.copy_feedback_html()]
+            return [e.proto.srcdoc for e in self.at.get("iframe")]
 
+        scripts = [polaris.copy_feedback_html(), polaris.follow_html()]
         self.at.run()
-        self.assertEqual(len(loaders()), 1)
+        self.assertEqual(loaders(), scripts)
 
         def texts(question, mode):
             return SUDO_FULL if mode == "cot" else BASE_STEPS
@@ -2129,10 +2130,38 @@ class PolarisRunLoopTests(unittest.TestCase):
         self._compare_base_vs_cot()
         with self._answers(texts):
             self._ask(SUDO_QUESTION, "landing")
-        self.assertEqual(len(loaders()), 1)
+        self.assertEqual(loaders(), scripts)
         self.assertEqual(len(self.at.code), 5)
         self.at.radio(key="theme-rail-polaris").set_value("light").run()
-        self.assertEqual(len(loaders()), 1)
+        self.assertEqual(loaders(), scripts)
+
+    def test_only_a_send_raises_the_marker_the_thread_follows(self):
+        # follow.js pins the thread to the bottom while .polaris-generating is up, so it must go up for every
+        # question sent (one card, compare, the identity response) and never for anything else.
+        self.at.run()
+        self._ask("extract a .tar.gz file", "landing")
+        cid = self._chat_id()
+        self.assertEqual(self._generating_args(), [False, True, False])
+        self.flags.reset_mock()
+        self._ask("who are you")
+        self.assertEqual(self._generating_args(), [True, False])
+        for step in (
+            lambda: self.at.button(key="new-chat").click().run(),
+            lambda: self.at.button(key=f"tab-open-{cid}").click().run(),
+            lambda: self.at.button(key="settings").click().run(),
+            lambda: self.at.radio(key="theme-rail-polaris").set_value("light").run(),
+            lambda: self.at.button(key="syscheck-open").click().run(),
+        ):
+            self.flags.reset_mock()
+            step()
+            self.assertFalse(self.at.exception)
+            self.assertNotIn(True, self._generating_args())
+            self.assertNotIn("polaris-generating", self._flags())
+        self.at.button(key="new-chat").click().run()
+        self.at.toggle(key="compare").set_value(True).run()
+        self.flags.reset_mock()
+        self._ask("extract a .tar.gz file", "landing")
+        self.assertEqual(self._generating_args(), [True, False])
 
     def test_compare_folds_reasoning_on_the_side_that_wrote_it(self):
         texts = lambda question, mode: SUDO_FULL if mode == "cot" else "Use `sudo adduser <username>`."  # noqa: E731

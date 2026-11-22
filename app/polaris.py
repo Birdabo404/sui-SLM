@@ -1677,18 +1677,33 @@ def copy_feedback_path():
 COPY_FEEDBACK_ID = "polaris-copy-feedback"
 
 
-def copy_feedback_html():
-    """A zero-height iframe's document that adds copy-feedback.js to the page once. Scripts in st.markdown never
+def follow_path():
+    return Path(__file__).with_name("follow.js")
+
+
+FOLLOW_ID = "polaris-follow"
+
+
+def page_script_html(path, script_id):
+    """A zero-height iframe's document that adds the script at path to the page once. Scripts in st.markdown never
     run; a components.html iframe shares the page's origin, so its script can add one to the page itself, where it
     keeps working after Streamlit redraws or drops the iframe."""
-    source = json.dumps(copy_feedback_path().read_text(encoding="utf-8")).replace("</", "<\\/")
+    source = json.dumps(path.read_text(encoding="utf-8")).replace("</", "<\\/")
     return (
         "<script>(function(){const doc=window.parent.document;"
-        f"if(doc.getElementById({json.dumps(COPY_FEEDBACK_ID)}))return;"
+        f"if(doc.getElementById({json.dumps(script_id)}))return;"
         "const s=doc.createElement('script');"
-        f"s.id={json.dumps(COPY_FEEDBACK_ID)};s.textContent={source};doc.head.appendChild(s);"
+        f"s.id={json.dumps(script_id)};s.textContent={source};doc.head.appendChild(s);"
         "})();</script>"
     )
+
+
+def copy_feedback_html():
+    return page_script_html(copy_feedback_path(), COPY_FEEDBACK_ID)
+
+
+def follow_html():
+    return page_script_html(follow_path(), FOLLOW_ID)
 
 
 def injected_css():
