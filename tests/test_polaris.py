@@ -1033,20 +1033,25 @@ class IdentityTests(unittest.TestCase):
             "I'm Polaris, an offline Linux lab assistant. I run Thesis-Student, a Qwen3.5-2B model fine-tuned through "
             "knowledge distillation by Clyde Heinrich Lontoc and Jebby Cruz of Caraga State University.",
         )
-        self.assertEqual(
-            identity.identity_response("thesis-base-q4km", "full"),
-            "I'm Polaris, an offline Linux lab assistant. I run thesis-base-q4km, a Qwen3.5-2B model fine-tuned "
-            "through knowledge distillation by Clyde Heinrich Lontoc and Jebby Cruz of Caraga State University.",
-        )
         self.assertIn("I run my-student, a Qwen3.5-2B model", identity.identity_response("my-student", "full"))
 
     def test_plain_mode_and_the_stock_model_say_stock(self):
         stock = ("I'm Polaris, an offline Linux lab assistant. Right now I'm running the stock Qwen3.5-2B model with no "
                  "fine-tuning, set up by Clyde Heinrich Lontoc and Jebby Cruz of Caraga State University.")
         for model, mode in (("qwen3.5:2b", "base"), ("qwen3.5:2b", "full"), ("qwen3.5:2b", "cot"),
-                            ("thesis-base-q4km", "base")):
+                            ("thesis-student", "base")):
             with self.subTest(model=model, mode=mode):
                 self.assertEqual(identity.identity_response(model, mode), stock)
+
+    def test_the_q4km_base_says_it_is_the_stock_model_quantised_in_every_mode(self):
+        quantised = ("I'm Polaris, an offline Linux lab assistant. Right now I'm running the stock Qwen3.5-2B model "
+                     "(Q4_K_M quantised, no fine-tuning), set up by Clyde Heinrich Lontoc and Jebby Cruz of Caraga "
+                     "State University.")
+        for mode in ("base", "cot", "rag", "full"):
+            with self.subTest(mode=mode):
+                text = identity.identity_response("thesis-base-q4km", mode)
+                self.assertEqual(text, quantised)
+                self.assertNotIn("fine-tuned", text)
 
     def test_only_the_app_uses_it(self):
         for path in (ROOT / "shared", ROOT / "rag", ROOT / "eval", ROOT / "kd"):

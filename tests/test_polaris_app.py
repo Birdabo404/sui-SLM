@@ -1646,7 +1646,7 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertEqual(self._identity_cards(), [identity.STOCK_RESPONSE, identity.STOCK_RESPONSE])
         self.assertNotIn("Thesis-Student", self._html())
 
-    def test_another_fine_tuned_model_is_named_and_plain_mode_says_stock(self):
+    def test_the_q4km_base_says_it_is_the_stock_model_quantised(self):
         self.at.run()
         self.at.selectbox(key="model-select").set_value("thesis-base-q4km").run()
         self.at.radio(key="mode-pick").set_value("cot").run()
@@ -1654,9 +1654,10 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.at.radio(key="mode-pick").set_value("base").run()
         self._ask("who are you")
         self.assertEqual(self.calls, [])
-        named = identity.FINE_TUNED_RESPONSE.format(model="thesis-base-q4km")
-        self.assertEqual([m.value for m in self.at.markdown if m.value in (named, identity.STOCK_RESPONSE)],
-                         [named, identity.STOCK_RESPONSE])
+        quantised = identity.QUANTISED_STOCK_RESPONSE
+        self.assertEqual([m.value for m in self.at.markdown if m.value in (quantised, identity.STOCK_RESPONSE,
+                                                                             self.STUDENT)], [quantised, quantised])
+        self.assertNotIn("fine-tuned", self._html())
 
     def test_compare_gives_each_side_its_own_identity_card(self):
         with patch("app.models.installed_names", return_value=frozenset({"qwen3.5:2b", "thesis-student:latest"})):

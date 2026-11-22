@@ -8,11 +8,15 @@ The patterns match the whole question, so a question that only mentions a model 
 import re
 
 from app.engine import BASE_MODEL
-from app.models import STUDENT
+from app.models import MATCHED_BASE, STUDENT
 
 STOCK_RESPONSE = (
     "I'm Polaris, an offline Linux lab assistant. Right now I'm running the stock Qwen3.5-2B model with no "
     "fine-tuning, set up by Clyde Heinrich Lontoc and Jebby Cruz of Caraga State University."
+)
+QUANTISED_STOCK_RESPONSE = (
+    "I'm Polaris, an offline Linux lab assistant. Right now I'm running the stock Qwen3.5-2B model (Q4_K_M "
+    "quantised, no fine-tuning), set up by Clyde Heinrich Lontoc and Jebby Cruz of Caraga State University."
 )
 FINE_TUNED_RESPONSE = (
     "I'm Polaris, an offline Linux lab assistant. I run {model}, a Qwen3.5-2B model fine-tuned through knowledge "
@@ -53,8 +57,11 @@ def asks_identity(question):
 
 
 def identity_response(model_name, mode):
-    """The fixed response for the picked model and mode: the stock text in PLAIN (the `base` mode) or on the stock
-    default model, otherwise the fine-tuned text naming the model that runs."""
+    """The fixed response for the picked model and mode. The Q4_K_M base is the stock model quantised, so it says so
+    in every mode; PLAIN (the `base` mode) and the stock default model get the stock text; only the KD student,
+    named as it is, gets the fine-tuned text."""
+    if model_name == MATCHED_BASE:
+        return QUANTISED_STOCK_RESPONSE
     if mode == "base" or model_name == BASE_MODEL:
         return STOCK_RESPONSE
     return FINE_TUNED_RESPONSE.format(model=MODEL_NAMES.get(model_name, model_name))
