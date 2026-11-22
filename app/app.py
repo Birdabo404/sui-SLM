@@ -134,6 +134,7 @@ from app.polaris import (
     loose_commands_html,
     source_line_html,
     stopped_html,
+    tabs_script_html,
     theme_or_default,
     thinking_html,
     thinking_label,
@@ -343,10 +344,13 @@ def _inject_css():
     with st.container(key="page-scripts"):
         components.html(copy_feedback_html(), height=0)
         components.html(follow_html(), height=0)
+        components.html(tabs_script_html(), height=0)
 
 
-# Tabs open at once; older ones stay one click away in History.
-MAX_TABS = 6
+# Tabs open at once (the strip scrolls past what fits); older ones stay one click away in History. A new session
+# opens the most recent few.
+MAX_TABS = 32
+RESTORED_TABS = 5
 
 
 def _init_session():
@@ -647,7 +651,7 @@ def _recent_chat_ids():
         chats = ChatStore().list_chats()
     except (sqlite3.Error, OSError):
         return []
-    return [c.chat_id for c in chats[: MAX_TABS - 1]][::-1]
+    return [c.chat_id for c in chats[:RESTORED_TABS]][::-1]
 
 
 def _new_chat():
@@ -761,8 +765,8 @@ def _visible_tabs(chats, current):
 
 
 def _render_tabs():
-    """Browser-style tabs over the thread: one per open chat, a draft tab for a new one, History and New on the
-    right. Only the open chat's thread is ever drawn."""
+    """Browser-style tabs over the thread: one per open chat, a draft tab for a new one, New right after them and
+    History at the right end. Only the open chat's thread is ever drawn."""
     store = ChatStore()
     try:
         chats = store.list_chats()
@@ -780,10 +784,10 @@ def _render_tabs():
                 _tab(cid, titles.get(cid) or "Untitled", active=cid == current)
             if current is None:
                 _tab(None, "New chat", active=True, closable=bool(tabs))
+        st.button("New chat", key="new-chat", icon=":material/add:", help="New chat", on_click=_new_chat)
         with st.container(key="tab-history"):
             with st.popover("History", icon=":material/history:", help=f"All saved chats ({len(chats)})"):
                 _history_list(chats, store, failed)
-        st.button("New chat", key="new-chat", icon=":material/add:", help="New chat", on_click=_new_chat)
 
 
 def _tab(chat_id, title, active, closable=True):

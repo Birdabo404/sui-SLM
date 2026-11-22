@@ -45,6 +45,7 @@ except ImportError:
     streamlit = None
 
 APP = str(ROOT / "app" / "app.py")
+TAB_CAP = int(re.search(r"^MAX_TABS = (\d+)$", Path(APP).read_text(encoding="utf-8"), re.MULTILINE).group(1))
 
 
 HIT = {"source": "tldr", "title": "tar", "path": "tldr/tar.md", "dense": 0.7, "rrf": 0.03, "bm25": 7.0, "text": "tar"}
@@ -1786,8 +1787,30 @@ class PolarisRunLoopTests(unittest.TestCase):
 
         for cid in ids[1:4]:
             self.at.button(key=f"hist-open-{cid}").click().run()
-        self.assertEqual(len(self._tab_keys()), 6)
+        self.assertEqual(self._tab_keys(), [f"tab-open-{cid}" for cid in ids[4:] + ids[:4]])
         self.assertEqual(self._chat_id(), ids[3])
+
+    def test_tabs_are_capped_by_dropping_the_oldest_and_keep_the_open_chat(self):
+        ids = self._seed(TAB_CAP + 2)
+        self.at.session_state["tabs"] = ids[:-1]
+        self.at.run()
+        # The new-chat tab takes one of the places.
+        self.assertEqual(self._tab_keys(), [f"tab-open-{cid}" for cid in ids[-TAB_CAP:-1]] + ["tab-open-draft"])
+        self.at.button(key=f"hist-open-{ids[0]}").click().run()
+        self.assertFalse(self.at.exception)
+        keys = self._tab_keys()
+        self.assertEqual(len(keys), TAB_CAP)
+        self.assertEqual(keys[-1], f"tab-open-{ids[0]}")
+        self.assertEqual(keys[0], f"tab-open-{ids[-TAB_CAP]}")
+
+    def test_new_chat_sits_right_after_the_tabs_and_history_after_it(self):
+        self._seed(3)
+        self.at.run()
+        keys = [b.key for b in self.at.button]
+        plus = keys.index("new-chat")
+        self.assertTrue(all(k.startswith(("tab-open-", "tab-close-")) for k in keys[:plus]))
+        self.assertEqual([k for k in keys[:plus] if k.startswith("tab-open-")], self._tab_keys())
+        self.assertTrue(keys[plus + 1].startswith("hist-"))
 
     def test_deleting_the_open_chat_closes_its_tab(self):
         self.at.run()
@@ -2120,7 +2143,7 @@ class PolarisRunLoopTests(unittest.TestCase):
         def loaders():
             return [e.proto.srcdoc for e in self.at.get("iframe")]
 
-        scripts = [polaris.copy_feedback_html(), polaris.follow_html()]
+        scripts = [polaris.copy_feedback_html(), polaris.follow_html(), polaris.tabs_script_html()]
         self.at.run()
         self.assertEqual(loaders(), scripts)
 

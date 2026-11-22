@@ -724,13 +724,24 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
   padding:0;container:tabbar / inline-size}
 :root:has([data-testid="stSidebar"][aria-expanded="true"]) .st-key-tabbar{left:calc(264px + var(--s-4))}
 .st-key-tabbar::before{content:"";position:fixed;top:0;left:0;right:0;z-index:-1;height:48px;background:var(--c-bg);border-bottom:1px solid var(--c-line);pointer-events:none}
-.st-key-tabbar > :first-child{flex:1 1 auto;min-width:0}
+/* The strip is as wide as its tabs, so + follows the last one; past the room left it scrolls (tabs.js adds the
+   chevrons and keeps the open tab in view) and History stays at the right end. */
+.st-key-tabbar > :first-child{flex:0 1 auto;width:auto!important;min-width:0}
 /* While a run is still drawing, Streamlit keeps the last run's leftovers under reused nodes (the landing composer's
    row once surfaced inside History). The strip only ever shows its own three parts. */
 .st-key-tabbar > :nth-child(n+4),.st-key-tab-history > :not([data-testid="stPopover"]),
 .st-key-tabs > :not(:has(> :is([class*="st-key-tab-on-"],[class*="st-key-tab-off-"]))){display:none!important}
-.st-key-tabs{flex-direction:row;flex-wrap:nowrap;align-items:flex-end;gap:2px;overflow:hidden}
-.st-key-tabs > [data-testid="stVerticalBlockBorderWrapper"]{flex:0 1 208px;min-width:96px}
+.st-key-tabs{flex-direction:row;flex-wrap:nowrap;align-items:flex-end;gap:2px;overflow:auto hidden;overscroll-behavior-x:contain;
+  scrollbar-width:none;scroll-padding-inline:32px}
+.st-key-tabs::-webkit-scrollbar{display:none}
+.st-key-tabs[data-more-left]{-webkit-mask-image:linear-gradient(to right,transparent 8px,#000 40px);mask-image:linear-gradient(to right,transparent 8px,#000 40px)}
+.st-key-tabs[data-more-right]{-webkit-mask-image:linear-gradient(to left,transparent 8px,#000 40px);mask-image:linear-gradient(to left,transparent 8px,#000 40px)}
+.st-key-tabs[data-more-left][data-more-right]{-webkit-mask-image:linear-gradient(to right,transparent 8px,#000 40px,#000 calc(100% - 40px),transparent calc(100% - 8px));
+  mask-image:linear-gradient(to right,transparent 8px,#000 40px,#000 calc(100% - 40px),transparent calc(100% - 8px))}
+/* Tabs share the strip evenly from 208px down to 88px (the open one keeps 120px for its title and x), then stop
+   shrinking and the strip scrolls. The width also sets what the strip asks for, so + sits right after them. */
+.st-key-tabs > [data-testid="stVerticalBlockBorderWrapper"]{flex:0 1 208px;width:208px!important;min-width:88px;container:tab / inline-size}
+.st-key-tabs > [data-testid="stVerticalBlockBorderWrapper"]:has(> [class*="st-key-tab-on-"]){min-width:120px}
 :is([class*="st-key-tab-on-"],[class*="st-key-tab-off-"]){position:relative;flex-direction:row;gap:0;height:38px;border-radius:var(--r-md) var(--r-md) 0 0}
 [class*="st-key-tab-on-"]{background:var(--c-surface);box-shadow:inset 1px 0 var(--c-line),inset -1px 0 var(--c-line),inset 0 1px var(--c-line);margin-bottom:-9px;height:47px;padding-bottom:9px}
 :is([class*="st-key-tab-on-"],[class*="st-key-tab-off-"]) [class*="st-key-tab-open-"]{flex:1 1 auto;min-width:0}
@@ -746,9 +757,15 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 [class*="st-key-tab-close-"] button p{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 [class*="st-key-tab-close-"] button [data-testid="stIconMaterial"]{font-size:16px}
 [class*="st-key-tab-close-"] button:hover{background:var(--c-raised);color:var(--c-text)}
-[class*="st-key-tab-off-"] [class*="st-key-tab-close-"] button{opacity:0}
-[class*="st-key-tab-off-"]:is(:hover,:focus-within) [class*="st-key-tab-close-"] button{opacity:1}
-@media (hover:none){[class*="st-key-tab-off-"] [class*="st-key-tab-close-"] button{opacity:1}}
+/* like a browser: every tab shows its x until tabs get narrow, then only the open one and the one under the pointer */
+@container tab (max-width:139px){
+  [class*="st-key-tab-off-"] [class*="st-key-tab-open-"] button{padding-right:var(--s-2)}
+  /* the title runs under the hidden x, so the x brings the tab's hover fill with it */
+  [class*="st-key-tab-off-"] [class*="st-key-tab-close-"] button{opacity:0;background:color-mix(in oklch,var(--c-raised) 60%,var(--c-bg))}
+  [class*="st-key-tab-off-"]:is(:hover,:focus-within) [class*="st-key-tab-close-"] button{opacity:1}
+  [class*="st-key-tab-off-"] [class*="st-key-tab-close-"] button:hover{background:var(--c-raised)}
+}
+@media (hover:none){[class*="st-key-tab-off-"] [class*="st-key-tab-close-"] button{opacity:1!important}}
 :is([class*="st-key-tab-open-"],[class*="st-key-tab-close-"]) button:focus-visible{outline-offset:-2px}
 /* the open tab shows a gold dot while its answer streams */
 :root:has(.polaris-generating) [class*="st-key-tab-on-"] [class*="st-key-tab-open-"] button::before{content:"";flex:none;width:6px;height:6px;margin-right:var(--s-2);
@@ -761,12 +778,18 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 :is(.st-key-tab-history [data-testid="stPopoverButton"],.st-key-new-chat button) p{font:500 var(--fs-ui)/1 var(--f-ui)}
 :is(.st-key-tab-history [data-testid="stPopoverButton"],.st-key-new-chat button):hover{background:var(--c-raised);color:var(--c-text)}
 .st-key-new-chat button p{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
-/* Overflow: the strip keeps the open tab and the most recent ones, hiding the oldest as it narrows. History
-   always lists every saved chat, so a hidden tab is one click away. */
-@container tabbar (max-width:1180px){.st-key-tabs > [data-testid="stVerticalBlockBorderWrapper"]:not(:has([class*="st-key-tab-on-"])):nth-last-child(n+5){display:none}}
-@container tabbar (max-width:760px){.st-key-tabs > [data-testid="stVerticalBlockBorderWrapper"]:not(:has([class*="st-key-tab-on-"])):nth-last-child(n+3){display:none}}
+.st-key-tabbar > :has(> .st-key-tab-history){margin-left:auto}
+
+/* tabs.js shows these over the strip's ends while tabs are scrolled out of sight that way */
+.polaris-tab-scroll{position:fixed;z-index:999992;display:flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;
+  border-radius:var(--r-xs);background:var(--c-bg);color:var(--c-text-2);cursor:pointer;
+  transition-property:background-color,color;transition-duration:var(--dur-micro);transition-timing-function:var(--ease-out)}
+.polaris-tab-scroll::before{content:"";width:16px;height:16px;background:currentColor;-webkit-mask:var(--chev) center/contain no-repeat;mask:var(--chev) center/contain no-repeat;
+  --chev:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 6l-6 6 6 6'/%3E%3C/svg%3E")}
+.polaris-tab-scroll[data-dir="right"]::before{transform:scaleX(-1)}
+.polaris-tab-scroll:hover{background:var(--c-raised);color:var(--c-text)}
+.polaris-tab-scroll[hidden]{display:none}
 @container tabbar (max-width:460px){
-  .st-key-tabs > [data-testid="stVerticalBlockBorderWrapper"]:not(:has([class*="st-key-tab-on-"])){display:none}
   .st-key-tab-history [data-testid="stPopoverButton"] [data-testid="stMarkdownContainer"]{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
 }
 

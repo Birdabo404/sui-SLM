@@ -1684,6 +1684,13 @@ def follow_path():
 FOLLOW_ID = "polaris-follow"
 
 
+def tabs_script_path():
+    return Path(__file__).with_name("tabs.js")
+
+
+TABS_SCRIPT_ID = "polaris-tabs"
+
+
 def page_script_html(path, script_id):
     """A zero-height iframe's document that adds the script at path to the page once. Scripts in st.markdown never
     run; a components.html iframe shares the page's origin, so its script can add one to the page itself, where it
@@ -1704,6 +1711,10 @@ def copy_feedback_html():
 
 def follow_html():
     return page_script_html(follow_path(), FOLLOW_ID)
+
+
+def tabs_script_html():
+    return page_script_html(tabs_script_path(), TABS_SCRIPT_ID)
 
 
 def injected_css():

@@ -47,6 +47,7 @@ from app.polaris import (
     COPY_FEEDBACK_ID,
     FOLLOW_ID,
     MONITOR_SWITCH,
+    TABS_SCRIPT_ID,
     RAM_TITLE,
     REASONING_LABEL,
     REASONING_TITLE,
@@ -58,6 +59,8 @@ from app.polaris import (
     finished_runs,
     follow_html,
     follow_path,
+    tabs_script_html,
+    tabs_script_path,
     hits_from_chart,
     last_runs,
     model_choice_label,
@@ -1085,7 +1088,8 @@ class CopyFeedbackTests(unittest.TestCase):
 
     def test_the_loader_adds_each_script_to_the_page_once(self):
         for html, script_id, path in ((copy_feedback_html(), COPY_FEEDBACK_ID, copy_feedback_path()),
-                                      (follow_html(), FOLLOW_ID, follow_path())):
+                                      (follow_html(), FOLLOW_ID, follow_path()),
+                                      (tabs_script_html(), TABS_SCRIPT_ID, tabs_script_path())):
             with self.subTest(script=path.name):
                 self.assertTrue(html.startswith("<script>") and html.endswith("</script>"))
                 self.assertEqual(html.count("</script>"), 1)
@@ -1218,6 +1222,148 @@ class FollowTests(unittest.TestCase):
         self.assertEqual(out["last_batch_gap"], 0)
         self.assertEqual(out["after_end_gap"], 500)
         self.assertFalse(out["jump_after_end"])
+
+
+# Drives tabs.js in Node against a strip of equal 88 px tabs, 2 px apart, starting 100 px from the left. scrollLeft
+# clamps to the content and a change queues a scroll event, as in a browser; one frame per requestAnimationFrame.
+TABS_HARNESS = r"""
+const factory = require(process.argv[1]);
+let frames = [], observer = null, resize = null, n = 5, active = 4, attrs = {};
+const buttons = [], LEFT = 100, TAB = 88, GAP = 2;
+const strip = {
+  _l: 0, clientWidth: 600, on: {},
+  get scrollWidth() { return Math.max(this.clientWidth, n * (TAB + GAP) - GAP); },
+  get scrollLeft() { return Math.min(this._l, this.scrollWidth - this.clientWidth); },
+  set scrollLeft(v) {
+    const l = Math.max(0, Math.min(v, this.scrollWidth - this.clientWidth));
+    if (l !== this._l) { this._l = l; frames.push(() => this.on.scroll()); }
+  },
+  scrollBy(o) { this.scrollLeft = this.scrollLeft + o.left; },
+  addEventListener(type, f) { this.on[type] = f; },
+  setAttribute(k) { attrs[k] = 1; },
+  removeAttribute(k) { delete attrs[k]; },
+  getBoundingClientRect() { return { left: LEFT, right: LEFT + this.clientWidth, top: 10, height: 38 }; },
+  querySelector() { return active === null ? null : { classList: ["x", "st-key-tab-on-c" + active], parentElement: tab(active) }; },
+  querySelectorAll() { return { length: n }; },
+};
+function tab(i) {
+  return { getBoundingClientRect() { const l = LEFT + i * (TAB + GAP) - strip.scrollLeft; return { left: l, right: l + TAB }; } };
+}
+const doc = {
+  body: { appendChild(b) { buttons.push(b); } },
+  createElement() { return { style: {}, attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, addEventListener(t, f) { this.onclick = f; } }; },
+  querySelector(sel) { return sel === ".st-key-tabs" ? strip : null; },
+};
+const win = {
+  requestAnimationFrame(f) { frames.push(f); },
+  addEventListener(type, f) { if (type === "resize") resize = f; },
+  MutationObserver: class { constructor(cb) { observer = cb; } observe() {} },
+};
+function settle() { while (frames.length) { const f = frames; frames = []; f.forEach((g) => g()); } }
+function redraw() { observer(); settle(); }
+function shown(i) { const r = tab(i).getBoundingClientRect(); return r.left >= LEFT && r.right <= LEFT + strip.clientWidth; }
+const state = () => ({ scroll: strip.scrollLeft, left: !buttons[0].hidden, right: !buttons[1].hidden, marks: Object.keys(attrs).sort() });
+const out = {};
+factory(win, doc); settle();
+out.fit = state();
+n = 25; active = 24; redraw();
+out.added = state(); out.added_shown = shown(24);
+out.chevrons = [buttons[0].style.top, buttons[0].style.left, buttons[1].style.left, buttons[0].attrs["aria-label"]];
+strip.scrollLeft = 0; settle(); out.reader = state();
+redraw(); out.kept = strip.scrollLeft;
+active = 3; redraw(); out.select_shown = strip.scrollLeft;
+active = 20; redraw(); out.select_far = shown(20);
+out.select_far_clear = tab(20).getBoundingClientRect().right <= LEFT + strip.clientWidth - 32;
+strip.scrollLeft = 0; settle();
+const wheel = { deltaY: 100, deltaX: 0, preventDefault() { this.stopped = true; } };
+strip.on.wheel(wheel); settle(); out.wheel = [strip.scrollLeft, !!wheel.stopped];
+const sideways = { deltaY: 0, deltaX: 60, preventDefault() { this.stopped = true; } };
+strip.on.wheel(sideways); out.sideways = [strip.scrollLeft, !!sideways.stopped];
+strip.scrollLeft = 0; settle(); buttons[1].onclick(); settle(); out.click = strip.scrollLeft;
+buttons[0].onclick(); settle(); out.click_back = strip.scrollLeft;
+strip.scrollLeft = 1400; settle(); active = 2; redraw(); strip.scrollLeft = 1400; settle();
+strip.clientWidth = 300; resize(); settle(); out.resized = shown(2);
+n = 3; active = 2; strip.clientWidth = 600; redraw(); out.few = state();
+console.log(JSON.stringify(out));
+"""
+
+
+class TabStripTests(unittest.TestCase):
+    """Tabs shrink like a browser's to a floor, then the strip scrolls and the open tab is kept in view."""
+
+    def setUp(self):
+        self.css = style_path().read_text(encoding="utf-8")
+
+    def rule(self, selector):
+        return self.css.split(selector + "{", 1)[1].split("}", 1)[0]
+
+    def test_tabs_shrink_evenly_to_a_floor_and_never_hide_or_wrap(self):
+        tab = self.rule('.st-key-tabs > [data-testid="stVerticalBlockBorderWrapper"]')
+        self.assertIn("flex:0 1 208px", tab)
+        floor = int(re.search(r"min-width:(\d+)px", tab).group(1))
+        self.assertTrue(72 <= floor <= 96, floor)
+        on = self.rule('.st-key-tabs > [data-testid="stVerticalBlockBorderWrapper"]:has(> [class*="st-key-tab-on-"])')
+        self.assertGreater(int(re.search(r"min-width:(\d+)px", on).group(1)), floor)
+        strip = self.rule(".st-key-tabs")
+        for part in ("flex-wrap:nowrap", "overflow:auto hidden", "scrollbar-width:none"):
+            self.assertIn(part, strip)
+        self.assertIn(".st-key-tabs::-webkit-scrollbar{display:none}", self.css)
+        self.assertFalse([line for line in self.css.splitlines()
+                          if '.st-key-tabs > [data-testid="stVerticalBlockBorderWrapper"]' in line and "display:none" in line])
+
+    def test_new_chat_follows_the_strip_and_history_keeps_the_right_end(self):
+        self.assertIn(".st-key-tabbar > :first-child{flex:0 1 auto;width:auto!important;min-width:0}", self.css)
+        self.assertIn("flex:none", self.rule(".st-key-tabbar > :nth-child(n+2)"))
+        self.assertIn(".st-key-tabbar > :has(> .st-key-tab-history){margin-left:auto}", self.css)
+
+    def test_narrow_background_tabs_show_their_close_only_on_hover_or_focus(self):
+        narrow = self.css.split("@container tab (max-width:139px){", 1)[1].split("\n}", 1)[0]
+        self.assertIn('[class*="st-key-tab-off-"] [class*="st-key-tab-close-"] button{opacity:0', narrow)
+        self.assertIn('[class*="st-key-tab-off-"]:is(:hover,:focus-within) [class*="st-key-tab-close-"] button{opacity:1}',
+                      narrow)
+        self.assertNotIn("st-key-tab-on-", narrow)
+        self.assertIn('@media (hover:none){[class*="st-key-tab-off-"] [class*="st-key-tab-close-"] button{opacity:1!important}}',
+                      self.css)
+
+    def test_the_scroll_chevrons_are_small_fixed_and_themed(self):
+        chevron = self.rule(".polaris-tab-scroll")
+        for part in ("position:fixed", "width:24px", "height:24px", "background:var(--c-bg)", "color:var(--c-text-2)"):
+            self.assertIn(part, chevron)
+        self.assertIn(".polaris-tab-scroll[hidden]{display:none}", self.css)
+        self.assertNotIn("daylight", chevron)
+
+    def test_the_script_scrolls_only_the_strip(self):
+        js = tabs_script_path().read_text(encoding="utf-8")
+        self.assertIn('const STRIP = ".st-key-tabs";', js)
+        # scrollIntoView would scroll the thread too.
+        self.assertNotIn("scrollIntoView", js)
+        self.assertNotIn("window.scroll", js)
+
+    def test_the_strip_keeps_the_open_tab_in_view_and_scrolls_like_a_browsers(self):
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node not installed")
+        run = subprocess.run([node, "-e", TABS_HARNESS, str(tabs_script_path())], capture_output=True, text=True,
+                             timeout=30, check=False)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        out = json.loads(run.stdout)
+        nothing = {"scroll": 0, "left": False, "right": False, "marks": []}
+        self.assertEqual(out["fit"], nothing)
+        # A new tab past the right end is scrolled in.
+        self.assertTrue(out["added_shown"])
+        self.assertEqual({k: out["added"][k] for k in ("left", "right", "marks")},
+                         {"left": True, "right": False, "marks": ["data-more-left"]})
+        self.assertEqual(out["chevrons"], ["17px", "100px", "676px", "Scroll tabs left"])
+        # The reader's own scrolling stands until the open tab changes.
+        self.assertEqual(out["reader"], {"scroll": 0, "left": False, "right": True, "marks": ["data-more-right"]})
+        self.assertEqual((out["kept"], out["select_shown"]), (0, 0))
+        # One out of sight is scrolled in clear of the chevron over that end.
+        self.assertTrue(out["select_far"] and out["select_far_clear"])
+        self.assertEqual(out["wheel"], [100, True])
+        self.assertEqual(out["sideways"], [100, False])
+        self.assertEqual((out["click"], out["click_back"]), (420, 0))
+        self.assertTrue(out["resized"])
+        self.assertEqual(out["few"], nothing)
 
 
 class ReasoningStyleTests(unittest.TestCase):
