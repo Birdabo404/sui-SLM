@@ -1767,16 +1767,16 @@ class StopTests(unittest.TestCase):
                 log_commit=chat.commit,
             )
         self.assertEqual(out["text"], "use tar -xzf")
-        self.assertEqual(
-            _SlowOllama.bodies[0],
-            ollama_chat_body(
-                build_messages("hi", [], "base"),
-                "qwen3.5:2b",
-                temperature=0,
-                seed=42,
-                keep_alive="30m",
-            ),
+        engine_body = ollama_chat_body(
+            build_messages("hi", [], "base"),
+            "qwen3.5:2b",
+            temperature=0,
+            seed=42,
+            keep_alive="30m",
         )
+        # The app's transport adds only its num_predict cap to what app.engine builds.
+        self.assertEqual(_SlowOllama.bodies[0],
+                         {**engine_body, "options": {**engine_body["options"], "num_predict": 512}})
 
     def test_warm_model_makes_a_real_non_streaming_call(self):
         _SlowOllama.delay = 0

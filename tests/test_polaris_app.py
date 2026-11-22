@@ -505,8 +505,8 @@ class PolarisRunLoopTests(unittest.TestCase):
         self._ask_real("make a file readable only by me", _ndjson([draft[i:i + 7] for i in range(0, len(draft), 7)]),
                        mode="full")
         (body,) = _NdjsonOllama.bodies
-        self.assertEqual(sorted(body["options"]), ["num_ctx", "temperature"])
-        self.assertEqual((body["think"], body["options"]["temperature"]), (False, 0.2))
+        self.assertEqual(sorted(body["options"]), ["num_ctx", "num_predict", "temperature"])
+        self.assertEqual((body["think"], body["options"]["temperature"], body["options"]["num_predict"]), (False, 0.2, 512))
         (reasoning,) = self.at.expander
         self.assertEqual(reasoning.label, polaris.REASONING_TITLE)
         self.assertIn("The excerpts show", reasoning.markdown[0].value)
@@ -700,6 +700,9 @@ class PolarisRunLoopTests(unittest.TestCase):
             del deltas[:]
             self._ask("make a file readable only by me", "landing")
         self.assertEqual(len(_NdjsonOllama.bodies), 2)
+        # Both sides carry the app's cap and nothing else new.
+        self.assertEqual([b["options"] for b in _NdjsonOllama.bodies],
+                         [{"temperature": 0.2, "num_ctx": 4096, "num_predict": 512}] * 2)
         left, right = self._loader_lifecycles(deltas)
         for events, labels in (left, right):
             self.assertEqual(events, ["loader", "reasoning", "loader", "reasoning", "answer"])
@@ -708,8 +711,10 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertNotIn('class="cube"', self._html())
 
     def test_an_answer_cut_at_a_length_limit_says_so(self):
+        # What Ollama sends when the app's 512-token cap stops a reply.
         self._ask_real("extract a .tar.gz file", _ndjson(["Use ", "`tar -x"], done_reason="length"))
-        self.assertEqual(len(_NdjsonOllama.bodies), 1)
+        (body,) = _NdjsonOllama.bodies
+        self.assertEqual(body["options"]["num_predict"], 512)
         self.assertIn("answer cut off at the length limit", self._html())
 
     def test_a_weak_retrieval_never_calls_the_model(self):

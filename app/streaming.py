@@ -33,6 +33,17 @@ from app.engine import (
 )
 from shared.prompt import ABSTAIN
 
+# The app's own cap on one answer's length: a reply that runs on stops here with done_reason "length", and the card
+# says it was cut off. App requests only: eval/run_eval.py builds its requests in app.engine, which never sees it.
+APP_NUM_PREDICT = 512
+
+
+def app_chat_body(*args, **kwargs):
+    """ollama_chat_body plus the app's num_predict; every other field is exactly as app.engine builds it."""
+    body = ollama_chat_body(*args, **kwargs)
+    body["options"]["num_predict"] = APP_NUM_PREDICT
+    return body
+
 
 class ChatCancelled(Exception):
     """The user stopped the answer before Ollama committed a result."""
@@ -150,7 +161,7 @@ class CancellableChat:
 
     def _body(self, messages, model, *, stream):
         return json.dumps(
-            ollama_chat_body(
+            app_chat_body(
                 messages,
                 model,
                 temperature=self._temperature,

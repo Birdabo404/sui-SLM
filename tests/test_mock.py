@@ -19,6 +19,7 @@ os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 from shared.prompt import ABSTAIN, SYSTEM, system_for_mode, user_msg
 from rag.query_hybrid import dense_scores, retrieve, rrf_fuse, tokenize
 from app.chat_memory import ChatContext, Turn
+from app.streaming import APP_NUM_PREDICT, app_chat_body
 from app.engine import (
     CSV_FIELDS,
     MODE_LABELS,
@@ -616,6 +617,35 @@ class EvalTests(unittest.TestCase):
             "1.0,2.0,3.0,4.0\r\n"
         ).encode("utf-8")
         self.assertEqual(self.out.read_bytes(), expected)
+
+    def test_eval_requests_stay_byte_identical_and_never_get_the_app_cap(self):
+        hits = [{
+            "id": "ls#0", "title": "ls (tldr common)", "text": "ls -l",
+            "source": "tldr", "path": "tldr/common/ls.md", "rrf": 0.05, "dense": 0.55,
+        }]
+        posted = []
+
+        def post(url, **kw):
+            posted.append(json.dumps(kw["json"]).encode("utf-8"))
+            return MagicMock(json=MagicMock(return_value={"message": {"content": "mock"}, "done": True}))
+
+        # The app's capped body is built first, so a cap leaking into app.engine's shared state would show below.
+        self.assertEqual(app_chat_body([], "qwen3.5:2b")["options"]["num_predict"], APP_NUM_PREDICT)
+        with patch("app.engine.requests.post", side_effect=post):
+            run_eval(self.questions, self.out, configs=[("base", "base"), ("base", "full")], base_model="qwen3.5:2b",
+                     retriever=FakeRetriever(hits), split="dev", sweep=False)
+        expected = [
+            json.dumps({
+                "model": "qwen3.5:2b",
+                "stream": False,
+                "think": False,
+                "messages": build_messages(question, hits if mode == "full" else [], mode),
+                "options": {"temperature": 0, "num_ctx": 4096, "seed": 42},
+            }).encode("utf-8")
+            for mode in ("base", "full") for question in ("how do I list files", "how do I time travel")
+        ]
+        self.assertEqual(posted, expected)
+        self.assertFalse([body for body in posted if b"num_predict" in body])
 
     def test_run_eval_skips_empty_distilled_and_logs_four_configs(self):
         hits = [{
