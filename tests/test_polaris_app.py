@@ -1867,6 +1867,21 @@ class PolarisRunLoopTests(unittest.TestCase):
         buttons = [e for e in self.at.get("download_button") if e.proto.id]
         self.assertEqual(sorted(b.proto.label for b in buttons), ["CSV", "JSON"])
 
+    def test_settings_counts_the_answers_of_the_open_chat_and_says_so(self):
+        # The count follows the open chat (New chat clears it, opening a chat loads its answers), so the card is
+        # labelled for the chat; it was "This session · Answered since this page was opened".
+        self.at.run()
+        self._ask("extract a .tar.gz file", "landing")
+        cid = self._chat_id()
+        html = self._settings_html()
+        self.assertIn('<p class="set-card-h">This chat</p>', html)
+        self.assertNotIn("This session", html)
+        self.assertEqual(self._setting(html, "Answers"), "1")
+        self.at.button(key="new-chat").click().run()
+        self.assertEqual(self._setting(self._settings_html(), "Answers"), "0")
+        self.at.button(key=f"hist-open-{cid}").click().run()
+        self.assertEqual(self._setting(self._settings_html(), "Answers"), "1")
+
     # ---------- monitor ----------
 
     def _monitor(self):

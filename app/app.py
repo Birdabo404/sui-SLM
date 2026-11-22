@@ -1003,8 +1003,8 @@ def _settings_sections(status):
                            "unavailable" if saved is None else f"{saved:,}"),
                 SettingRow("Open tabs", "Older chats stay one click away in History", f"up to {MAX_TABS}"),
             )),
-            SettingCard("This session", (
-                SettingRow("Answers", "Answered since this page was opened", str(len(records))),
+            SettingCard("This chat", (
+                SettingRow("Answers", "Answered in the open chat", str(len(records))),
                 SettingRow("Average time", "From sending the question to the last word",
                            "—" if avg is None else f"{avg:.1f} s"),
                 SettingRow("Export runs", "Each answer's config, timings and retrieval scores",
