@@ -55,8 +55,23 @@ def app_messages(question, hits, mode, step_note=""):
 _PLACEHOLDER = re.compile(r"(?<![$\\{])\{\{([A-Za-z0-9_/~][A-Za-z0-9_./@:~+-]*)\}\}(?!\})")
 
 
+# {username} or {path/to/file} with one pair of braces, only when a part of the name is a placeholder word: awk's
+# '{print}', brace expansion {a,b} and {1..3}, find's {} and ${VAR} stay as written.
+_BRACE_WORD = re.compile(r"(?<![$\\{\w])\{([a-z][a-z0-9_-]*(?:/[a-z0-9_.-]+)*)\}(?!\})")
+_PLACEHOLDER_WORDS = frozenset("""
+    user username name file filename path dir directory folder group groupname package pkg host hostname ip address
+    port password device disk partition drive service url email version server domain interface key program app
+    branch repo remote value uid gid mountpoint pid process printer
+""".split())
+
+
+def _brace_word(m):
+    parts = re.split(r"[_/-]", m.group(1))
+    return f"<{m.group(1)}>" if any(part in _PLACEHOLDER_WORDS for part in parts) else m.group(0)
+
+
 def normalize_placeholders(text):
-    return _PLACEHOLDER.sub(r"<\1>", text or "")
+    return _BRACE_WORD.sub(_brace_word, _PLACEHOLDER.sub(r"<\1>", text or ""))
 
 
 _ANSWER_MARK = re.compile(r"^[ \t]*(?:\*\*|__)?(?:final[ \t]+)?answer(?:\*\*|__)?[ \t]*:[ \t]*(?:\*\*|__)?[ \t]*",
@@ -69,6 +84,8 @@ _REASON_LABEL = re.compile(r"^\s*(?:\*\*|__)?(?:reasoning|thinking)(?:\*\*|__)?\
 _STEPS_LABEL = re.compile(r"^\s*(?:\*\*|__)?steps(?:\*\*|__)?\s*:\s*(?:\*\*|__)?\s*", re.IGNORECASE)
 _TURN_START = re.compile(r"<\|im_start\|>(?:[ \t]*(?:system|user|assistant)\b)?[ \t]*\n?")
 _TURN_END = re.compile(r"[ \t]*(?:<\|im_end\|>|<\|endoftext\|>)[ \t]*\n*")
+_OTHER_TURN = re.compile(r"<\|im_start\|>[ \t]*(?:user|system|tool)\b")
+_ROLE_ARRIVING = re.compile(r"<\|im_start\|>[ \t]*[a-z]*$")
 _PARTIAL_TAGS = ("<think>", "</think>", "<|im_start|>", "<|im_end|>", "<|endoftext|>")
 _THINK_OPEN = re.compile(r"^\s*<think>", re.IGNORECASE)
 _THINK_CLOSE = re.compile(r"</think>", re.IGNORECASE)
@@ -78,6 +95,12 @@ _STEP_HEAD = re.compile(r"^[ \t]*(?:#{1,4}[ \t]*)?(\*\*|__)?step[ \t]+(\d{1,2})[
                         re.IGNORECASE)
 _SOURCE = re.compile(r"^[ \t]*(?:\*\*|__)?sources?(?:\*\*|__)?[ \t]*:(?:\*\*|__)?[ \t]*(.*)$", re.IGNORECASE)
 _CITATION = re.compile(r"\[(\d{1,2})\]")
+# `… their account. Source: [1]` with the Source on the answer's last line instead of its own.
+_TRAILING_SOURCE = re.compile(r"(?<=\S)[ \t]+(?:\*\*|__)?sources?(?:\*\*|__)?[ \t]*:(?:\*\*|__)?[ \t]*"
+                              r"((?:\[\d{1,2}\][ \t]*,?[ \t]*)+)\.?$", re.IGNORECASE)
+_SOURCE_ARRIVING = re.compile(r"[ \t]+(?:[*_]{1,2}|(?:\*\*|__)?(?:s|so|sou|sour|sourc|sources?)(?:[*_]{1,2})?[ \t]*"
+                              r"(?::(?:[*_]{1,2})?[ \t]*(?:\[\d{0,2}\]?[ \t]*,?[ \t]*)*\.?)?)$", re.IGNORECASE)
+_SOURCE_IN_FENCE = re.compile(r"^[ \t]*(?:\*\*|__)?sources?(?:\*\*|__)?[ \t]*:[ \t]*\[\d", re.IGNORECASE)
 _SHELL_LANGS = {"", "bash", "sh", "shell", "console", "terminal", "zsh"}
 
 
@@ -145,15 +168,42 @@ class Answer:
 
 def strip_template_tokens(text, streaming=False):
     """The reply without ChatML turn markers the model wrote as text (`<|im_start|>assistant`, `<|im_end|>`). Only
-    the markers go: words after an end-of-turn marker are still shown. While streaming, a marker or <think> tag
-    that is still arriving is held back so it never flashes on screen."""
-    out = _TURN_START.sub("", _TURN_END.sub("\n\n", text or ""))
+    the markers go: words after an end-of-turn marker are still shown, except a turn the model opened for the user or
+    the system, which is the model writing the student's next message, not its answer. While streaming, a marker or
+    <think> tag that is still arriving is held back so it never flashes on screen."""
+    text = text or ""
+    other = _OTHER_TURN.search(text) or (_ROLE_ARRIVING.search(text) if streaming else None)
+    if other:
+        text = text[:other.start()]
+    out = _TURN_START.sub("", _TURN_END.sub("\n\n", text))
     if streaming:
         for tag in _PARTIAL_TAGS:
             cut = next((k for k in range(len(tag) - 1, 0, -1) if out.endswith(tag[:k])), 0)
             if cut:
                 return out[:-cut]
     return out
+
+
+def _drop_repeated_lines(text, streaming=False):
+    """Trailing whitespace off every line (Markdown reads two spaces as a line break), and a line the model wrote
+    again straight after itself, blank lines between, kept once: a small model stuck in a loop. Inside a fence every
+    line stays, since running a command twice can be meant. While streaming, a last line that is so far the start of
+    the one before is held back until it turns out to be new."""
+    out, last, fence = [], None, None
+    lines = re.sub(r"[ \t]+$", "", text, flags=re.MULTILINE).split("\n")
+    for n, line in enumerate(lines, 1):
+        opened = _FENCE_OPEN.match(line)
+        if fence is not None:
+            if re.fullmatch(rf"[ \t]*{re.escape(fence[0])}{{{len(fence)},}}", line):
+                fence = None
+        elif opened:
+            fence, last = opened.group(2), None
+        elif line.strip():
+            if line.strip() == last or (streaming and n == len(lines) and last and last.startswith(line.strip())):
+                continue
+            last = line.strip()
+        out.append(line)
+    return "\n".join(out)
 
 
 def _split_think(body, streaming):
@@ -211,7 +261,7 @@ def split_reasoning(text, streaming=False):
     While a labelled reasoning block or a <think> block is still streaming the answer stays empty; everything
     else streams as answer. A finished reply never has an empty answer: reasoning with nothing after it is shown
     as the answer, and so is a reasoning block that holds commands when the part after `Answer:` has none."""
-    body = strip_template_tokens(text, streaming)
+    body = _drop_repeated_lines(strip_template_tokens(text, streaming), streaming)
     thought, body = _split_think(body, streaming)
     if streaming and not body.strip():
         return thought, ""
@@ -226,6 +276,24 @@ def abstain_answer(text):
     """The app's own abstention (shared/prompt.ABSTAIN) as its card shows it: what follows its `Answer:` line."""
     mark = _ANSWER_MARK.search(text or "")
     return (text[mark.end():] if mark else text or "").strip()
+
+
+def _drop_restated_answer(body, streaming=False):
+    """The answer without a second `Answer:` that starts over with the same first line (often after a stray
+    `<|im_start|>assistant`): the model repeating itself. Only a Source line after it is kept. While streaming, an
+    `Answer:` whose text so far is the start of that first line is held back the same way."""
+    first = _TRAILING_SOURCE.sub("", body.lstrip().split("\n", 1)[0].strip())
+    if not first:
+        return body
+    for mark in _ANSWER_MARK.finditer(body):
+        if not body[:mark.start()].strip():
+            continue
+        rest = body[mark.end():]
+        again = _TRAILING_SOURCE.sub("", rest.strip().split("\n", 1)[0].strip())
+        if again == first or (streaming and "\n" not in rest.strip() and first.startswith(again)):
+            sources = [line for line in rest.split("\n") if _SOURCE.match(line)]
+            return "\n\n".join([body[:mark.start()].rstrip(), *sources[:1]])
+    return body
 
 
 def _settled(text, streaming):
@@ -317,7 +385,7 @@ def parse_answer(text, mode="", n_hits=0, streaming=False):
     raw = normalize_placeholders(text)
     reasoning, body = split_reasoning(raw, streaming=streaming)
     reasoning_open = streaming and not body and bool(reasoning)
-    body = _settled(body, streaming)
+    body = _settled(_drop_restated_answer(body, streaming), streaming)
     hits = n_hits if uses_rag(mode) else 0
     blocks = []
     md, step_no, count = [], None, 0
@@ -344,14 +412,25 @@ def parse_answer(text, mode="", n_hits=0, streaming=False):
             j = i + 1
             while j < len(lines) and not closer.match(lines[j]):
                 j += 1
-            code = _dedent(lines[i + 1:j], indent)
             is_open = j >= len(lines)
+            if is_open:
+                # A Source line is never shell: an unclosed fence ends there, and a finished one doesn't keep the
+                # stray start of a closing run.
+                end = next((k for k in range(i + 1, len(lines)) if _SOURCE_IN_FENCE.match(lines[k])), len(lines))
+                body_end = end
+                while not streaming and body_end > i + 1 and re.fullmatch(r"[ \t]*[`~]+", lines[body_end - 1]):
+                    body_end -= 1
+                code, j = _dedent(lines[i + 1:body_end], indent), end - 1
+            else:
+                code = _dedent(lines[i + 1:j], indent)
             lang = "bash" if lang.lower() in _SHELL_LANGS else lang.lower()
             if code or is_open:
                 gap = i > 0 and not lines[i - 1].strip()
-                pieces = (_command_lines(code) if lang == "bash" and not is_open else None) or [code]
-                blocks.extend(Block("code", piece, step_no, lang, is_open, gap=gap and not k, indented=bool(indent),
-                                    piece=k) for k, piece in enumerate(pieces))
+                # A fence the reply ended inside is as finished as it will get, so it splits like a closed one.
+                split = lang == "bash" and not (is_open and streaming)
+                pieces = (_command_lines(code) if split else None) or [code]
+                blocks.extend(Block("code", piece, step_no, lang, is_open and k == len(pieces) - 1,
+                                    gap=gap and not k, indented=bool(indent), piece=k) for k, piece in enumerate(pieces))
             i = j + 1
             continue
         source = _SOURCE.match(line)
@@ -361,11 +440,20 @@ def parse_answer(text, mode="", n_hits=0, streaming=False):
                 (cited if 1 <= n <= hits else dropped).append(n)
             i += 1
             continue
-        if _ANSWER_MARK.match(line):
-            # a summary after the steps (the KD student's `Answer:`) belongs to no step
+        tail = _TRAILING_SOURCE.search(line)
+        if tail:
+            source_line = True
+            for n in (int(x) for x in _CITATION.findall(tail.group(1))):
+                (cited if 1 <= n <= hits else dropped).append(n)
+            line = line[:tail.start()]
+        elif streaming and i == len(lines) - 1:
+            line = _SOURCE_ARRIVING.sub("", line)
+        mark = _ANSWER_MARK.match(line)
+        if mark:
+            # a summary after the steps (the KD student's `Answer:`) belongs to no step; the label itself isn't shown
             flush_md()
             step_no = None
-            md.append(line)
+            md.append(line[mark.end():])
             i += 1
             continue
         item = _item(line)

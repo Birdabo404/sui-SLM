@@ -396,11 +396,18 @@ class StudentOutputTests(unittest.TestCase):
         self.assertEqual(shown(parsed), text)
         self.assertEqual(boxes(parse_answer(text, "full", streaming=True)), [])
 
-    def test_template_tokens_are_removed_and_nothing_after_them_is_lost(self):
+    def test_template_tokens_are_removed_and_only_a_turn_for_the_user_is_cut(self):
         for raw in (H1 + "<|im_end|>", "<|im_start|>assistant\n" + H1 + "<|endoftext|>"):
             self.assertEqual(parse_answer(raw, "full", n_hits=5), parse_answer(H1, "full", n_hits=5))
-        runon = parse_answer("Run `df -h`.<|im_end|>\n<|im_start|>user\nAnd memory?", "full", n_hits=5)
-        self.assertEqual((shown(runon), boxes(runon)), ("Run `df -h`.\n\nAnd memory?", ["df -h"]))
+        more = parse_answer("Run `df -h`.<|im_end|>\nIt shows free space per disk.", "full", n_hits=5)
+        self.assertEqual((shown(more), boxes(more)), ("Run `df -h`.\n\nIt shows free space per disk.", ["df -h"]))
+        # The model writing the student's next message is not its answer.
+        runon = "Run `df -h`.<|im_end|>\n<|im_start|>user\nAnd memory?<|im_end|>\n<|im_start|>assistant\nUse `free -h`."
+        self.assertEqual((shown(parse_answer(runon, "full")), boxes(parse_answer(runon, "full"))),
+                         ("Run `df -h`.", ["df -h"]))
+        for prefix in prefixes(runon):
+            self.assertNotIn("memory", shown(parse_answer(prefix, "full", streaming=True)), prefix)
+            self.assertNotIn("<|", shown(parse_answer(prefix, "full", streaming=True)), prefix)
         for prefix in prefixes("Use `id`.<|im_end|>"):
             self.assertNotIn("<|", shown(parse_answer(prefix, "full", streaming=True)), prefix)
 
@@ -450,6 +457,90 @@ class StudentOutputTests(unittest.TestCase):
     def test_abstain_card_text_is_what_follows_answer(self):
         self.assertTrue(abstain_answer(prompt.ABSTAIN).startswith("I don't know."))
         self.assertEqual(abstain_answer("No label here."), "No label here.")
+
+
+class MalformedStudentOutputTests(unittest.TestCase):
+    """The H1 reply as a small model gets it wrong: each still reads as Steps (reasoning), Answer, Source."""
+
+    H1_HEAD = H1[: H1.index("Answer:")]
+    H1_BODY = H1[H1.index("Answer:"): H1.index("\n\nSource:")]
+
+    def assert_h1(self, raw, steps=H1_STEPS, answer=H1_ANSWER, live=True):
+        parsed = parse_answer(raw, "full", n_hits=5)
+        self.assertEqual(parsed.reasoning, steps)
+        self.assertEqual(shown(parsed), answer)
+        self.assertEqual(boxes(parsed), ["sudo adduser juan"])
+        self.assertEqual((parsed.source_line, parsed.cited), (True, (1,)))
+        if live:
+            for prefix in prefixes(raw):
+                streamed = parse_answer(prefix, "full", n_hits=5, streaming=True)
+                self.assertTrue(H1_ANSWER.startswith(shown(streamed).removesuffix("...")) or not shown(streamed),
+                                (prefix, shown(streamed)))
+                self.assertNotIn("Source", shown(streamed), prefix)
+        return parsed
+
+    def test_a_restated_answer_is_shown_once(self):
+        self.assert_h1(self.H1_HEAD + self.H1_BODY + "\n" + self.H1_BODY + "\n\nSource: [1]")
+        self.assert_h1(self.H1_HEAD + self.H1_BODY + "<|im_end|>\n<|im_start|>assistant\n" + self.H1_BODY
+                       + "\n\nSource: [1]<|im_end|>")
+        self.assert_h1(self.H1_HEAD + "Answer: " + self.H1_BODY + "\n\nSource: [1]")
+
+    def test_a_different_second_answer_line_is_kept_without_its_label(self):
+        parsed = parse_answer(self.H1_HEAD + self.H1_BODY + "\nAnswer: Then log in as juan.\n\nSource: [1]", "full",
+                              n_hits=5)
+        self.assertEqual(shown(parsed), H1_ANSWER + "\nThen log in as juan.")
+
+    def test_a_turn_the_model_opens_for_the_student_is_cut(self):
+        self.assert_h1(H1 + "<|im_end|>\n<|im_start|>user\nthanks! and how do I delete him?<|im_end|>\n"
+                            "<|im_start|>assistant\nRun `sudo deluser juan`.")
+
+    def test_trailing_whitespace_never_makes_line_breaks(self):
+        raw = H1.replace("\n", "  \n").replace("password...", "password...   ") + "  \n\n \t"
+        self.assert_h1(raw)
+
+    def test_a_line_repeated_in_a_loop_is_kept_once(self):
+        first = H1_STEPS.split("\n", 1)[0] + "\n"
+        looped = self.H1_HEAD.replace(first, first * 4) + self.H1_BODY + "\n\n" + \
+            "\n".join(["Then log in as juan."] * 5) + "\n\nSource: [1]"
+        self.assert_h1(looped, answer=H1_ANSWER + "\n\nThen log in as juan.", live=False)
+        fenced = parse_answer("Answer: Run it twice:\n```bash\nsudo apt update\nsudo apt update\n```", "full")
+        self.assertEqual(boxes(fenced), ["sudo apt update", "sudo apt update"])
+
+    def test_missing_headers_still_read_as_steps_answer_source(self):
+        bare = parse_answer(H1_ANSWER + "\n\nSource: [1]", "full", n_hits=5)
+        self.assertEqual((bare.reasoning, shown(bare), boxes(bare), bare.cited), ("", H1_ANSWER, ["sudo adduser juan"], (1,)))
+        # numbered steps without `Steps:` stay visible (nothing unlabelled is hidden), but the label doesn't show
+        unlabelled = parse_answer(H1_STEPS + "\n\n" + self.H1_BODY + "\n\nSource: [1]", "full", n_hits=5)
+        self.assertEqual(unlabelled.reasoning, "")
+        self.assertNotIn("Answer:", shown(unlabelled))
+        self.assertTrue(shown(unlabelled).endswith("\n" + H1_ANSWER))
+
+    def test_a_source_written_on_the_answer_line_becomes_the_citation_line(self):
+        self.assert_h1(self.H1_HEAD + self.H1_BODY + " Source: [1]")
+        self.assert_h1(self.H1_HEAD + self.H1_BODY + " **Source:** [1].")
+        kept = parse_answer("Answer: Build it from source: it takes a while.", "full", n_hits=1)
+        self.assertEqual((shown(kept), kept.source_line), ("Build it from source: it takes a while.", False))
+
+    def test_an_unclosed_fence_ends_at_the_source_line_and_splits_per_command(self):
+        raw = (self.H1_HEAD + "Answer: Run these:\n```bash\nsudo adduser juan\nsudo usermod -aG sudo juan\n\n"
+               "Source: [1]")
+        parsed = parse_answer(raw, "full", n_hits=5)
+        self.assertEqual(boxes(parsed), ["sudo adduser juan", "sudo usermod -aG sudo juan"])
+        self.assertEqual((parsed.source_line, parsed.cited), (True, (1,)))
+        cut = parse_answer("Answer: Run:\n```bash\nls -l\n``", "full")
+        self.assertEqual(boxes(cut), ["ls -l"])
+        live = parse_answer(raw[:-len("\n\nSource: [1]")], "full", streaming=True)
+        self.assertEqual(boxes(live), ["sudo adduser juan\nsudo usermod -aG sudo juan"])
+
+    def test_template_braces_become_placeholders(self):
+        parsed = parse_answer("Answer: Run `sudo adduser {{username}}`, then `sudo usermod -aG sudo {username}` and "
+                              "`ls -l {path/to/file}`.", "full")
+        self.assertEqual(boxes(parsed), ["sudo adduser <username>", "sudo usermod -aG sudo <username>",
+                                         "ls -l <path/to/file>"])
+        for literal in ("awk '{print $1}' /etc/passwd", "echo {a,b}", "seq {1..3}", "find . -exec rm {} +",
+                        "echo ${HOME}", "awk '{print}'", "{{ item }}"):
+            self.assertEqual(normalize_placeholders(literal), literal)
+        self.assertEqual(normalize_placeholders("cp {file} {new_dir}/"), "cp <file> <new_dir>/")
 
 
 class CommandPlacementTests(unittest.TestCase):

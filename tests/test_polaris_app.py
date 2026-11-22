@@ -546,6 +546,29 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertNotIn("substituting", user)
         self.assertNotIn("default home directory and prompts", user)
 
+    def test_a_malformed_student_reply_still_streams_into_one_tidy_card(self):
+        # The H1 reply as it can go wrong: trailing spaces, a looped step, the Source on the answer line, the answer
+        # restarted after a stray assistant marker, then a turn written for the student.
+        answer = ("Answer: To create a new user named juan on Ubuntu, run `sudo adduser juan`. This will set up their "
+                  "account with a default home directory and ask you to choose a password...")
+        raw = ("Steps:  \n"
+               "1. The excerpt shows that adding a new user requires using the 'adduser' command...  \n"
+               "1. The excerpt shows that adding a new user requires using the 'adduser' command...\n"
+               "2. By substituting 'juan' into the provided syntax, we can construct the exact command...\n\n"
+               f"{answer} Source: [1]<|im_end|>\n<|im_start|>assistant\n{answer}<|im_end|>\n"
+               "<|im_start|>user\nthanks<|im_end|>")
+        self._ask_real("add a user named juan", _ndjson([raw[i:i + 7] for i in range(0, len(raw), 7)]), mode="full")
+        (reasoning,) = self.at.expander
+        self.assertTrue(reasoning.proto.expanded)
+        self.assertEqual(reasoning.markdown[0].value.count("The excerpt shows"), 1)
+        shown = [m.value for m in self.at.markdown if m not in reasoning.markdown]
+        self.assertEqual([m for m in shown if "create a new user named juan" in m], [answer.removeprefix("Answer: ")])
+        self.assertEqual([c.value for c in self.at.code], ["sudo adduser juan"])
+        html = self._html()
+        self.assertIn('<p class="src-line">Source <b>[1]</b>', html)
+        for junk in ("im_end", "im_start", "thanks", "Answer:", "Source: [1]"):
+            self.assertNotIn(junk, "\n".join(shown), junk)
+
     def _record_deltas(self):
         """Every element the runs send from here on, in order, as (delta path, element type, text); an expander is
         (path, "expandable", (label, expanded))."""
