@@ -1968,19 +1968,43 @@ class PolarisRunLoopTests(unittest.TestCase):
         self.assertEqual([c.value for c in self.at.code], ["sudo adduser <username>", *SUDO_COMMANDS])
         self.assertIn("No documents in +CoT", self._html())
 
-        def compact():
-            # A replayed compare is one preview line per side, taken from the answer, never the reasoning.
-            html = self._html()
-            self.assertIn('<p class="preview">Create the account, then add it to the sudo group.', html)
-            self.assertNotIn("adduser creates the account", html)
-            self.assertEqual(self.at.expander, [])
-
         self.at.run()
-        compact()
+        self.assertEqual([c.value for c in self.at.code], ["sudo adduser <username>", *SUDO_COMMANDS])
+        self.assertTrue(self.at.expander[0].proto.expanded)
+
+    def _whole_compare_shown(self):
+        """Both cards of the compare turn, as it streamed: heads, the open reasoning and every copy box."""
+        self.assertFalse(self.at.exception)
+        html = self._html()
+        self.assertNotIn("cmp-compact", html)
+        self.assertIn('<span class="mode">BASE</span>', html)
+        self.assertIn('<span class="mode">+CoT</span>', html)
+        (reasoning,) = self.at.expander
+        self.assertEqual(reasoning.label, polaris.REASONING_TITLE)
+        self.assertTrue(reasoning.proto.expanded)
+        self.assertEqual(len(self.at.code), 5)
+        self.assertEqual(html.count('class="metrics"'), 2)
+
+    def test_a_finished_compare_comes_back_whole_after_switching_tabs(self):
+        self.at.run()
+        self._ask("extract a .tar.gz file", "landing")
+        other = self._chat_id()
+        self.at.button(key="new-chat").click().run()
+        self._compare_base_vs_cot()
+        with self._answers(lambda question, mode: SUDO_FULL if mode == "cot" else BASE_STEPS):
+            self._ask(SUDO_QUESTION, "landing")
         cid = self._chat_id()
+        self._whole_compare_shown()
+        # Any later run used to fold it into two preview lines that could not be opened again.
+        self.at.run()
+        self._whole_compare_shown()
+        self.at.button(key=f"tab-open-{other}").click().run()
+        self.assertNotIn('<span class="mode">+CoT</span>', self._html())
+        self.at.button(key=f"tab-open-{cid}").click().run()
+        self._whole_compare_shown()
         self.at.button(key="new-chat").click().run()
         self.at.button(key=f"hist-open-{cid}").click().run()
-        compact()
+        self._whole_compare_shown()
 
     def _sudo_compare(self):
         texts = lambda question, mode: SUDO_FULL if mode == "cot" else BASE_STEPS  # noqa: E731

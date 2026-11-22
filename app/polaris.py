@@ -26,7 +26,7 @@ from app.engine import (
     mode_choices,
     uses_rag,
 )
-from app.answer_format import abstain_answer, parse_answer
+from app.answer_format import abstain_answer
 from app.models import is_installed
 from app.streaming import CancellableChat, ChatCancelled
 from shared.frozen import format_threshold
@@ -460,13 +460,6 @@ def source_count_label(n):
 
 def format_total_ram(mb):
     return f"{float(mb or 0.0) / 1024.0:.1f} GB"
-
-
-def first_line(text, limit=88):
-    line = " ".join((text or "").split())
-    if len(line) <= limit:
-        return line
-    return line[: limit - 1] + "…"
 
 
 def index_chunk_count(path):
@@ -1478,12 +1471,6 @@ def user_turn_html(question):
     return f'<div class="q" role="heading" aria-level="2">{escape(question)}</div>'
 
 
-def preview_text(answer, mode=""):
-    parsed = parse_answer(answer or "", mode=mode)
-    prose = " ".join(b.text for b in parsed.blocks if b.kind == "md")
-    return first_line(prose.replace("`", ""))
-
-
 def loose_commands_html(count):
     """Above commands the model listed after its steps without tying them to one: the app doesn't guess the step."""
     what = "this command" if count == 1 else f"these {count} commands"
@@ -1517,26 +1504,6 @@ def compare_model_tags(left, right):
     if left and right and left_model != right_model:
         return left_model, right_model
     return "", ""
-
-
-def compare_compact_html(left, right):
-    left_tag, right_tag = compare_model_tags(left, right)
-
-    def block(rec, tag):
-        mode = rec.get("mode") or ""
-        preview = preview_text(rec.get("answer") or "", mode)
-        return (
-            '<div class="cmp-cell">'
-            + '<div class="cmp-top">'
-            + card_head_html(mode, tag)
-            + answer_stats_html(rec)
-            + cut_off_html(rec)
-            + "</div>"
-            + f'<p class="preview">{escape(preview)}</p>'
-            + "</div>"
-        )
-
-    return '<div class="cmp-compact">' + block(left, left_tag) + block(right, right_tag) + "</div>"
 
 
 def compare_summary_html(left_model, left_mode, right_model, right_mode):

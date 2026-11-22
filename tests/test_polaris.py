@@ -110,10 +110,8 @@ from app.polaris import (
     STILL_WORKING,
     CancellableChat,
     ChatCancelled,
-    compare_compact_html,
     mode_from_name,
     mode_name,
-    preview_text,
     ENGLISH_NOTE,
     MODE_HINTS,
     composer_note_html,
@@ -980,13 +978,6 @@ class LoaderAndNamingTests(unittest.TestCase):
         css = style_path().read_text(encoding="utf-8")
         self.assertIn('[data-testid="stStatusWidget"]{display:none!important}', css)
 
-    def test_compare_preview_skips_reasoning_and_fences(self):
-        text = "Reasoning: Think first.\n\nAnswer: Run this:\n```bash\ntar -xzf a.tar.gz\n```\nThen `ls` it."
-        self.assertEqual(preview_text(text, "cot"), "Run this: Then ls it.")
-        html = compare_compact_html({"mode": "base", "answer": "Use `tar`."}, {"mode": "cot", "answer": text})
-        self.assertNotIn("```", html)
-        self.assertNotIn("Think first", html)
-
 
 class CopyFeedbackTests(unittest.TestCase):
     """The code boxes' copy button shows a check and "Copied" for 1.5 s after a click, the same in both themes."""
@@ -1290,17 +1281,6 @@ class CompareLabelTests(unittest.TestCase):
         self.assertEqual(compare_model_tags(base, student), ("qwen3.5:2b", "student:latest"))
         self.assertEqual(compare_model_tags(base, {**base, "mode": "base"}), ("", ""))
         self.assertEqual(compare_model_tags(base, None), ("", ""))
-
-    def test_compact_compare_rows_carry_models_and_stats(self):
-        left = {"mode": "full", "model": "qwen3.5:2b", "answer": "Use tar.", "latency_s": 3.0, "tok_s": 18.3}
-        right = {"mode": "full", "model": "student:latest", "answer": "Use tar too.", "latency_s": 2.1, "tok_s": 26.4}
-        html = compare_compact_html(left, right)
-        self.assertEqual(html.count('<div class="cmp-top">'), 2)
-        self.assertIn('<span class="model">qwen3.5:2b</span>', html)
-        self.assertIn('<span class="model">student:latest</span>', html)
-        self.assertIn("<b>26.4</b> tok/s", html)
-        same = compare_compact_html({**left, "mode": "base"}, left)
-        self.assertNotIn('class="model"', same)
 
     def test_composer_line_names_the_model_once_or_per_side(self):
         self.assertEqual(
@@ -1888,11 +1868,6 @@ class HelperTests(unittest.TestCase):
         self.assertIsNone(build_run_record({"mode": "base"})["done_reason"])
         self.assertIn("done_reason", EXPORT_FIELDS)
         self.assertIn("token cap", cut_off_html({"done_reason": "length"}))
-
-    def test_compare_cards_say_which_side_was_cut_off(self):
-        html = compare_compact_html({"mode": "base", "answer": "Use `tar`.", "done_reason": "length"},
-                                    {"mode": "cot", "answer": "Use `tar -x`.", "done_reason": "stop"})
-        self.assertEqual(html.count("answer cut off at the length limit"), 1)
 
     def test_an_abstention_says_why_under_the_unchanged_text(self):
         html = idk_card_html({"answer": ABSTAIN}, "No documents were retrieved for this question.")

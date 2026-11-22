@@ -90,7 +90,6 @@ from app.polaris import (
     build_run_record,
     cancelled_side_html,
     card_head_html,
-    compare_compact_html,
     compare_model_tags,
     compare_summary_html,
     composer_note_html,
@@ -465,7 +464,7 @@ def run_polaris():
     thread = st.container(key="thread")
     with thread:
         for i, msg in enumerate(msgs):
-            _replay_message(msg, i, compact_compare=True)
+            _replay_message(msg, i)
             if msg.get("role") == "user" and (i + 1 == len(msgs) or msgs[i + 1].get("role") == "user"):
                 st.markdown(stopped_html(), unsafe_allow_html=True)
     typed, stop_slot = _render_composer("dock", generating=bool(incoming), **composer)
@@ -1577,7 +1576,7 @@ def _render_unanswered_side(side, key, model=""):
                         unsafe_allow_html=True)
 
 
-def _replay_message(msg, index, compact_compare=False):
+def _replay_message(msg, index):
     role = msg.get("role")
     if role == "user":
         st.markdown(user_turn_html(msg.get("content") or ""), unsafe_allow_html=True)
@@ -1585,9 +1584,6 @@ def _replay_message(msg, index, compact_compare=False):
     if msg.get("compare"):
         left, right = msg["compare"]
         miss_l, miss_r = msg.get("compare_unanswered") or (None, None)
-        if compact_compare and left and right:
-            st.markdown(compare_compact_html(left, right), unsafe_allow_html=True)
-            return
         left_tag, right_tag = compare_model_tags(left or miss_l, right or miss_r)
         with st.container(key=f"cmp-hist-{index}"):
             col_l, col_r = st.columns(2, gap="medium")

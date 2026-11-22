@@ -320,7 +320,7 @@ div:has(> .st-key-composer-dock){position:sticky;bottom:0;z-index:110;padding:va
 @keyframes polaris-rise{from{opacity:0;transform:translateY(6px)}}
 /* A finished card takes over its own stream's slot, and switching tabs redraws a whole thread, so answer cards
    appear without an entrance. */
-.q,.thinking,p.stopped,.cmp-compact,.card{animation:polaris-rise .32s var(--ease-out) both}
+.q,.thinking,p.stopped,.card{animation:polaris-rise .32s var(--ease-out) both}
 .st-key-composer-dock{animation:polaris-rise .32s var(--ease-out) both}
 p.stopped{margin:0;font:400 var(--fs-ui)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
 .q{position:relative;margin:var(--s-8) 0 var(--s-1);padding-left:1.4em;font:var(--w-strong) var(--fs-q)/var(--lh-tight) var(--f-ui);color:var(--c-text);text-wrap:balance;overflow-wrap:anywhere}
@@ -557,9 +557,6 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 .slot-empty{min-height:24px;display:flex;align-items:center;font:400 var(--fs-cap)/var(--lh-ui) var(--f-ui);color:var(--c-text-3)}
 .slot-empty.body{min-height:96px;align-items:flex-start}
 .slot-empty.foot{border-top:1px solid var(--c-line);margin-top:auto;min-height:32px}
-.cmp-compact{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:var(--s-3)}
-.cmp-compact .cmp-cell{display:flex;flex-direction:column;gap:var(--s-2);padding:var(--s-3) var(--s-4);border-radius:var(--r-md);background:var(--c-surface);border:1px solid var(--c-line)}
-.cmp-compact p.preview{margin:0;font:400 var(--fs-ui)/var(--lh-ui) var(--f-sans);color:var(--c-text-2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* the mode tag and the readouts keep their size; a short cell puts the readouts on a second line */
 .cmp-top{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:var(--s-2);min-width:0}
 .cmp-top .card-head{flex:1 0 auto;max-width:100%}
@@ -593,7 +590,7 @@ p.ram-split,.dbg{margin:var(--s-2) 0 0;font:400 var(--fs-meta)/var(--lh-ui) var(
 .queued-label{color:var(--c-text-3)}
 .thinking.queued{color:var(--c-text-3)}
 @media (prefers-reduced-motion:reduce){
-  .q,.thinking,p.stopped,.cmp-compact,.card,.st-key-composer-dock,.st-key-stop-gen{animation:polaris-fade-in .15s linear both!important}
+  .q,.thinking,p.stopped,.card,.st-key-composer-dock,.st-key-stop-gen{animation:polaris-fade-in .15s linear both!important}
   .cube-reel{animation:none;will-change:auto}
   .thinking-note{animation-duration:1ms}
   [class*="st-key-tab-on-"] [class*="st-key-tab-open-"] button::before{animation:none!important}
@@ -936,7 +933,7 @@ p.diag-sum.fail{color:var(--c-danger)}
   background:var(--c-dot);box-shadow:0 0 0 2px var(--c-bg)}
 :root:has(.polaris-calm) .card-head .mode{background:transparent;border-color:var(--c-line)}
 :root:has(.polaris-calm) .stat{background:transparent}
-:root:has(.polaris-calm) :is(.cmp-compact .cmp-cell,.issue,.card){border-color:var(--c-line-soft)}
+:root:has(.polaris-calm) :is(.issue,.card){border-color:var(--c-line-soft)}
 
 /* ---------- focus and small screens ---------- */
 button:focus-visible,[role="radio"]:focus-visible,summary:focus-visible,a:focus-visible{outline:2px solid var(--c-accent)!important;outline-offset:2px}
