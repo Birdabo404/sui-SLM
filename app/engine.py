@@ -5,6 +5,7 @@ import os
 import subprocess
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -18,10 +19,12 @@ from shared.prompt import ABSTAIN, MODES, system_for_mode, user_msg
 BASE_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.5:2b")
 DISTILLED_MODEL = os.environ.get("OLLAMA_DISTILLED_MODEL", "")
 OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
+DEFAULT_KEEP_ALIVE = "30m"
 LOG_CSV = Path(os.environ.get("LOG_CSV", str(ROOT / "logs" / "answers.csv")))
 _FROZEN = load_frozen()
 K = _FROZEN["k"]
 EVAL_SEED = 42
+NUM_CTX = 4096
 # MiniLM cosine: abstain if none of the top-k fused hits reach this.
 # RRF is a rank score, not relevance (any rank-0 hit scores 1/60).
 # 0.30 and k=5 in shared/frozen.json are provisional defaults, not a
@@ -30,10 +33,16 @@ EVAL_SEED = 42
 WEAK_DENSE = _FROZEN["threshold"]
 RSS_SAMPLE_S = 0.25
 MODE_LABELS = {
-    "base": "base",
-    "cot": "CoT",
+    "base": "BASE",
+    "cot": "COT",
     "rag": "RAG",
-    "full": "RAG+CoT",
+    "full": "FULL",
+}
+MODE_SUBS = {
+    "base": "MODEL ONLY",
+    "cot": "STEP-BY-STEP",
+    "rag": "RETRIEVAL",
+    "full": "RAG + COT",
 }
 MODE_SUFFIX = {
     "base": "",
@@ -50,11 +59,39 @@ THESIS_CONFIGS = (
     ("base", "full"),
     ("distilled", "full"),
 )
+
+
+def mode_choices():
+    """UI mode keys, in THESIS_CONFIGS order. A new mode in both maps is a new entry."""
+    seen = []
+    for _model_key, mode in THESIS_CONFIGS:
+        if mode not in MODE_LABELS or mode in seen:
+            continue
+        seen.append(mode)
+    return seen
 CSV_FIELDS = [
-    "ts", "git_commit", "config", "model", "mode", "latency_s",
+    "ts", "git_commit", "config", "model", "mode", "context_turns", "latency_s",
     "app_rss_mb", "ollama_rss_mb", "total_mb", "system_used_mb",
-    "n_chunks", "weak_retrieval", "threshold", "k", "question",
+    "n_chunks", "weak_retrieval", "threshold", "k",
+    "tok_s", "gen_s", "prompt_s", "load_s", "ollama_version", "model_digest",
+    "question",
 ]
+
+
+@dataclass(frozen=True)
+class OllamaChatResult:
+    text: str
+    eval_count: int | None = None
+    eval_duration: int | None = None
+    prompt_eval_count: int | None = None
+    prompt_eval_duration: int | None = None
+    load_duration: int | None = None
+
+
+@dataclass(frozen=True)
+class OllamaInfo:
+    version: str = ""
+    model_digest: str = ""
 
 
 def uses_rag(mode):
@@ -179,22 +216,142 @@ def build_messages(question, hits, mode):
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def ollama_chat(messages, model, host=None, temperature=0.2, seed=None):
-    host = host or OLLAMA_HOST
-    url = host.rstrip("/") + "/api/chat"
-    options = {"temperature": temperature, "num_ctx": 4096}
+def keep_alive_setting(environ=None):
+    environ = os.environ if environ is None else environ
+    return environ.get("OLLAMA_KEEP_ALIVE") or DEFAULT_KEEP_ALIVE
+
+
+def ollama_chat_body(messages, model, temperature=0.2, seed=None, keep_alive=None, stream=False):
+    options = {"temperature": temperature, "num_ctx": NUM_CTX}
     if seed is not None:
         options["seed"] = seed
     body = {
         "model": model,
-        "stream": False,
+        "stream": bool(stream),
         "think": False,
         "messages": messages,
         "options": options,
     }
+    if keep_alive is not None:
+        body["keep_alive"] = keep_alive
+    return body
+
+
+def parse_ollama_chat_response(payload):
+    message = payload["message"]
+    return OllamaChatResult(
+        text=message["content"],
+        eval_count=payload.get("eval_count"),
+        eval_duration=payload.get("eval_duration"),
+        prompt_eval_count=payload.get("prompt_eval_count"),
+        prompt_eval_duration=payload.get("prompt_eval_duration"),
+        load_duration=payload.get("load_duration"),
+    )
+
+
+def ollama_chat_result(
+    messages,
+    model,
+    host=None,
+    temperature=0.2,
+    seed=None,
+    keep_alive=None,
+):
+    host = host or OLLAMA_HOST
+    url = host.rstrip("/") + "/api/chat"
+    body = ollama_chat_body(
+        messages,
+        model,
+        temperature=temperature,
+        seed=seed,
+        keep_alive=keep_alive,
+    )
     r = requests.post(url, json=body, timeout=300)
     r.raise_for_status()
-    return r.json()["message"]["content"]
+    return parse_ollama_chat_response(r.json())
+
+
+def ollama_chat(messages, model, host=None, temperature=0.2, seed=None, keep_alive=None):
+    return ollama_chat_result(
+        messages,
+        model,
+        host=host,
+        temperature=temperature,
+        seed=seed,
+        keep_alive=keep_alive,
+    ).text
+
+
+def warm_model(model, host=None, keep_alive=None):
+    try:
+        ollama_chat(
+            [],
+            model,
+            host=host,
+            keep_alive=keep_alive or keep_alive_setting(),
+        )
+        return True
+    except requests.RequestException:
+        return False
+
+
+def model_digest(model, host=None, timeout=1.5):
+    """Exact Ollama model digest, or blank when the model cannot be identified."""
+    if not model:
+        return ""
+    base = (host or OLLAMA_HOST).rstrip("/")
+    try:
+        r = requests.post(base + "/api/show", json={"name": model}, timeout=timeout)
+        if r.ok:
+            digest = str((r.json() or {}).get("digest") or "").strip()
+            if digest:
+                return digest
+    except Exception:
+        pass
+    try:
+        r = requests.get(base + "/api/tags", timeout=timeout)
+        if not r.ok:
+            return ""
+        for item in (r.json() or {}).get("models") or []:
+            names = {str(item.get(field) or "") for field in ("name", "model")}
+            if model not in names and (
+                ":" in model or f"{model}:latest" not in names
+            ):
+                continue
+            digest = str(item.get("digest") or "").strip()
+            if digest:
+                return digest
+    except Exception:
+        return ""
+    return ""
+
+
+def ollama_version(host=None, timeout=1.5):
+    base = (host or OLLAMA_HOST).rstrip("/")
+    try:
+        r = requests.get(base + "/api/version", timeout=timeout)
+        if r.ok:
+            return str((r.json() or {}).get("version") or "")
+    except requests.RequestException:
+        pass
+    return ""
+
+
+def ollama_info(model, host=None, timeout=1.5):
+    return OllamaInfo(
+        version=ollama_version(host=host, timeout=timeout),
+        model_digest=model_digest(model, host=host, timeout=timeout),
+    )
+
+
+def ollama_reachable(host=None, timeout=1.0):
+    """True if /api/tags answers. False on any failure; never raises."""
+    base = (host or OLLAMA_HOST).rstrip("/")
+    try:
+        r = requests.get(base + "/api/tags", timeout=timeout)
+        return bool(r.ok)
+    except Exception:
+        return False
 
 
 class RamSampler:
@@ -281,6 +438,123 @@ def log_answer(row, path=None, fields=None):
         w.writerow({k: row.get(k, "") for k in fields})
 
 
+def _chat_result(value):
+    if isinstance(value, OllamaChatResult):
+        return value
+    if isinstance(value, str):
+        return OllamaChatResult(text=value)
+    raise TypeError("chat function must return str or OllamaChatResult")
+
+
+def _seconds(nanoseconds):
+    if nanoseconds is None:
+        return None
+    return nanoseconds / 1_000_000_000
+
+
+def _tokens_per_second(count, duration):
+    if count is None or not duration:
+        return None
+    return count / duration * 1_000_000_000
+
+
+def _csv_metric(value):
+    return "" if value is None else f"{value:.4f}"
+
+
+def _finalize_answer(
+    result,
+    *,
+    question,
+    mode,
+    model,
+    model_key,
+    hits,
+    weak,
+    context_turns,
+    started_at,
+    ram,
+    threshold,
+    k,
+    log_path,
+    extra_log,
+    log_fields,
+    log_commit,
+    git_sha,
+    model_info,
+):
+    text = result.text
+    latency = time.perf_counter() - started_at
+    gen_s = _seconds(result.eval_duration)
+    prompt_s = _seconds(result.prompt_eval_duration)
+    load_s = _seconds(result.load_duration)
+    tok_s = _tokens_per_second(result.eval_count, result.eval_duration)
+    model_info = model_info or OllamaInfo()
+    row = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "git_commit": git_commit() if git_sha is None else git_sha,
+        "config": config_id(model_key, mode),
+        "model": model,
+        "model_key": model_key,
+        "mode": mode,
+        "context_turns": context_turns,
+        "latency_s": f"{latency:.4f}",
+        "app_rss_mb": f"{ram['app_rss_mb']:.1f}",
+        "ollama_rss_mb": f"{ram['ollama_rss_mb']:.1f}",
+        "total_mb": f"{ram['total_mb']:.1f}",
+        "system_used_mb": f"{ram['system_used_mb']:.1f}",
+        "n_chunks": len(hits),
+        "weak_retrieval": int(weak) if uses_rag(mode) else "",
+        "threshold": format_threshold(threshold),
+        "k": int(k),
+        "tok_s": _csv_metric(tok_s),
+        "gen_s": _csv_metric(gen_s),
+        "prompt_s": _csv_metric(prompt_s),
+        "load_s": _csv_metric(load_s),
+        "ollama_version": model_info.version,
+        "model_digest": model_info.model_digest,
+        "question": question.replace("\n", " "),
+        "cited_sources": format_cited_sources(hits),
+        "answer": text,
+    }
+    if extra_log:
+        row.update(extra_log)
+    if log_commit is None:
+        log_answer(row, path=log_path, fields=log_fields)
+    else:
+        with log_commit():
+            log_answer(row, path=log_path, fields=log_fields)
+    return {
+        "text": text,
+        "hits": hits,
+        "weak": weak,
+        "latency_s": latency,
+        "config": row["config"],
+        "cited_sources": row["cited_sources"],
+        "ts": row["ts"],
+        "git_commit": row["git_commit"],
+        "model": model,
+        "model_key": model_key,
+        "mode": mode,
+        "context_turns": context_turns,
+        "question": question,
+        "threshold": float(threshold),
+        "k": int(k),
+        "eval_count": result.eval_count,
+        "eval_duration": result.eval_duration,
+        "prompt_eval_count": result.prompt_eval_count,
+        "prompt_eval_duration": result.prompt_eval_duration,
+        "load_duration": result.load_duration,
+        "tok_s": tok_s,
+        "gen_s": gen_s,
+        "prompt_s": prompt_s,
+        "load_s": load_s,
+        "ollama_version": model_info.version,
+        "model_digest": model_info.model_digest,
+        **ram,
+    }
+
+
 def answer_question(
     question,
     mode,
@@ -295,13 +569,30 @@ def answer_question(
     seed=None,
     extra_log=None,
     log_fields=None,
+    log_commit=None,
+    keep_alive=None,
+    git_sha=None,
+    model_info=None,
+    context=None,
 ):
     k = K if k is None else k
     threshold = WEAK_DENSE if threshold is None else threshold
     if chat_fn is None:
         def chat_fn(messages, model_name):
-            return ollama_chat(
-                messages, model_name, temperature=temperature, seed=seed
+            return ollama_chat_result(
+                messages,
+                model_name,
+                temperature=temperature,
+                seed=seed,
+                keep_alive=keep_alive,
+            )
+    else:
+        configure = getattr(chat_fn, "configure", None)
+        if configure is not None:
+            configure(
+                temperature=temperature,
+                seed=seed,
+                keep_alive=keep_alive,
             )
 
     t0 = time.perf_counter()
@@ -309,50 +600,46 @@ def answer_question(
     sampler.start()
     hits = []
     weak = False
-    text = ""
+    context_turns = 0
+    result = OllamaChatResult(text="")
     try:
         if uses_rag(mode):
             if retriever is None:
                 raise RuntimeError("RAG index is not loaded")
-            hits = retriever.retrieve(question, k=k, tldr_lane=True)
+            retrieval_query = question if context is None else context.retrieval_query
+            hits = retriever.retrieve(retrieval_query, k=k, tldr_lane=True)
             weak = is_weak(hits, threshold=threshold)
+            messages = build_messages(question, hits, mode)
+            if context is not None:
+                messages, context_turns = context.apply_with_count(messages)
             if weak:
-                text = ABSTAIN
+                result = OllamaChatResult(text=ABSTAIN)
             else:
-                text = chat_fn(build_messages(question, hits, mode), model)
+                result = _chat_result(chat_fn(messages, model))
         else:
-            text = chat_fn(build_messages(question, hits, mode), model)
+            messages = build_messages(question, hits, mode)
+            if context is not None:
+                messages, context_turns = context.apply_with_count(messages)
+            result = _chat_result(chat_fn(messages, model))
     finally:
         ram = sampler.stop()
-    latency = time.perf_counter() - t0
-    row = {
-        "ts": datetime.now(timezone.utc).isoformat(),
-        "git_commit": git_commit(),
-        "config": config_id(model_key, mode),
-        "model": model,
-        "mode": mode,
-        "latency_s": f"{latency:.4f}",
-        "app_rss_mb": f"{ram['app_rss_mb']:.1f}",
-        "ollama_rss_mb": f"{ram['ollama_rss_mb']:.1f}",
-        "total_mb": f"{ram['total_mb']:.1f}",
-        "system_used_mb": f"{ram['system_used_mb']:.1f}",
-        "n_chunks": len(hits),
-        "weak_retrieval": int(weak) if uses_rag(mode) else "",
-        "threshold": format_threshold(threshold),
-        "k": int(k),
-        "question": question.replace("\n", " "),
-        "cited_sources": format_cited_sources(hits),
-        "answer": text,
-    }
-    if extra_log:
-        row.update(extra_log)
-    log_answer(row, path=log_path, fields=log_fields)
-    return {
-        "text": text,
-        "hits": hits,
-        "weak": weak,
-        "latency_s": latency,
-        "config": row["config"],
-        "cited_sources": row["cited_sources"],
-        **ram,
-    }
+    return _finalize_answer(
+        result,
+        question=question,
+        mode=mode,
+        model=model,
+        model_key=model_key,
+        hits=hits,
+        weak=weak,
+        context_turns=context_turns,
+        started_at=t0,
+        ram=ram,
+        threshold=threshold,
+        k=k,
+        log_path=log_path,
+        extra_log=extra_log,
+        log_fields=log_fields,
+        log_commit=log_commit,
+        git_sha=git_sha,
+        model_info=model_info,
+    )
