@@ -1,0 +1,47 @@
+# Light mode fallback. Primary switch is the sidebar toggle (CSS). Copy over
+# config.toml and restart only if a native widget stays dark.
+[server]
+enableStaticServing = true
+headless = true
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+
+[[theme.fontFaces]]
+family = "Ubuntu Sans"
+url = "app/static/UbuntuSans-Variable-Latin.woff2"
+weight = 400
+style = "normal"
+[[theme.fontFaces]]
+family = "Ubuntu Sans"
+url = "app/static/UbuntuSans-Variable-Latin.woff2"
+weight = 600
+style = "normal"
+[[theme.fontFaces]]
+family = "JetBrains Mono"
+url = "app/static/JetBrainsMono-Regular.woff2"
+weight = 400
+style = "normal"
+[[theme.fontFaces]]
+family = "JetBrains Mono"
+url = "app/static/JetBrainsMono-SemiBold.woff2"
+weight = 600
+style = "normal"
+
+[theme]
+base = "light"
+primaryColor = "#BA6900"
+backgroundColor = "#F9FAFB"
+secondaryBackgroundColor = "#EEF0F4"
+textColor = "#191E28"
+font = "'Ubuntu Sans', sans-serif"
+headingFont = "'Ubuntu Sans', sans-serif"
+codeFont = "'JetBrains Mono', monospace"
+baseFontSize = 15
+
+[theme.sidebar]
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#EEF0F4"

@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -16,9 +17,13 @@ os.environ.setdefault("HF_HUB_OFFLINE", "1")
 os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 from shared.prompt import ABSTAIN, SYSTEM, system_for_mode, user_msg
-from rag.query_hybrid import dense_scores, rrf_fuse, tokenize
+from rag.query_hybrid import dense_scores, retrieve, rrf_fuse, tokenize
+from app.chat_memory import ChatContext, Turn
+from app.streaming import APP_NUM_PREDICT, app_chat_body
 from app.engine import (
     CSV_FIELDS,
+    MODE_LABELS,
+    MODE_SUBS,
     THESIS_CONFIGS,
     WEAK_DENSE,
     answer_question,
@@ -27,7 +32,9 @@ from app.engine import (
     git_commit,
     is_ollama_process,
     is_weak,
+    keep_alive_setting,
     log_answer,
+    mode_choices,
     model_name_for,
     ollama_chat,
     uses_rag,
@@ -98,6 +105,23 @@ class ConfigTests(unittest.TestCase):
             config_id("other", "base")
         with self.assertRaises(ValueError):
             config_id("base", "nope")
+
+    def test_mode_labels_are_base_cot_rag_full(self):
+        self.assertEqual(list(mode_choices()), ["base", "cot", "rag", "full"])
+        self.assertEqual(
+            [MODE_LABELS[m] for m in mode_choices()],
+            ["BASE", "COT", "RAG", "FULL"],
+        )
+        self.assertEqual(MODE_SUBS["base"], "MODEL ONLY")
+        self.assertEqual(MODE_SUBS["full"], "RAG + COT")
+
+    def test_mode_choices_picks_up_a_new_thesis_mode(self):
+        extra_configs = THESIS_CONFIGS + (("base", "kd"),)
+        extra_labels = {**MODE_LABELS, "kd": "KD"}
+        with patch("app.engine.THESIS_CONFIGS", extra_configs), patch(
+            "app.engine.MODE_LABELS", extra_labels
+        ):
+            self.assertEqual(mode_choices(), ["base", "cot", "rag", "full", "kd"])
 
 
 class HybridRankingTests(unittest.TestCase):
@@ -197,6 +221,57 @@ class HybridRankingTests(unittest.TestCase):
             {"dense": 0.12, "rrf": 1 / 60},
             {"dense": 0.20, "rrf": 1 / 61},
         ]))
+
+    def test_retrieve_attaches_bm25_and_keeps_rrf_dense(self):
+        rows = [
+            {
+                "id": "a", "text": "tar extract gzip", "title": "tar",
+                "source": "tldr", "path": "tldr/tar.md", "distro": "common",
+            },
+            {
+                "id": "b", "text": "unrelated potatoes", "title": "x",
+                "source": "man", "path": "man/x.1", "distro": "common",
+            },
+        ]
+
+        class FakeBM25:
+            def get_scores(self, tokens):
+                return [5.0, 0.25]
+
+        class Enc:
+            def tolist(self):
+                return [[1.0, 0.0]]
+
+        class FakeModel:
+            def encode(self, texts, normalize_embeddings=True):
+                return Enc()
+
+        class FakeCol:
+            metadata = {"embed_model": "x"}
+
+            def query(self, query_embeddings, n_results=50, where=None):
+                return {"ids": [["a", "b"]], "distances": [[0.2, 0.8]]}
+
+            def get(self, ids, include):
+                return {"ids": [], "embeddings": []}
+
+        hits = retrieve(
+            "extract tar",
+            k=2,
+            tldr_lane=False,
+            rows=rows,
+            bm25=FakeBM25(),
+            col=FakeCol(),
+            model=FakeModel(),
+        )
+        self.assertEqual(len(hits), 2)
+        by_id = {h["id"]: h for h in hits}
+        self.assertAlmostEqual(by_id["a"]["bm25"], 5.0)
+        self.assertAlmostEqual(by_id["b"]["bm25"], 0.25)
+        self.assertIn("rrf", by_id["a"])
+        self.assertAlmostEqual(by_id["a"]["dense"], 0.8)
+        self.assertEqual(by_id["a"]["title"], "tar")
+        self.assertEqual(hits[0]["id"], "a")
 
 
 class OllamaRamTests(unittest.TestCase):
@@ -371,6 +446,7 @@ class MockRunTests(unittest.TestCase):
         self.assertEqual(rows[0]["mode"], "base")
         self.assertEqual(rows[0]["model"], "qwen3.5:2b")
         self.assertEqual(rows[0]["config"], "base")
+        self.assertEqual(rows[0]["context_turns"], "0")
         self.assertEqual(rows[0]["n_chunks"], "0")
         self.assertGreaterEqual(float(rows[0]["latency_s"]), 0)
         self.assertGreater(float(rows[0]["app_rss_mb"]), 0)
@@ -422,6 +498,25 @@ class MockRunTests(unittest.TestCase):
         self.assertEqual(body["options"]["temperature"], 0)
         self.assertEqual(body["options"]["seed"], 42)
         self.assertEqual(body["model"], "qwen3.5:2b")
+        self.assertFalse(body["stream"])
+        self.assertNotIn("keep_alive", body)
+
+    def test_keep_alive_setting_defaults_and_honors_env(self):
+        self.assertEqual(keep_alive_setting({}), "30m")
+        self.assertEqual(keep_alive_setting({"OLLAMA_KEEP_ALIVE": "2h"}), "2h")
+        self.assertEqual(keep_alive_setting({"OLLAMA_KEEP_ALIVE": "0"}), "0")
+
+    def test_answer_uses_supplied_git_sha_without_subprocess(self):
+        with patch("app.engine.git_commit", side_effect=AssertionError("git called")):
+            result = answer_question(
+                "hello",
+                "base",
+                "qwen3.5:2b",
+                chat_fn=self._chat,
+                log_path=self.log,
+                git_sha="abc1234",
+            )
+        self.assertEqual(result["git_commit"], "abc1234")
 
 
 class EvalTests(unittest.TestCase):
@@ -447,6 +542,110 @@ class EvalTests(unittest.TestCase):
         rows = load_questions(self.questions)
         self.assertEqual(len(rows), 2)
         self.assertEqual(rows[0]["id"], "q1")
+
+    def test_eval_csv_bytes_stay_single_turn_after_app_context(self):
+        context_log = self.dir / "context.csv"
+        answer_question(
+            "current",
+            "base",
+            "qwen3.5:2b",
+            chat_fn=lambda messages, model: "context answer",
+            log_path=context_log,
+            context=ChatContext(
+                retrieval_query="previous current",
+                turns=(Turn("previous", "previous answer"),),
+            ),
+        )
+        one_question = self.dir / "one.jsonl"
+        one_question.write_text(
+            json.dumps({
+                "id": "q1",
+                "question": "how do I list files",
+                "answerable": True,
+                "gold_answer": "ls",
+                "source": "tldr ls",
+            }) + "\n",
+            encoding="utf-8",
+        )
+
+        class FixedDateTime:
+            @classmethod
+            def now(cls, tz):
+                return datetime(2026, 1, 15, tzinfo=timezone.utc)
+
+        class FixedSampler:
+            def start(self):
+                pass
+
+            def stop(self):
+                return {
+                    "app_rss_mb": 1.0,
+                    "ollama_rss_mb": 2.0,
+                    "total_mb": 3.0,
+                    "system_used_mb": 4.0,
+                }
+
+        with patch("app.engine.datetime", FixedDateTime), patch(
+            "app.engine.RamSampler",
+            FixedSampler,
+        ), patch(
+            "app.engine.time.perf_counter",
+            side_effect=(10.0, 11.25),
+        ), patch(
+            "app.engine.git_commit",
+            return_value="ENGINESHA",
+        ), patch(
+            "eval.run_eval.git_commit",
+            return_value="EVALSHA",
+        ):
+            run_eval(
+                one_question,
+                self.out,
+                configs=[("base", "base")],
+                chat_fn=lambda messages, model: "mock-answer",
+                split="dev",
+                sweep=False,
+            )
+
+        expected = (
+            "ts,git_commit,split,threshold,k,config,model,mode,question_id,"
+            "question,answerable,gold_answer,gold_source,answer,cited_sources,"
+            "n_chunks,weak_retrieval,latency_s,app_rss_mb,ollama_rss_mb,total_mb,"
+            "system_used_mb\r\n"
+            "2026-01-15T00:00:00+00:00,EVALSHA,dev,0.30,5,base,qwen3.5:2b,"
+            "base,q1,how do I list files,True,ls,tldr ls,mock-answer,,0,,1.2500,"
+            "1.0,2.0,3.0,4.0\r\n"
+        ).encode("utf-8")
+        self.assertEqual(self.out.read_bytes(), expected)
+
+    def test_eval_requests_stay_byte_identical_and_never_get_the_app_cap(self):
+        hits = [{
+            "id": "ls#0", "title": "ls (tldr common)", "text": "ls -l",
+            "source": "tldr", "path": "tldr/common/ls.md", "rrf": 0.05, "dense": 0.55,
+        }]
+        posted = []
+
+        def post(url, **kw):
+            posted.append(json.dumps(kw["json"]).encode("utf-8"))
+            return MagicMock(json=MagicMock(return_value={"message": {"content": "mock"}, "done": True}))
+
+        # The app's capped body is built first, so a cap leaking into app.engine's shared state would show below.
+        self.assertEqual(app_chat_body([], "qwen3.5:2b")["options"]["num_predict"], APP_NUM_PREDICT)
+        with patch("app.engine.requests.post", side_effect=post):
+            run_eval(self.questions, self.out, configs=[("base", "base"), ("base", "full")], base_model="qwen3.5:2b",
+                     retriever=FakeRetriever(hits), split="dev", sweep=False)
+        expected = [
+            json.dumps({
+                "model": "qwen3.5:2b",
+                "stream": False,
+                "think": False,
+                "messages": build_messages(question, hits if mode == "full" else [], mode),
+                "options": {"temperature": 0, "num_ctx": 4096, "seed": 42},
+            }).encode("utf-8")
+            for mode in ("base", "full") for question in ("how do I list files", "how do I time travel")
+        ]
+        self.assertEqual(posted, expected)
+        self.assertFalse([body for body in posted if b"num_predict" in body])
 
     def test_run_eval_skips_empty_distilled_and_logs_four_configs(self):
         hits = [{
@@ -826,7 +1025,8 @@ class ImportTests(unittest.TestCase):
             import streamlit  # noqa: F401
         except ImportError:
             st = MagicMock()
-            st.cache_resource = lambda fn: fn
+            st.cache_resource = lambda fn=None, **kwargs: fn if fn is not None else (lambda wrapped: wrapped)
+            st.cache_data = lambda *a, **k: (lambda fn: fn)
             sys.modules["streamlit"] = st
         import importlib
         if "app.app" in sys.modules:
