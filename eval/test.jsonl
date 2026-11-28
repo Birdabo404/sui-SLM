@@ -1,5 +1,5 @@
 # PLACEHOLDER EXAMPLE. Written to show the JSONL format. NOT the thesis test set.
-# The real test set is 150-200 held-out questions written by the student.
+# The real test set is 30 held-out questions (20 normal, 5 trap, 5 out-of-scope), kept out of the repo.
 # Do not report results from this file.
 {"id": "test-ls", "set": "held-out", "placeholder": true, "question": "how do I list files in a folder", "answerable": true, "gold_answer": "ls", "source": "tldr ls"}
 {"id": "test-mkdir", "set": "held-out", "placeholder": true, "question": "how do I make a new folder", "answerable": true, "gold_answer": "mkdir name", "source": "tldr mkdir"}

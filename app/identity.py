@@ -12,15 +12,15 @@ from app.models import MATCHED_BASE, STUDENT
 
 STOCK_RESPONSE = (
     "I'm Polaris, an offline Linux lab assistant. Right now I'm running the stock Qwen3.5-2B model with no "
-    "fine-tuning, set up by Clyde Heinrich Lontoc and Jebby Cruz of Caraga State University."
+    "fine-tuning, set up by Clyde Heinrich Lontoc and John Bert P. Cruz of Caraga State University."
 )
 QUANTISED_STOCK_RESPONSE = (
     "I'm Polaris, an offline Linux lab assistant. Right now I'm running the stock Qwen3.5-2B model (Q4_K_M "
-    "quantised, no fine-tuning), set up by Clyde Heinrich Lontoc and Jebby Cruz of Caraga State University."
+    "quantised, no fine-tuning), set up by Clyde Heinrich Lontoc and John Bert P. Cruz of Caraga State University."
 )
 FINE_TUNED_RESPONSE = (
     "I'm Polaris, an offline Linux lab assistant. I run {model}, a Qwen3.5-2B model fine-tuned through knowledge "
-    "distillation by Clyde Heinrich Lontoc and Jebby Cruz of Caraga State University."
+    "distillation by Clyde Heinrich Lontoc and John Bert P. Cruz of Caraga State University."
 )
 MODEL_NAMES = {STUDENT: "Thesis-Student"}
 

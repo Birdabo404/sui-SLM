@@ -1,7 +1,7 @@
 # Teacher Q&A kit for the KD step
 
 Turns the RAG corpus into chat-format training rows for fp16 LoRA of Qwen3.5-2B.
-Nothing here has been run with the real 9B teacher yet.
+The thesis run was done on Colab (T4) on Oct 31, 2026 with the `qwen3.5:9b` teacher. It built 527 SFT rows (414 answerable, 113 abstain), trained 1 epoch (66 steps), and exported the student as Q4_K_M, registered in Ollama as `thesis-student`.
 
 ## Files
 - seed_chunks.jsonl     picked by make_seed_chunks.py (seed 42). Default mix (no Server docs):

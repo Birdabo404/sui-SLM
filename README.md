@@ -6,7 +6,7 @@ Thesis: Enhancing Small Language Models for Low-End Devices Using Retrieval-Augm
 
 Authors: Clyde Heinrich Lontoc and John Bert P. Cruz, Caraga State University.
 
-The live app is Polaris (`app/polaris.py`): compare mode, chat history, a reasoning panel, command code blocks with copy buttons, numbered sources, response time and tok/s, `num_predict=512` on app requests, and a rule-based identity response. Eval does not use those app-only pieces. The app and the bundled lab corpus are English-only.
+The live app is Polaris (entrypoint `app/app.py`, helpers in `app/polaris.py`): compare mode, chat history, a reasoning panel, command code blocks with copy buttons, numbered sources, response time and tok/s, `num_predict=512` on app requests, and a rule-based identity response. Eval does not use those app-only pieces. The app and the bundled lab corpus are English-only.
 
 ## Measured machine
 
@@ -14,17 +14,22 @@ Target laptop: ThinkPad T14 Gen 2 (i5 11th gen, Ubuntu).
 
 Official speed runs booted the laptop with `mem=10752M`. After that, `free -h` shows about 8.0 GB usable RAM plus 4 GB swap. `mem=8G` only gave about 5.5 GB usable, so it was not used.
 
-For the 4B teacher runs only, the Ollama prompt cache was turned off with `LLAMA_ARG_CACHE_RAM=0`.
+For the 4B runs only, the Ollama prompt cache was turned off with `LLAMA_ARG_CACHE_RAM=0`.
 
 ## Quick start for lab staff
 
 Needs Python 3.12, 3.13, or 3.14. `install.sh` prints the version first and exits if it is outside that range.
 
 1. Install Ollama from https://ollama.com/download/linux. `install.sh` does not install it.
-2. Start Ollama, then from this repo:
+2. Start Ollama in its own terminal and leave it running:
 
    ```
    ollama serve
+   ```
+
+   Then, in a second terminal, from this repo:
+
+   ```
    bash install.sh
    ```
 
@@ -42,7 +47,7 @@ Needs Python 3.12, 3.13, or 3.14. `install.sh` prints the version first and exit
    . .venv/bin/activate
    python rag/build_index.py --snap corpus/snapshot-YYYY-MM-DD --out rag/lab-index
    ```
-5. Register the thesis GGUFs from the KD export (`kd/README.md`). Thesis configs 1-4 use `thesis-base-q4km`, not stock `qwen3.5:2b`:
+5. Register the thesis GGUFs from the KD export (`kd/README.md`). The GGUF files and Modelfiles are not in this repo (they are gitignored). They come from the Colab KD notebook export (`kd/colab_distill.ipynb`). Thesis configs 1-4 use `thesis-base-q4km`, not stock `qwen3.5:2b`:
 
    ```
    ollama create thesis-student -f Modelfile
@@ -59,6 +64,8 @@ Needs Python 3.12, 3.13, or 3.14. `install.sh` prints the version first and exit
    ```
    RAG_INDEX=rag/lab-index sui-slm
    ```
+
+   `rag-index-v2` is the older index from the thesis evaluation, and it is not in the repo. The launcher also sets `INCLUDE_UBUNTU_SERVER=1` so that old index can load. A new `lab-index` build has no Server docs, so the launcher needs `RAG_INDEX=rag/lab-index` to use it.
 
    Without the launcher: `ollama serve`, then `.venv/bin/python -m streamlit run streamlit_app.py`. `sui-slm --dry-run` prints the Streamlit command and environment and starts nothing.
 
@@ -130,7 +137,7 @@ Failures show as a card in the chat: a title, what happened, and the next step. 
 
 ```
 python eval/run_eval.py --split dev --out logs/eval-dev.csv
-python eval/run_eval.py --split test --no-sweep --questions eval/your-heldout.jsonl --out logs/eval-test.csv --distilled your-student:latest
+python eval/run_eval.py --split test --no-sweep --questions eval/your-heldout.jsonl --out logs/eval-test.csv --base-model thesis-base-q4km --distilled thesis-student
 ```
 
 `--split test` without `--no-sweep` exits with an error. `--split test` also rejects `--threshold`, `-k`, and `--frozen`. The distilled config is skipped until `--distilled` or `OLLAMA_DISTILLED_MODEL` is set.
@@ -138,13 +145,17 @@ python eval/run_eval.py --split test --no-sweep --questions eval/your-heldout.js
 ## Folder layout
 
 ```
-app/          Streamlit chat UI (Polaris in app/polaris.py)
+app/          Streamlit chat UI (entrypoint app/app.py, helpers in app/polaris.py)
+streamlit_app.py  Streamlit entry file (calls app/app.py)
+bin/          sui-slm launcher script
+packaging/    Desktop entry for sui-slm
+scripts/      Dev check for query normalization
+tests/        Unit tests (mocked, no Ollama needed)
 corpus/       Fetch scripts for the doc snapshot
 rag/          Index builder, hybrid query, spot checks
 kd/           Teacher Q&A kit for distillation (Colab notebook: kd/colab_distill.ipynb)
 eval/         Ablation eval runner
 shared/       System prompt and frozen threshold/k (app + kd/build_sft.py)
-docs/         Chapter 3 methodology outline
 ```
 
 ## Corpus licenses

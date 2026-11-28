@@ -27,9 +27,8 @@ EVAL_SEED = 42
 NUM_CTX = 4096
 # MiniLM cosine: abstain if none of the top-k fused hits reach this.
 # RRF is a rank score, not relevance (any rank-0 hit scores 1/60).
-# 0.30 and k=5 in shared/frozen.json are provisional defaults, not a
-# tuned result. Replace them after --split dev on the real index and
-# commit the sweep CSV.
+# 0.30 and k=5 in shared/frozen.json are the frozen values used for the
+# thesis evaluation. Do not change them.
 WEAK_DENSE = _FROZEN["threshold"]
 RSS_SAMPLE_S = 0.25
 MODE_LABELS = {

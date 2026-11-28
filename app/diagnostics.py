@@ -181,7 +181,11 @@ def model_probes(options, tags):
 
 
 def index_probe(index_dir=engine.DEFAULT_INDEX):
-    if not engine.index_ok(index_dir):
+    try:
+        found = engine.index_ok(index_dir)
+    except SystemExit as e:
+        return Probe("RAG index", FAIL, f"not usable · {Path(index_dir).name}", str(e))
+    if not found:
         return Probe("RAG index", FAIL, f"missing · {Path(index_dir).name}", issues.INDEX_BUILD)
     chunks = polaris.index_chunk_count(index_dir)
     if not chunks:

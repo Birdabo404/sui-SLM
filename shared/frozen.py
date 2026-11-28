@@ -1,8 +1,7 @@
-"""Provisional retrieval settings used by eval and the chat app.
+"""Frozen retrieval settings used by eval and the chat app.
 
-threshold 0.30 and k=5 are starting defaults, not a tuned result.
-Run --split dev on the real index, pick values from the sweep CSV,
-write them here, and commit that CSV. Do not retune on the test split.
+threshold 0.30 and k=5 are the frozen values used for the thesis evaluation.
+Do not change them or retune on the test split.
 """
 import json
 from pathlib import Path

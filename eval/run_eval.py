@@ -9,8 +9,8 @@ Optional field: set (tuning | unanswerable | held-out)
 
 The threshold/top-k sweep is allowed on --split dev only. --split test is held out
 and refuses unless you pass --no-sweep. --split test also rejects --threshold, -k,
-and --frozen overrides. Threshold and k live in shared/frozen.json (provisional
-defaults until replaced after a real --split dev sweep).
+and --frozen overrides. Threshold and k live in shared/frozen.json (the frozen
+values used for the thesis evaluation).
 """
 import argparse
 import csv
