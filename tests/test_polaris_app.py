@@ -818,9 +818,9 @@ class PolarisRunLoopTests(unittest.TestCase):
             self._ask("extract a .tar.gz file", "landing")
         card = self._card()
         self.assertIn('data-kind="index_missing"', card)
-        self.assertIn("python rag/build_index.py --snap corpus/snapshot-YYYY-MM-DD --out rag/rag-index", card)
+        self.assertIn("python rag/build_index.py --snap corpus/snapshot-YYYY-MM-DD --out rag/lab-index", card)
         self.assertIn("BASE and +CoT still work", card)
-        self.assertIn("trim it into rag-index-v2", card)
+        self.assertIn("start the app with RAG_INDEX=rag/lab-index", card)
         self.assertEqual((self.calls, _FakeStream.made), ([], []))
 
     def test_an_index_that_will_not_load_is_a_card_and_is_tried_again_next_time(self):

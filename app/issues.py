@@ -18,8 +18,8 @@ except ImportError:  # branches that predate app/backend.py
     backend = None
 
 EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-INDEX_BUILD = "python rag/build_index.py --snap corpus/snapshot-YYYY-MM-DD --out rag/rag-index"
-INDEX_TRIM_HINT = "Then trim it into rag-index-v2 (README, Build the index), or set RAG_INDEX to an index you have."
+INDEX_BUILD = "python rag/build_index.py --snap corpus/snapshot-YYYY-MM-DD --out rag/lab-index"
+INDEX_TRIM_HINT = "Then start the app with RAG_INDEX=rag/lab-index (README, Quick start), or set RAG_INDEX to an index you have."
 COMPLETE = "complete"
 ABSTAIN_EMPTY = "abstain_empty_retrieval"
 ABSTAIN_WEAK = "abstain_weak_retrieval"

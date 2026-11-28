@@ -38,7 +38,7 @@ OLLAMA_CHAT_TEMPLATE = (
 )
 HELDOUT_MISSING = (
     "Held-out questions file is missing: {path}\n"
-    "Write 150-200 questions as JSONL with fields "
+    "Write 30 questions as JSONL with fields "
     "id, question, answerable, gold_answer, source.\n"
     "Upload that file to Drive as {hint} or set HELDOUT to its path, "
     "then re-run this cell.\n"

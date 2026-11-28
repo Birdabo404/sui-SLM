@@ -305,7 +305,7 @@ class HelperTests(unittest.TestCase):
             msg = str(cm.exception)
             self.assertIn("Held-out questions file is missing", msg)
             self.assertIn("eval/test.jsonl", msg)
-            self.assertIn("150-200", msg)
+            self.assertIn("Write 30 questions", msg)
 
     def test_modelfile(self):
         text = modelfile_text("student.gguf")

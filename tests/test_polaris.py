@@ -1047,13 +1047,13 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(
             identity.identity_response("thesis-student", "full"),
             "I'm Polaris, an offline Linux lab assistant. I run Thesis-Student, a Qwen3.5-2B model fine-tuned through "
-            "knowledge distillation by Clyde Heinrich Lontoc and Jebby Cruz of Caraga State University.",
+            "knowledge distillation by Clyde Heinrich Lontoc and John Bert P. Cruz of Caraga State University.",
         )
         self.assertIn("I run my-student, a Qwen3.5-2B model", identity.identity_response("my-student", "full"))
 
     def test_plain_mode_and_the_stock_model_say_stock(self):
         stock = ("I'm Polaris, an offline Linux lab assistant. Right now I'm running the stock Qwen3.5-2B model with no "
-                 "fine-tuning, set up by Clyde Heinrich Lontoc and Jebby Cruz of Caraga State University.")
+                 "fine-tuning, set up by Clyde Heinrich Lontoc and John Bert P. Cruz of Caraga State University.")
         for model, mode in (("qwen3.5:2b", "base"), ("qwen3.5:2b", "full"), ("qwen3.5:2b", "cot"),
                             ("thesis-student", "base")):
             with self.subTest(model=model, mode=mode):
@@ -1061,7 +1061,7 @@ class IdentityTests(unittest.TestCase):
 
     def test_the_q4km_base_says_it_is_the_stock_model_quantised_in_every_mode(self):
         quantised = ("I'm Polaris, an offline Linux lab assistant. Right now I'm running the stock Qwen3.5-2B model "
-                     "(Q4_K_M quantised, no fine-tuning), set up by Clyde Heinrich Lontoc and Jebby Cruz of Caraga "
+                     "(Q4_K_M quantised, no fine-tuning), set up by Clyde Heinrich Lontoc and John Bert P. Cruz of Caraga "
                      "State University.")
         for mode in ("base", "cot", "rag", "full"):
             with self.subTest(mode=mode):
